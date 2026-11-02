@@ -14,7 +14,7 @@ import { toast } from "sonner";
 import { Card, CardContent } from "@/components/ui/card";
 import { PrefetchLink } from "@/components/shell/prefetch-link";
 import { formatChf } from "@/lib/format";
-import { rechneCatering, type CateringEingabe, type CateringErgebnis, type CateringParameter } from "@/lib/catering/rechnen";
+import { rechneCatering, snapshotVollstaendig, type CateringEingabe, type CateringErgebnis, type CateringParameter } from "@/lib/catering/rechnen";
 import { mailtext } from "@/lib/catering/mailtext";
 import type { JobKontext, KartenZeile } from "@/lib/catering/daten";
 
@@ -55,7 +55,14 @@ export function CateringTab({ jobId, canEdit }: { jobId: string; canEdit: boolea
   const [saving, setSaving] = useState(false);
   const [geaendert, setGeaendert] = useState(false);
   const [anrede, setAnrede] = useState("");
-  const [du, setDu] = useState(true);
+  // Du/Sie ist eine persönliche Vorliebe → überlebt den Reload (localStorage, §10), die Anrede ist pro Mail verschieden.
+  const [du, setDuState] = useState(() => {
+    try { return typeof window === "undefined" ? true : window.localStorage.getItem("catering-mail-du") !== "0"; } catch { return true; }
+  });
+  const setDu = (v: boolean) => {
+    setDuState(v);
+    try { window.localStorage.setItem("catering-mail-du", v ? "1" : "0"); } catch { /* Speicher nicht verfügbar: egal */ }
+  };
 
   const [neuLaden, setNeuLaden] = useState(0);
 
@@ -160,7 +167,7 @@ export function CateringTab({ jobId, canEdit }: { jobId: string; canEdit: boolea
   const abweichung = r != null && g != null && !geaendert && (gespeichertA !== r.richtpreisA || gespeichertB !== r.mindestumsatz);
   // Älter gespeicherte Kalkulationen (vor der Umstellung von Variante A auf «Bestellung») kennen die neuen Felder nicht:
   // ohne Neuspeichern gäbe es «NaN» in Mailtext und Vertrag.
-  const veraltet = g != null && typeof g.ergebnis.richtpreisA !== "number";
+  const veraltet = g != null && !snapshotVollstaendig(g.ergebnis);
   const pdfBereit = g != null && !geaendert && !veraltet;
   const pdfUrl = (art: string) => `/api/jobs/${jobId}/catering/pdf?art=${art}`;
 
@@ -217,7 +224,7 @@ export function CateringTab({ jobId, canEdit }: { jobId: string; canEdit: boolea
             <label className="block text-xs text-muted-foreground">
               Beginn Ausschank (Uhr)
               <input
-                type="text" value={beginn} disabled={!canEdit} placeholder="z. B. 18:30"
+                type="time" value={beginn} disabled={!canEdit}
                 onChange={(e) => { setBeginn(e.target.value); setGeaendert(true); }}
                 className="mt-1 w-full rounded-lg border border-border bg-background px-2.5 py-2 text-base font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-foreground/30 disabled:opacity-60"
               />
@@ -240,14 +247,14 @@ export function CateringTab({ jobId, canEdit }: { jobId: string; canEdit: boolea
               <CardContent className="p-4">
                 <p className="text-[0.6875rem] font-semibold uppercase tracking-wide text-muted-foreground">Variante A · Bestellung und Service</p>
                 <p className="mt-1 text-3xl font-bold text-emerald-600">{chf(r.richtpreisA)}</p>
-                <p className="mt-1 text-xs text-muted-foreground">Richtwert: {r.bestellmengeA} bestellte Getränke zu Kartenpreisen ({chf(r.getraenkeA)}) plus {r.kraefte} Kräfte × {r.stundenProKraft.toFixed(1)} Std × CHF 45 ({chf(r.serviceA)}). Abgerechnet wird nach Bestellung und Stunden.</p>
+                <p className="mt-1 text-xs text-muted-foreground">Richtwert: {r.bestellmengeA} bestellte Getränke zu Kartenpreisen ({chf(r.getraenkeA)}) plus {r.kraefte} Kräfte × {r.stundenProKraft.toFixed(1)} Std × CHF {r.stundensatzA} ({chf(r.serviceA)}). Abgerechnet wird nach Bestellung und Stunden.</p>
               </CardContent>
             </Card>
             <Card className="bg-card">
               <CardContent className="p-4">
-                <p className="text-[0.6875rem] font-semibold uppercase tracking-wide text-muted-foreground">Variante B · Gäste zahlen selbst</p>
+                <p className="text-[0.6875rem] font-semibold uppercase tracking-wide text-muted-foreground">Variante B · Mindestumsatz</p>
                 <p className="mt-1 text-3xl font-bold text-emerald-600">{chf(r.mindestumsatz)}</p>
-                <p className="mt-1 text-xs text-muted-foreground">Mindestumsatz. Kauft kein Gast etwas, zahlt die Kundschaft den ganzen Betrag ({chf(r.mindestumsatz)}). Bei halber Menge: {chf(r.differenzBeiHalberMenge)}</p>
+                <p className="mt-1 text-xs text-muted-foreground">Mindestumsatz. Kauft kein Gast etwas, zahlt der/die Auftraggeber/in den ganzen Betrag ({chf(r.mindestumsatz)}). Bei halber Menge: {chf(r.differenzBeiHalberMenge)}</p>
               </CardContent>
             </Card>
           </div>
@@ -284,15 +291,13 @@ export function CateringTab({ jobId, canEdit }: { jobId: string; canEdit: boolea
         <PdfKnopf href={pdfUrl("vertrag-b")} label="Vertrag B (Mindestumsatz)" bereit={pdfBereit} />
         <PdfKnopf href={pdfUrl("karte")} label="Getränkekarte" bereit />
       </div>
-      {veraltet && !geaendert && (
+      {(geaendert || veraltet || abweichung) && (
         <p className="text-xs text-amber-600">
-          Diese Kalkulation wurde mit der früheren Berechnung gespeichert (Variante A noch als Fixpreis). Bitte «Kalkulation speichern» drücken, dann stimmen Verträge und Mailtext.
-        </p>
-      )}
-      {geaendert && <p className="text-xs text-amber-600">Ungespeicherte Änderungen: Die Verträge zeigen erst nach dem Speichern die neuen Zahlen.</p>}
-      {abweichung && (
-        <p className="text-xs text-amber-600">
-          Gespeichert sind {chf(gespeichertA ?? 0)} (A) und {chf(gespeichertB ?? 0)} (B). Die Einstellungen oder die Karte haben sich seither geändert, jetzt wären es {chf(r.richtpreisA)} und {chf(r.mindestumsatz)}. Zum Übernehmen speichern.
+          {geaendert
+            ? "Neu speichern nötig: Verträge und Mailtext zeigen erst nach dem Speichern die neuen Zahlen."
+            : veraltet
+              ? "Neu speichern nötig: Diese Kalkulation wurde mit der früheren Berechnung gespeichert."
+              : `Neu speichern nötig: Gespeichert sind ${chf(gespeichertA ?? 0)} (A) und ${chf(gespeichertB ?? 0)} (B), nach den aktuellen Einstellungen und der Karte wären es ${chf(r?.richtpreisA ?? 0)} und ${chf(r?.mindestumsatz ?? 0)}.`}
         </p>
       )}
 
@@ -300,7 +305,7 @@ export function CateringTab({ jobId, canEdit }: { jobId: string; canEdit: boolea
         <Card className="bg-card">
           <CardContent className="space-y-3 p-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <p className="text-[0.6875rem] font-semibold uppercase tracking-wide text-muted-foreground">Mail an die Kundschaft (Vorschlag, wird nicht gesendet)</p>
+              <p className="text-[0.6875rem] font-semibold uppercase tracking-wide text-muted-foreground">Mail an den/die Auftraggeber/in (Vorschlag, wird nicht gesendet)</p>
               <div className="flex gap-2">
                 <button type="button" onClick={() => setDu(true)} className={du ? "kasten kasten-active" : "kasten kasten-muted"}>Du</button>
                 <button type="button" onClick={() => setDu(false)} className={!du ? "kasten kasten-active" : "kasten kasten-muted"}>Sie</button>
@@ -316,7 +321,7 @@ export function CateringTab({ jobId, canEdit }: { jobId: string; canEdit: boolea
             <textarea
               readOnly rows={12} value={mailtext({
                 anrede, anlass: anlass.trim() || daten.job.titel, datumText: daten.job.datumText ?? "", gaeste: g.eingabe.gaeste,
-                richtpreisA: Number(g.ergebnis.richtpreisA), mindestumsatz: Number(g.ergebnis.mindestumsatz), bestellmengeA: Number(g.ergebnis.bestellmengeA), kraefte: Number(g.ergebnis.kraefte),
+                richtpreisA: Number(g.ergebnis.richtpreisA), stundensatzA: Number(g.ergebnis.stundensatzA), mindestumsatz: Number(g.ergebnis.mindestumsatz), bestellmengeA: Number(g.ergebnis.bestellmengeA), kraefte: Number(g.ergebnis.kraefte),
                 getraenkeProGast: Number(g.ergebnis.getraenkeProGast), erwarteterUmsatz: Number(g.ergebnis.erwarteterUmsatz), du,
               })}
               className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground"
@@ -328,7 +333,7 @@ export function CateringTab({ jobId, canEdit }: { jobId: string; canEdit: boolea
                   try {
                     await navigator.clipboard.writeText(mailtext({
                       anrede, anlass: anlass.trim() || daten.job.titel, datumText: daten.job.datumText ?? "", gaeste: g.eingabe.gaeste,
-                      richtpreisA: Number(g.ergebnis.richtpreisA), mindestumsatz: Number(g.ergebnis.mindestumsatz), bestellmengeA: Number(g.ergebnis.bestellmengeA), kraefte: Number(g.ergebnis.kraefte),
+                      richtpreisA: Number(g.ergebnis.richtpreisA), stundensatzA: Number(g.ergebnis.stundensatzA), mindestumsatz: Number(g.ergebnis.mindestumsatz), bestellmengeA: Number(g.ergebnis.bestellmengeA), kraefte: Number(g.ergebnis.kraefte),
                       getraenkeProGast: Number(g.ergebnis.getraenkeProGast), erwarteterUmsatz: Number(g.ergebnis.erwarteterUmsatz), du,
                     }));
                     toast.success("Mailtext kopiert");
@@ -339,7 +344,7 @@ export function CateringTab({ jobId, canEdit }: { jobId: string; canEdit: boolea
               >
                 <Copy className="h-4 w-4" /> Text kopieren
               </button>
-              <span className="text-xs text-muted-foreground">Text prüfen, aus deinem Postfach (leo@) senden und die PDFs oben anhängen. Grussformel und Signatur kommen vom Mailprogramm.</span>
+              <span className="text-xs text-muted-foreground">Text prüfen, aus Ihrem eigenen Postfach senden und die PDFs oben anhängen. Grussformel und Signatur kommen vom Mailprogramm.</span>
             </div>
           </CardContent>
         </Card>

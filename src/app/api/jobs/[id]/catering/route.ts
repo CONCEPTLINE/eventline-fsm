@@ -12,11 +12,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { requireAdmin } from "@/lib/api-auth";
 import { logError } from "@/lib/log";
+import { UUID_RE, fehler } from "@/lib/catering/route-hilfen";
 import { ladeGespeichert, ladeJobKontext, ladeKarte, ladeParameter } from "@/lib/catering/daten";
 import { rechneCatering, type CateringEingabe } from "@/lib/catering/rechnen";
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const fehler = (msg: string, status = 400) => NextResponse.json({ success: false, error: msg }, { status });
 
 function ganz(v: unknown, min: number, max: number): number | null {
   const n = typeof v === "number" ? v : typeof v === "string" && v.trim() !== "" ? Number(v) : NaN;
@@ -76,11 +75,11 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
     const admin = createAdminClient();
     const job = await ladeJobKontext(admin, jobId);
     if (!job) return fehler("Auftrag nicht gefunden", 404);
-    if (!job.auftraggeber) {
-      return fehler("Im Auftrag fehlt die Kontaktperson (Veranstalter/in). Bitte zuerst im Auftrag eintragen.", 422);
-    }
     if (job.status === "abgeschlossen" || job.status === "storniert") {
       return fehler("Der Auftrag ist archiviert und kann nur noch gelesen werden", 409);
+    }
+    if (!job.auftraggeber) {
+      return fehler("Im Auftrag fehlt die Kontaktperson (Veranstalter/in). Bitte zuerst im Auftrag eintragen.", 422);
     }
     const [karte, parameter] = await Promise.all([ladeKarte(admin), ladeParameter(admin)]);
     const eingabe: CateringEingabe = { gaeste, aufbauMin, gesamtMin, abbauMin, vorzeitMin, pauseMin, nachzeitMin };

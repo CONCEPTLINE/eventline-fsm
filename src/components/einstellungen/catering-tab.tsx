@@ -9,6 +9,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Loader2, Plus, Save, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Card, CardContent } from "@/components/ui/card";
+import { useConfirm } from "@/components/ui/use-confirm";
 import { KATEGORIE_REIHENFOLGE, KATEGORIE_TITEL, type KartenKategorie } from "@/lib/catering/kategorien";
 import { pruefeStammdaten, type EinstellungenEingabe, type KartenEingabe } from "@/lib/catering/pruefen";
 
@@ -28,6 +29,7 @@ export function CateringEinstellungenTab() {
   const [saving, setSaving] = useState(false);
   const [fehler, setFehler] = useState<string | null>(null);
   const [neu, setNeu] = useState(0);
+  const { confirm, ConfirmModalElement } = useConfirm();
 
   useEffect(() => {
     let aktiv = true;
@@ -39,7 +41,7 @@ export function CateringEinstellungenTab() {
         if (!aktiv) return;
         const d = json.einstellungen as EinstellungenEingabe;
         setE({
-          lohnProStunde: String(d.lohnProStunde), gaesteProKraft: String(d.gaesteProKraft), puffer: prozent(d.puffer),
+          lohnProStunde: String(d.lohnProStunde), stundensatzA: String(d.stundensatzA), gaesteProKraft: String(d.gaesteProKraft), puffer: prozent(d.puffer),
           anteilVor: prozent(d.anteilVor), rateVor: String(d.rateVor), anteilPause: prozent(d.anteilPause), ratePause: String(d.ratePause),
           anteilNach: prozent(d.anteilNach), rateNach: String(d.rateNach),
         });
@@ -63,7 +65,7 @@ export function CateringEinstellungenTab() {
   const eingabe = useMemo(() => {
     if (!e) return null;
     const einstellungen: EinstellungenEingabe = {
-      lohnProStunde: nummer(e.lohnProStunde), gaesteProKraft: nummer(e.gaesteProKraft), puffer: nummer(e.puffer) / 100,
+      lohnProStunde: nummer(e.lohnProStunde), stundensatzA: nummer(e.stundensatzA), gaesteProKraft: nummer(e.gaesteProKraft), puffer: nummer(e.puffer) / 100,
       anteilVor: nummer(e.anteilVor) / 100, rateVor: nummer(e.rateVor), anteilPause: nummer(e.anteilPause) / 100, ratePause: nummer(e.ratePause),
       anteilNach: nummer(e.anteilNach) / 100, rateNach: nummer(e.rateNach),
     };
@@ -75,6 +77,17 @@ export function CateringEinstellungenTab() {
   }, [e, zeilen]);
 
   const mixSumme = zeilen.filter((z) => z.aktiv && z.mix.trim() !== "").reduce((s, z) => s + (nummer(z.mix) || 0), 0);
+
+  async function zeileLoeschen(i: number) {
+    const z = zeilen[i];
+    const ok = await confirm({
+      title: "Getränk entfernen?",
+      message: `«${z.name.trim() || "Neue Zeile"}» wird aus der Karte entfernt, sobald du speicherst.`,
+      confirmLabel: "Entfernen",
+      variant: "red",
+    });
+    if (ok) setZeilen((s) => s.filter((_, j) => j !== i));
+  }
 
   async function speichern() {
     if (!eingabe || eingabe.meldung) return;
@@ -120,8 +133,9 @@ export function CateringEinstellungenTab() {
       <Card className="bg-card">
         <CardContent className="space-y-3 p-4">
           <p className="text-[0.6875rem] font-semibold uppercase tracking-wide text-muted-foreground">Kalkulation</p>
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
-            {feld("lohnProStunde", "Personalkosten pro Servicekraft und Stunde", "CHF")}
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+            {feld("lohnProStunde", "Personalkosten pro Servicekraft und Stunde (intern)", "CHF")}
+            {feld("stundensatzA", "Stundensatz Variante A (Verkauf an die Kundschaft)", "CHF")}
             {feld("gaesteProKraft", "Gäste pro Servicekraft")}
             {feld("puffer", "Puffer auf die Kosten", "%")}
           </div>
@@ -165,7 +179,7 @@ export function CateringEinstellungenTab() {
                   <input value={z.einkauf} inputMode="decimal" placeholder="Einkauf" onChange={(ev) => setZeilen((s) => s.map((x, j) => j === i ? { ...x, einkauf: ev.target.value } : x))} className={eingabeKlasse} />
                   <input value={z.mix} inputMode="decimal" placeholder="—" onChange={(ev) => setZeilen((s) => s.map((x, j) => j === i ? { ...x, mix: ev.target.value } : x))} className={eingabeKlasse} />
                   <input type="checkbox" checked={z.aktiv} onChange={(ev) => setZeilen((s) => s.map((x, j) => j === i ? { ...x, aktiv: ev.target.checked } : x))} className="h-4 w-4" aria-label="Aktiv" />
-                  <button type="button" className="kasten kasten-red" data-tooltip="Zeile löschen" onClick={() => setZeilen((s) => s.filter((_, j) => j !== i))}><Trash2 className="h-4 w-4" /></button>
+                  <button type="button" className="kasten kasten-red" data-tooltip="Zeile löschen" onClick={() => void zeileLoeschen(i)}><Trash2 className="h-4 w-4" /></button>
                 </div>
               ))}
             </div>
@@ -180,6 +194,7 @@ export function CateringEinstellungenTab() {
         </button>
         {eingabe?.meldung && <span className="text-xs text-red-500">{eingabe.meldung}</span>}
       </div>
+      {ConfirmModalElement}
     </div>
   );
 }

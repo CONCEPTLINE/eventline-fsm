@@ -6,11 +6,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { requireAdmin } from "@/lib/api-auth";
 import { logError } from "@/lib/log";
+import { UUID_RE, fehler } from "@/lib/catering/route-hilfen";
+import { snapshotVollstaendig } from "@/lib/catering/rechnen";
 import { ladeGespeichert, ladeJobKontext, ladeKarte } from "@/lib/catering/daten";
 import { karteTitel, kartePdf, vertragPdf } from "@/lib/catering/pdf";
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const fehler = (msg: string, status = 400) => NextResponse.json({ success: false, error: msg }, { status });
 
 export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const { id: jobId } = await ctx.params;
@@ -36,7 +36,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       const g = await ladeGespeichert(admin, jobId);
       if (!g) return fehler("Zuerst die Kalkulation speichern", 409);
       const e = g.ergebnis;
-      if (typeof e.richtpreisA !== "number" || typeof e.mindestumsatz !== "number") {
+      if (!snapshotVollstaendig(e)) {
         return fehler("Die gespeicherte Kalkulation ist veraltet. Bitte im Reiter «Catering» neu speichern.", 409);
       }
       bytes = await vertragPdf({
@@ -44,8 +44,8 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
         job,
         eingabe: g.eingabe,
         ergebnis: {
-          kraefte: e.kraefte, stundenProKraft: e.stundenProKraft, getraenkeA: e.getraenkeA, serviceA: e.serviceA,
-          richtpreisA: e.richtpreisA, bestellmengeA: e.bestellmengeA, mindestumsatz: e.mindestumsatz,
+          kraefte: e.kraefte, stundenProKraft: e.stundenProKraft, stundensatzA: e.stundensatzA, getraenkeA: e.getraenkeA,
+          serviceA: e.serviceA, richtpreisA: e.richtpreisA, bestellmengeA: e.bestellmengeA, mindestumsatz: e.mindestumsatz,
         },
         ausschankBeginn: g.ausschankBeginn,
         auftraggeber: job.auftraggeber,

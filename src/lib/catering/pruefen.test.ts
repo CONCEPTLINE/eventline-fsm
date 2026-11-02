@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { pruefeStammdaten, type EinstellungenEingabe, type KartenEingabe } from "./pruefen";
 
-const E: EinstellungenEingabe = { lohnProStunde: 32, gaesteProKraft: 50, puffer: 0.1, anteilVor: 0.85, rateVor: 1.2, anteilPause: 0.9, ratePause: 3, anteilNach: 0.65, rateNach: 1.2 };
+const E: EinstellungenEingabe = { lohnProStunde: 32, gaesteProKraft: 50, puffer: 0.1, stundensatzA: 45, anteilVor: 0.85, rateVor: 1.2, anteilPause: 0.9, ratePause: 3, anteilNach: 0.65, rateNach: 1.2 };
 const zeile = (o: Partial<KartenEingabe> = {}): KartenEingabe => ({ kategorie: "bier", name: "Birra", einheit: "33 cl", verkauf: 6.5, einkauf: 1.85, mixAnteil: 1, aktiv: true, ...o });
 
 describe("pruefeStammdaten", () => {

@@ -2,17 +2,16 @@
 // (Einstellungen → Catering). Nur Admins (Einkaufspreise und Personalkosten sind intern).
 //
 //   GET → { einstellungen, karte[] }   (karte inkl. inaktiver Zeilen)
-//   PUT { einstellungen, karte[] }     prüft (lib/catering/pruefen.ts), speichert die Einstellungen und gleicht
-//       die Karte ab: Zeilen mit id werden aktualisiert, ohne id neu angelegt, in der DB vorhandene aber nicht
-//       mehr gesendete werden gelöscht. Bereits gespeicherte Kalkulationen (job_catering.ergebnis) bleiben
+//   PUT { einstellungen, karte[] }     prüft (lib/catering/pruefen.ts) und speichert Einstellungen und Karte in einer
+//       Transaktion (SQL-Funktion catering_stammdaten_speichern, Migration 374): Zeilen mit id werden aktualisiert,
+//       ohne id neu angelegt, in der DB vorhandene aber nicht mehr gesendete gelöscht. Bereits gespeicherte Kalkulationen (job_catering.ergebnis) bleiben
 //       unverändert — der Auftrags-Reiter weist auf Abweichungen hin.
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { requireAdmin } from "@/lib/api-auth";
 import { logError } from "@/lib/log";
+import { fehler } from "@/lib/catering/route-hilfen";
 import { pruefeStammdaten, type EinstellungenEingabe, type KartenEingabe } from "@/lib/catering/pruefen";
-
-const fehler = (msg: string, status = 400) => NextResponse.json({ success: false, error: msg }, { status });
 
 export async function GET() {
   const auth = await requireAdmin();
@@ -30,7 +29,7 @@ export async function GET() {
       success: true,
       einstellungen: {
         lohnProStunde: Number(d?.lohn_pro_stunde ?? 32), gaesteProKraft: Number(d?.gaeste_pro_kraft ?? 50),
-        puffer: Number(d?.puffer ?? 0.1),
+        puffer: Number(d?.puffer ?? 0.1), stundensatzA: Number(d?.stundensatz_a ?? 45),
         anteilVor: Number(d?.anteil_vor ?? 0.85), rateVor: Number(d?.rate_vor ?? 1.2),
         anteilPause: Number(d?.anteil_pause ?? 0.9), ratePause: Number(d?.rate_pause ?? 3),
         anteilNach: Number(d?.anteil_nach ?? 0.65), rateNach: Number(d?.rate_nach ?? 1.2),
@@ -56,40 +55,24 @@ export async function PUT(req: NextRequest) {
     return fehler("Ungültige Anfrage");
   }
   if (!b.einstellungen || !Array.isArray(b.karte)) return fehler("Einstellungen und Karte fehlen");
-  const meldung = pruefeStammdaten(b.einstellungen, b.karte);
+  let meldung: string | null;
+  try {
+    meldung = pruefeStammdaten(b.einstellungen, b.karte);
+  } catch {
+    return fehler("Ungültige Eingabe", 422);
+  }
   if (meldung) return fehler(meldung, 422);
 
   try {
+    // Alles in EINER Transaktion (Migration 374): entweder sind Einstellungen und Karte neu gespeichert oder nichts.
     const admin = createAdminClient();
-    const e = b.einstellungen;
-    const { error: eErr } = await admin.from("catering_einstellungen").upsert({
-      id: true, lohn_pro_stunde: e.lohnProStunde, gaeste_pro_kraft: e.gaesteProKraft, puffer: e.puffer,
-      anteil_vor: e.anteilVor, rate_vor: e.rateVor, anteil_pause: e.anteilPause, rate_pause: e.ratePause,
-      anteil_nach: e.anteilNach, rate_nach: e.rateNach, updated_at: new Date().toISOString(),
+    const { error } = await admin.rpc("catering_stammdaten_speichern", {
+      p_einstellungen: b.einstellungen,
+      p_karte: b.karte.map((z, i) => ({ ...z, sort: (i + 1) * 10 })),
     });
-    if (eErr) throw eErr;
-
-    const { data: vorhanden, error: vErr } = await admin.from("catering_getraenke").select("id");
-    if (vErr) throw vErr;
-    const gesendeteIds = new Set(b.karte.filter((z) => z.id).map((z) => z.id as string));
-    const loeschen = (vorhanden ?? []).map((z) => z.id as string).filter((id) => !gesendeteIds.has(id));
-
-    for (const [i, z] of b.karte.entries()) {
-      const zeile = {
-        kategorie: z.kategorie, name: z.name.trim(), einheit: z.einheit.trim(), verkauf: z.verkauf, einkauf: z.einkauf,
-        mix_anteil: z.mixAnteil, aktiv: z.aktiv, sort: (i + 1) * 10, updated_at: new Date().toISOString(),
-      };
-      if (z.id) {
-        const { error } = await admin.from("catering_getraenke").update(zeile).eq("id", z.id);
-        if (error) throw error;
-      } else {
-        const { error } = await admin.from("catering_getraenke").insert(zeile);
-        if (error) throw error;
-      }
-    }
-    if (loeschen.length) {
-      const { error } = await admin.from("catering_getraenke").delete().in("id", loeschen);
-      if (error) throw error;
+    if (error) {
+      if (/existiert nicht mehr/.test(error.message)) return fehler("Ein Getränk wurde inzwischen gelöscht. Bitte die Seite neu laden.", 409);
+      throw error;
     }
     return NextResponse.json({ success: true });
   } catch (err) {

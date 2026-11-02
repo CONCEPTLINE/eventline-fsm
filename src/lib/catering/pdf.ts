@@ -4,7 +4,7 @@
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFImage, type PDFPage } from "pdf-lib";
 import LOGO_BASE64 from "@/lib/logo-base64";
 import { KATEGORIE_REIHENFOLGE, KATEGORIE_TITEL, type JobKontext, type KartenZeile } from "./daten";
-import { STUNDENSATZ_A, type CateringEingabe, type CateringErgebnis } from "./rechnen";
+import type { CateringEingabe, CateringErgebnis } from "./rechnen";
 
 const A4: [number, number] = [595.28, 841.89];
 const MM = 72 / 25.4;
@@ -18,6 +18,20 @@ const UNTEN = 25.4 * MM;
 const KOPF_ABSTAND = 12.5 * MM;
 const INK = rgb(0, 0, 0);
 const GRAU = rgb(0.45, 0.44, 0.42);
+
+/** Text für eine Standard-Schrift (WinAnsi) bereinigen: nicht darstellbare Zeichen (z. B. «ř» in «Dvořák») würden pdf-lib
+ *  zum Abbruch bringen. Erst ohne Akzent versuchen (ř → r), sonst «?». */
+function sicher(font: PDFFont, text: string): string {
+  const erlaubt = new Set(font.getCharacterSet());
+  let aus = "";
+  for (const ch of text.replace(/[\r\n\t]+/g, " ")) {
+    const cp = ch.codePointAt(0) as number;
+    if (erlaubt.has(cp)) { aus += ch; continue; }
+    const basis = ch.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    aus += [...basis].every((c) => erlaubt.has(c.codePointAt(0) as number)) && basis ? basis : "?";
+  }
+  return aus;
+}
 
 const chf = (n: number) => String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, "'");
 const preis = (n: number) => n.toFixed(2);
@@ -48,7 +62,7 @@ export interface VertragDaten {
   art: "A" | "B";
   job: JobKontext;
   eingabe: CateringEingabe;
-  ergebnis: Pick<CateringErgebnis, "kraefte" | "stundenProKraft" | "getraenkeA" | "serviceA" | "richtpreisA" | "bestellmengeA" | "mindestumsatz">;
+  ergebnis: Pick<CateringErgebnis, "kraefte" | "stundenProKraft" | "stundensatzA" | "getraenkeA" | "serviceA" | "richtpreisA" | "bestellmengeA" | "mindestumsatz">;
   ausschankBeginn: string;
   auftraggeber: string;
   auftraggeberAdresse: string;
@@ -139,13 +153,15 @@ export async function vertragPdf(d: VertragDaten): Promise<Uint8Array> {
     y -= ABSTAND;
   };
 
-  const kunde = d.auftraggeber.trim() || "—";
-  const adresse = d.auftraggeberAdresse.trim() || "nicht angegeben";
+  const kunde = sicher(normal, d.auftraggeber.trim()) || "—";
+  const adresse = sicher(normal, d.auftraggeberAdresse.trim()) || "nicht angegeben";
   const e = d.eingabe;
   const r = d.ergebnis;
   const linie = "______________________";
   const nr = d.job.jobNumber != null ? `INT-${d.job.jobNumber}` : "";
-  const anlass = d.anlass.trim() || d.job.titel;
+  const anlass = sicher(normal, d.anlass.trim() || d.job.titel);
+  const ort = sicher(normal, d.job.ort);
+  const beginn = sicher(normal, d.ausschankBeginn);
 
   // Einfache, direkte Sprache («wir» = EVENTLINE GmbH, «Sie» = Auftraggeber/in), damit die Kundschaft den Vertrag auf einen Blick versteht.
   ueberschrift("1. Wer macht mit?");
@@ -156,9 +172,9 @@ export async function vertragPdf(d: VertragDaten): Promise<Uint8Array> {
   ueberschrift("2. Ihr Anlass");
   punkt("Anlass", `${anlass}${d.job.datumText ? `, ${d.job.datumText}` : ""}`);
   if (nr) punkt("Auftrag", nr);
-  punkt("Ort", d.job.ort || linie);
+  punkt("Ort", ort || linie);
   punkt("Gäste", `${e.gaeste} Gäste erwartet`);
-  punkt("Ausschank", `vor dem Programm ca. ${e.vorzeitMin} Minuten, in der Pause ca. ${e.pauseMin} Minuten, danach ca. ${e.nachzeitMin} Minuten. Beginn: ${d.ausschankBeginn ? `${d.ausschankBeginn} Uhr` : "________ Uhr"}`);
+  punkt("Ausschank", `vor dem Programm ca. ${e.vorzeitMin} Minuten, in der Pause ca. ${e.pauseMin} Minuten, danach ca. ${e.nachzeitMin} Minuten. Beginn: ${beginn ? `${beginn} Uhr` : "________ Uhr"}`);
   punkt("Auf- und Abbau", `Wir bauen ca. ${e.aufbauMin} Minuten vor Beginn auf und ca. ${e.abbauMin} Minuten nach Ende ab. Der Anlass dauert ca. ${e.gesamtMin} Minuten.`);
   punkt("Personal", `${r.kraefte} Servicekräfte`);
 
@@ -168,11 +184,11 @@ export async function vertragPdf(d: VertragDaten): Promise<Uint8Array> {
   if (d.art === "A") {
     ueberschrift("4. So funktioniert Variante A (Bestellung)");
     punkt("Bestellung", "Sie sagen uns, welche Getränke wir bestellen sollen. Wir bringen sie mit. Die Getränke gehören Ihnen, nicht getrunkene Getränke bleiben bei Ihnen.");
-    punkt("Das bezahlen Sie", `Die bestellten Getränke zu den Preisen der Getränkekarte, dazu unsere Servicekräfte zu CHF ${STUNDENSATZ_A} pro Kraft und Stunde, von Aufbau bis Abbau.`);
+    punkt("Das bezahlen Sie", `Die bestellten Getränke zu den Preisen der Getränkekarte, dazu unsere Servicekräfte zu CHF ${r.stundensatzA} pro Kraft und Stunde, von Aufbau bis Abbau.`);
     punkt("Richtwert", `${r.bestellmengeA} Getränke: CHF ${chf(r.getraenkeA)}. Service (${r.kraefte} Kräfte, ca. ${r.stundenProKraft.toFixed(1)} Stunden): CHF ${chf(r.serviceA)}. Zusammen: CHF ${chf(r.richtpreisA)}.`);
     punkt("Abrechnung", "Abgerechnet wird, was wirklich bestellt wurde und wie viele Stunden wirklich gearbeitet wurden.");
     punkt("Ihre Gäste", "Ihre Gäste bezahlen nichts.");
-    punkt("Anpassung", "Kommen deutlich mehr oder weniger Gäste, passen wir Bestellung und Personal an.");
+    punkt("Anpassung", "Ändern sich Gästezahl oder Dauer deutlich, passen wir Bestellung und Personal an und bestätigen Ihnen das schriftlich.");
   } else {
     const x = chf(r.mindestumsatz);
     ueberschrift("4. So funktioniert Variante B (Mindestumsatz)");
@@ -181,15 +197,15 @@ export async function vertragPdf(d: VertragDaten): Promise<Uint8Array> {
     punkt("Wenn es reicht", `Erreichen die Gäste zusammen CHF ${x} oder mehr, zahlen Sie nichts.`);
     punkt("Wenn es nicht reicht", `Bleibt der Umsatz darunter, zahlen Sie die Differenz bis CHF ${x}. Kauft kein Gast etwas, zahlen Sie die ganzen CHF ${x}. Mehr als CHF ${x} zahlen Sie nie.`);
     punkt("Nachweis", "Wir legen der Abrechnung den Kassenabschluss bei.");
-    punkt("Anpassung", "Kommen deutlich mehr oder weniger Gäste, passen wir den Mindestumsatz an.");
+    punkt("Anpassung", "Der Mindestumsatz gilt für die oben genannte Dauer und Gästezahl. Ändert sich eines davon deutlich, vereinbaren wir mit Ihnen schriftlich einen neuen Betrag.");
   }
 
   ueberschrift("5. Das ist wichtig");
   punkt("Absage", "Bei einer Absage gelten die Allgemeinen Geschäftsbedingungen (AGB) der EVENTLINE GmbH.");
   punkt("Alkohol und Bewilligung", "Sie klären mit dem Veranstaltungsort, ob Alkohol ausgeschenkt werden darf und ob eine Bewilligung nötig ist. Wir halten den Jugendschutz ein und dürfen Alkohol verweigern, wenn Jugendschutz oder Sicherheit es verlangen.");
   punkt("Schäden", "Schäden, die Gäste an Einrichtung und Material verursachen, gehen zu Ihren Lasten.");
-  punkt("Bezahlung", "Alle Preise sind in Schweizer Franken, ohne Mehrwertsteuer (die EVENTLINE GmbH ist nicht steuerpflichtig). Die Rechnung ist innert 30 Tagen zahlbar.");
-  punkt("Gültigkeit", "Änderungen nur schriftlich. Es gilt Schweizer Recht, Gerichtsstand ist Basel. Der Vertrag gilt mit der Unterschrift beider Seiten, jede Seite erhält ein Exemplar.");
+  punkt("Bezahlung", "Alle Preise sind in Schweizer Franken. Es wird keine Mehrwertsteuer berechnet, die Preise sind Endpreise (die EVENTLINE GmbH ist nicht mehrwertsteuerpflichtig). Die Rechnung ist innert 30 Tagen ab Rechnungsdatum zahlbar.");
+  punkt("Gültigkeit", "Änderungen nur schriftlich. Es gilt Schweizer Recht. Gerichtsstand ist Basel, soweit das Gesetz nichts anderes vorschreibt. Der Vertrag gilt mit der Unterschrift beider Seiten, jede Seite erhält ein Exemplar.");
 
   // Unterschriften (zusammenhängend auf einer Seite)
   platz(200);
@@ -237,7 +253,7 @@ export async function kartePdf(karte: KartenZeile[], untertitel: string): Promis
   const serif = await doc.embedFont(StandardFonts.TimesRoman);
   const serifKursiv = await doc.embedFont(StandardFonts.TimesRomanItalic);
   const img = await logo(doc);
-  const page = doc.addPage(A4);
+  let page = doc.addPage(A4);
   const mitte = A4[0] / 2;
   const links = 80;
   const rechts = A4[0] - 80;
@@ -255,10 +271,12 @@ export async function kartePdf(karte: KartenZeile[], untertitel: string): Promis
   mittig("Getränkekarte", 38, serifKursiv);
   y -= 22;
   if (untertitel) {
-    mittig(untertitel, 9.6, serif, GRAU);
+    mittig(sicher(serif, untertitel), 9.6, serif, GRAU);
     y -= 12;
   }
-  mittig("Alle Preise in CHF, Service inbegriffen", 9.6, serif, GRAU);
+  mittig("Alle Preise in CHF pro Getränk, keine Mehrwertsteuer", 9.6, serif, GRAU);
+  y -= 12;
+  mittig("Der Service ist im Vertrag geregelt", 9.6, serif, GRAU);
   y -= 22;
 
   for (const kat of KATEGORIE_REIHENFOLGE) {
@@ -269,15 +287,28 @@ export async function kartePdf(karte: KartenZeile[], untertitel: string): Promis
     mittig(titel, 8, serif, rgb(0.88, 0.19, 0.18));
     y -= 8;
     for (const z of zeilen) {
-      y -= 19;
-      page.drawText(z.name, { x: links, y, size: 12, font: serif, color: INK });
-      const nameBreite = serif.widthOfTextAtSize(z.name, 12);
-      let ende = links + nameBreite + 6;
-      if (z.einheit) {
-        page.drawText(z.einheit, { x: ende, y, size: 7.6, font: serifKursiv, color: GRAU });
-        ende += serifKursiv.widthOfTextAtSize(z.einheit, 7.6) + 6;
+      // Reicht der Platz nicht mehr (Fusszeile bei y ≈ 100), geht die Karte auf einer zweiten Seite weiter.
+      if (y < 130) {
+        page = doc.addPage(A4);
+        page.drawRectangle({ x: 0, y: 0, width: A4[0], height: A4[1], color: rgb(0.98, 0.98, 0.965) });
+        y = A4[1] - 70;
       }
+      y -= 19;
+      const name = sicher(serif, z.name);
+      const einheit = sicher(serifKursiv, z.einheit);
       const p = preis(z.verkauf);
+      // Lange Namen verkleinern (bis 8 pt) und notfalls kürzen, damit sie nie in den Preis laufen.
+      const platz = rechts - links - serif.widthOfTextAtSize(p, 12) - 14 - (einheit ? serifKursiv.widthOfTextAtSize(einheit, 7.6) + 6 : 0);
+      let groesse = 12;
+      while (groesse > 8 && serif.widthOfTextAtSize(name, groesse) > platz) groesse -= 0.5;
+      let angezeigt = name;
+      while (angezeigt.length > 4 && serif.widthOfTextAtSize(angezeigt, groesse) > platz) angezeigt = angezeigt.slice(0, -2).trimEnd() + "…";
+      page.drawText(angezeigt, { x: links, y, size: groesse, font: serif, color: INK });
+      let ende = links + serif.widthOfTextAtSize(angezeigt, groesse) + 6;
+      if (einheit) {
+        page.drawText(einheit, { x: ende, y, size: 7.6, font: serifKursiv, color: GRAU });
+        ende += serifKursiv.widthOfTextAtSize(einheit, 7.6) + 6;
+      }
       const pb = serif.widthOfTextAtSize(p, 12);
       page.drawText(p, { x: rechts - pb, y, size: 12, font: serif, color: INK });
       page.drawLine({ start: { x: ende, y: y + 3 }, end: { x: rechts - pb - 6, y: y + 3 }, thickness: 0.4, color: rgb(0.8, 0.78, 0.74), dashArray: [1, 2] });

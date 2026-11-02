@@ -62,7 +62,7 @@ describe("rechneCatering (INT-26404: B 870, A-Richtwert 2180)", () => {
     expect(r.differenzBeiHalberMenge).toBeCloseTo(28.01, 2);
     expect(r.gewinnA).toBeCloseTo(1383.33, 2); // 2180 − (260 × Ø Einkauf 1.8128 + Personal 325.33)
     expect(r.gewinnB).toBeCloseTo(896.11, 2);
-    expect(r.programmMin).toBe(60);
+    expect(r.stundensatzA).toBe(45);
   });
 });
 

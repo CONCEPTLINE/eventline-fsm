@@ -6,6 +6,7 @@ export interface EinstellungenEingabe {
   lohnProStunde: number;
   gaesteProKraft: number;
   puffer: number;
+  stundensatzA: number;
   anteilVor: number;
   rateVor: number;
   anteilPause: number;
@@ -28,9 +29,15 @@ export interface KartenEingabe {
 
 const zahl = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 
+/** Obergrenzen (Spalten sind numeric(8,2)/numeric(10,2); Werte darüber wären ein Tippfehler und würden in der DB überlaufen). */
+const MAX_PREIS = 10000;
+const MAX_STUNDENSATZ = 1000;
+const MAX_NAME = 120;
+const MAX_EINHEIT = 60;
+
 export function pruefeStammdaten(e: EinstellungenEingabe, karte: KartenEingabe[]): string | null {
   const nichtNegativ: [string, number][] = [
-    ["Personalkosten pro Stunde", e.lohnProStunde], ["Puffer", e.puffer],
+    ["Personalkosten pro Stunde", e.lohnProStunde], ["Stundensatz Variante A", e.stundensatzA], ["Puffer", e.puffer],
     ["Getränke pro Person und Stunde (Vorzeit)", e.rateVor], ["Getränke pro Person und Stunde (Pause)", e.ratePause],
     ["Getränke pro Person und Stunde (Nachzeit)", e.rateNach],
   ];
@@ -40,11 +47,16 @@ export function pruefeStammdaten(e: EinstellungenEingabe, karte: KartenEingabe[]
     if (!zahl(v) || v < 0 || v > 1) return `Anteil der Trinkenden (${n}): zwischen 0 und 100 %`;
   }
   if (e.puffer > 1) return "Puffer: höchstens 100 %";
+  if (e.lohnProStunde > MAX_STUNDENSATZ || e.stundensatzA > MAX_STUNDENSATZ) return `Stundensätze: höchstens CHF ${MAX_STUNDENSATZ}`;
+  if (e.gaesteProKraft > 1000) return "Gäste pro Servicekraft: höchstens 1000";
 
   if (karte.length === 0) return "Die Getränkekarte darf nicht leer sein";
   for (const z of karte) {
     if (!(KATEGORIE_REIHENFOLGE as readonly string[]).includes(z.kategorie)) return `Unbekannte Kategorie: ${z.kategorie}`;
+    if (typeof z.name !== "string" || typeof z.einheit !== "string") return "Name und Einheit müssen Text sein";
     if (!z.name.trim()) return "Jedes Getränk braucht einen Namen";
+    if (z.name.length > MAX_NAME || z.einheit.length > MAX_EINHEIT) return `${z.name.slice(0, 30)}: Name höchstens ${MAX_NAME}, Einheit höchstens ${MAX_EINHEIT} Zeichen`;
+    if (z.verkauf > MAX_PREIS || z.einkauf > MAX_PREIS) return `${z.name}: Preise höchstens CHF ${MAX_PREIS}`;
     if (!zahl(z.verkauf) || z.verkauf < 0 || !zahl(z.einkauf) || z.einkauf < 0) return `${z.name}: Preise müssen Zahlen ab 0 sein`;
     if (z.mixAnteil != null && (!zahl(z.mixAnteil) || z.mixAnteil <= 0 || z.mixAnteil > 1)) return `${z.name}: Mix-Anteil zwischen 0 und 100 %`;
   }

@@ -38,6 +38,7 @@ export async function ladeParameter(admin: SupabaseClient): Promise<CateringPara
     lohnProStunde: Number(data.lohn_pro_stunde),
     gaesteProKraft: Number(data.gaeste_pro_kraft),
     puffer: Number(data.puffer),
+    stundensatzA: Number(data.stundensatz_a ?? 45),
     vor: { anteil: Number(data.anteil_vor), rate: Number(data.rate_vor) },
     pause: { anteil: Number(data.anteil_pause), rate: Number(data.rate_pause) },
     nach: { anteil: Number(data.anteil_nach), rate: Number(data.rate_nach) },

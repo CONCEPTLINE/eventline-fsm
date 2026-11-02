@@ -9,7 +9,7 @@
 //   5. Kosten = Einkauf + Personal; Betrag X (Mindestumsatz) = Kosten + Puffer, auf CHF 10 aufgerundet
 //   6. Variante A (Bestellung): die Kundschaft nennt, was bestellt wird; die Getränke gehören ihr und werden zu
 //      Kartenpreisen verrechnet (Richtwert = erwartete Menge, auf 10 aufgerundet), dazu die Servicekräfte zu
-//      CHF 45 pro Kraft und Stunde für die ganze Einsatzzeit von Aufbau bis Abbau. Abgerechnet wird nach Bestellung und Stunden.
+//      dem Stundensatz A (Einstellung, Standard CHF 45) pro Kraft und Stunde für die ganze Einsatzzeit von Aufbau bis Abbau. Abgerechnet wird nach Bestellung und Stunden.
 
 export interface CateringEingabe {
   gaeste: number;
@@ -27,6 +27,8 @@ export interface CateringParameter {
   gaesteProKraft: number;
   /** 0.10 = 10 %. */
   puffer: number;
+  /** Variante A: Verkaufspreis je Servicekraft und Stunde in CHF (Einstellung, Standard 45). */
+  stundensatzA: number;
   vor: { anteil: number; rate: number };
   pause: { anteil: number; rate: number };
   nach: { anteil: number; rate: number };
@@ -55,6 +57,8 @@ export interface CateringErgebnis {
   puffer: number;
   /** Variante B: garantierter Mindestumsatz (Betrag X). */
   mindestumsatz: number;
+  /** Variante A: Stundensatz je Servicekraft (CHF), mit dem serviceA gerechnet wurde (im Snapshot eingefroren). */
+  stundensatzA: number;
   /** Variante A: Richtwert der bestellten Getränke zu Kartenpreisen (bestellmengeA × Ø Verkauf, auf CHF 10 aufgerundet). */
   getraenkeA: number;
   /** Variante A: Service = Kräfte × Stunden pro Kraft × CHF 45, auf CHF 10 aufgerundet. */
@@ -68,8 +72,6 @@ export interface CateringErgebnis {
   differenzBeiHalberMenge: number;
   gewinnA: number;
   gewinnB: number;
-  /** Programmzeit ohne Ausschank (Gesamt − Vorzeit − Pause − Nachzeit). */
-  programmMin: number;
 }
 
 /** Auf CHF 10 aufrunden; vorher auf Rappen runden, damit 870.0000001 nicht 880 wird. */
@@ -110,7 +112,7 @@ export function rechneCatering(e: CateringEingabe, p: CateringParameter, karte: 
   const mindestumsatz = aufrunden10(kosten + puffer);
   const bestellmengeA = aufrunden10(getraenke);
   const getraenkeA = aufrunden10(bestellmengeA * mix.verkauf);
-  const serviceA = aufrunden10(kraefte * stundenProKraft * STUNDENSATZ_A);
+  const serviceA = aufrunden10(kraefte * stundenProKraft * p.stundensatzA);
   const richtpreisA = getraenkeA + serviceA;
   const kostenA = bestellmengeA * mix.einkauf + personal;
   const erwarteterUmsatz = getraenke * mix.verkauf;
@@ -130,6 +132,7 @@ export function rechneCatering(e: CateringEingabe, p: CateringParameter, karte: 
     kosten,
     puffer,
     mindestumsatz,
+    stundensatzA: p.stundensatzA,
     getraenkeA,
     serviceA,
     richtpreisA,
@@ -138,19 +141,27 @@ export function rechneCatering(e: CateringEingabe, p: CateringParameter, karte: 
     differenzBeiHalberMenge: Math.max(0, mindestumsatz - erwarteterUmsatz * 0.5),
     gewinnA: richtpreisA - kostenA,
     gewinnB: Math.max(erwarteterUmsatz, mindestumsatz) - kosten,
-    programmMin: e.gesamtMin - e.vorzeitMin - e.pauseMin - e.nachzeitMin,
   };
 }
-
-/** Variante A: Stundensatz je Servicekraft (CHF, Leo 2026-11-02). In Variante B gibt es keinen Stundensatz. */
-export const STUNDENSATZ_A = 45;
 
 /** Standardwerte, wenn noch nichts in den Einstellungen steht (= Excel-Stand 02.11.2026). */
 export const CATERING_STANDARD: CateringParameter = {
   lohnProStunde: 32,
   gaesteProKraft: 50,
   puffer: 0.1,
+  stundensatzA: 45,
   vor: { anteil: 0.85, rate: 1.2 },
   pause: { anteil: 0.9, rate: 3 },
   nach: { anteil: 0.65, rate: 1.2 },
 };
+
+/** Felder, die ein gespeichertes Ergebnis (job_catering.ergebnis) für Vertrag, Karte und Mailtext braucht. */
+const SNAPSHOT_FELDER = [
+  "kraefte", "stundenProKraft", "stundensatzA", "getraenkeA", "serviceA", "richtpreisA", "bestellmengeA",
+  "mindestumsatz", "getraenkeProGast", "erwarteterUmsatz",
+] as const;
+
+/** false = vor einer Umstellung gespeichert (fehlende oder ungültige Felder) → neu speichern, sonst «NaN» in Vertrag und Mail. */
+export function snapshotVollstaendig(e: Record<string, unknown> | null | undefined): boolean {
+  return !!e && SNAPSHOT_FELDER.every((k) => typeof e[k] === "number" && Number.isFinite(e[k] as number));
+}
