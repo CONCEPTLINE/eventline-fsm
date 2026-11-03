@@ -7,7 +7,6 @@ import {
   tageBisVeranstaltung,
   aenderungGesperrt,
   partnerOrdner,
-  partnerBelegungen,
   zugewieseneNamen,
   darfZurueckziehen,
   istBestaetigt,
@@ -133,15 +132,7 @@ describe("terminPruefen — Regeln wie bisher (Portal + partner_update_termin)",
   });
 });
 
-describe("partnerBelegungen — fremde Belegungen nur als «belegt»", () => {
-  const basis = { location_id: STANDORT, is_deleted: false, accepted_at: null, rejected_at: null, start_date: "2026-11-13T23:00:00+00:00", end_date: null };
-  const jobs = [
-    { ...basis, id: "eigen-1", title: "Hochzeit", status: "offen", created_by: PARTNER },
-    { ...basis, id: "fremd-1", title: "Firmenfest Kunde AG", status: "offen", created_by: EVENTLINE },
-    { ...basis, id: "fremd-2", title: "Vermietung Müller", status: "anfrage", created_by: EVENTLINE },
-    { ...basis, id: "fremd-storno", title: "Storniert", status: "storniert", created_by: EVENTLINE },
-    { ...basis, id: "eigen-abgelehnt", title: "Abgelehnt", status: "storniert", rejected_at: "2026-10-01T10:00:00Z", created_by: PARTNER },
-  ];
+describe("zugewieseneNamen — jede Person einmal, in Termin-Reihenfolge", () => {
   const zuteilungen = [
     { job_id: "eigen-1", assigned_to: "t1" },
     { job_id: "eigen-1", assigned_to: "t2" },
@@ -149,23 +140,7 @@ describe("partnerBelegungen — fremde Belegungen nur als «belegt»", () => {
     { job_id: "fremd-1", assigned_to: "t1" },
   ];
   const namen = new Map([["t1", "Dario"], ["t2", "Leo"]]);
-  const b = partnerBelegungen(jobs, S, zuteilungen, namen);
-
-  it("eigene mit Titel, Status und Zugeteilten (jede Person einmal)", () => {
-    expect(b[0]).toEqual({ id: "eigen-1", eigen: true, title: "Hochzeit", status: "offen", start_date: basis.start_date, end_date: null, zugewiesen: ["Dario", "Leo"] });
-  });
-  it("fremde nur Zeitraum mit kuenstlicher ID — kein Titel, Status, Kunde", () => {
-    const fremd = b.filter((x) => !x.eigen);
-    expect(fremd).toEqual([
-      { id: "belegt-1", eigen: false, start_date: basis.start_date, end_date: null },
-      { id: "belegt-2", eigen: false, start_date: basis.start_date, end_date: null },
-    ]);
-    expect(JSON.stringify(fremd)).not.toMatch(/Firmenfest|Vermietung|fremd-|anfrage|offen/);
-  });
-  it("stornierte fremde fallen weg, abgelehnte eigene bleiben", () => {
-    expect(b.map((x) => x.id)).toEqual(["eigen-1", "belegt-1", "belegt-2", "eigen-abgelehnt"]);
-  });
-  it("zugewieseneNamen ignoriert andere Auftraege und Unbekannte", () => {
+  it("ignoriert andere Auftraege und Unbekannte", () => {
     expect(zugewieseneNamen("eigen-1", [...zuteilungen, { job_id: "eigen-1", assigned_to: "partner-x" }], namen)).toEqual(["Dario", "Leo"]);
     expect(zugewieseneNamen("leer", zuteilungen, namen)).toEqual([]);
   });

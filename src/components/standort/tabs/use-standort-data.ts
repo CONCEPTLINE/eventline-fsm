@@ -42,10 +42,15 @@ export type DocEntry = {
   folder?: string | null;
 };
 
+// Location-Zeile wie geladen (select("*")). `partner_kalender` schaltet den
+// gemeinsamen Belegungsplan (Partner-Termine + EVENTLINE-Auftraege) frei —
+// Tab «Belegungsplan» intern und Termin-Eintragen im Partnerportal.
+export type StandortLocation = Location & { partner_kalender?: boolean | null };
+
 export function useStandortData(id: string) {
   const supabase = createClient();
 
-  const [location, setLocation] = useState<Location | null>(null);
+  const [location, setLocation] = useState<StandortLocation | null>(null);
   const [contacts, setContacts] = useState<LocationContact[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [linkedCustomer, setLinkedCustomer] = useState<Customer | null>(null);
@@ -82,7 +87,7 @@ export function useStandortData(id: string) {
           verknuepft = (einzeln as Customer | null) ?? null;
         }
       }
-      setLocation(locRes.data as Location);
+      setLocation(locRes.data as StandortLocation);
       setLinkedCustomer(verknuepft);
     }
     if (contRes.data) setContacts(contRes.data as LocationContact[]);

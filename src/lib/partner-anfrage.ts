@@ -83,7 +83,8 @@ export interface PartnerStandort {
  *   (accepted_at / rejected_at setzt nur der Partner-Entscheid), oder von
  *   einem Konto des Partner-Teams dieses Standorts angelegt.
  * Alles andere am Standort (EVENTLINE-eigene Auftraege, Vermietungen) ist
- * fremd: im Belegungsplan nur «belegt», sonst nicht abrufbar.
+ * fremd: im Belegungsplan nur «belegt» bzw. mit Standort-Kalender als
+ * «auftrag» (src/lib/standort-kalender.ts), sonst nicht abrufbar.
  */
 export function istEigeneAnfrage(job: AnfrageKern, s: PartnerStandort): boolean {
   if (!s.standortId || job.location_id !== s.standortId || job.is_deleted === true) return false;
@@ -128,38 +129,6 @@ export function zugewieseneNamen(
     if (name && !liste.includes(name)) liste.push(name);
   }
   return liste;
-}
-
-export type PartnerBuchung =
-  | { id: string; eigen: true; title: string; status: string; start_date: string | null; end_date: string | null; zugewiesen: string[] }
-  | { id: string; eigen: false; start_date: string | null; end_date: string | null };
-
-/**
- * Belegungsplan aus Sicht des Partners: eigene Anfragen mit Titel, Status und
- * Zugeteilten; alles andere am Standort nur als «belegt» — Zeitraum mit
- * kuenstlicher ID, ohne Titel, Nummer, Kunde oder Status (Leo 2026-10-15).
- * Stornierte fremde Eintraege fallen weg (der Tag ist frei), abgelehnte
- * eigene Anfragen bleiben sichtbar.
- */
-export function partnerBelegungen(
-  jobs: readonly (AnfrageKern & { id: string; title: string; start_date: string | null; end_date: string | null })[],
-  s: PartnerStandort,
-  zuteilungen: readonly { job_id: string; assigned_to: string | null }[],
-  namen: ReadonlyMap<string, string>,
-): PartnerBuchung[] {
-  let n = 0;
-  return jobs.flatMap((j): PartnerBuchung[] => {
-    if (istEigeneAnfrage(j, s)) {
-      return [{
-        id: j.id, eigen: true, title: j.title, status: j.status,
-        start_date: j.start_date, end_date: j.end_date,
-        zugewiesen: zugewieseneNamen(j.id, zuteilungen, namen),
-      }];
-    }
-    if (j.status === "storniert") return [];
-    n += 1;
-    return [{ id: `belegt-${n}`, eigen: false, start_date: j.start_date, end_date: j.end_date }];
-  });
 }
 
 /** Ablage-Ordner der Partner-Anhaenge einer Anfrage (Job-ID klein, wie

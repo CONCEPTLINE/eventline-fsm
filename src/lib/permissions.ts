@@ -134,7 +134,7 @@ export const PERMISSION_MODULES: readonly PermissionModule[] = PERMISSION_MODULE
 const PARTNER_MODULE_DEFS = [
   // NEU: partner:*-Namespace
   { slug: "partner:anfragen",      label: "Partner-Anfragen",      paths: ["/partner/anfragen"],      actions: ["view", "create", "edit", "delete"] },
-  { slug: "partner:belegungsplan", label: "Partner-Belegungsplan", paths: ["/partner/belegungsplan"], actions: ["view"] },
+  { slug: "partner:belegungsplan", label: "Partner-Belegungsplan", paths: ["/partner/belegungsplan"], actions: ["view", "edit"] },
   // Auftraege = bestaetigte Anfragen (partner_anfrage -> offen). Partner
   // sieht sie in «Meine Anfragen» und im Belegungsplan (eigene Anfragen).
   { slug: "partner:auftraege",     label: "Partner-Auftraege",     paths: [],                         actions: ["view"] },

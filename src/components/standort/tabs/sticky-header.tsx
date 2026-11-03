@@ -24,7 +24,7 @@ import { TabsNav } from "@/components/ui/tabs-nav";
 import { standortArchiviert } from "@/lib/archiv";
 import type { Location, Customer } from "@/types";
 
-export type StandortTabKey = "uebersicht" | "notizen" | "verrechnung";
+export type StandortTabKey = "uebersicht" | "notizen" | "belegungsplan" | "verrechnung";
 
 type Tab = { key: StandortTabKey; label: string; icon: React.ReactNode };
 

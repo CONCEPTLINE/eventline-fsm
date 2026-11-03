@@ -7,13 +7,15 @@
  * Struktur:
  *  - Sticky-Header oben: BackButton, Name/Adresse, Kunde-Chip rechts,
  *    Rentabilitaet-Button (Admin), Tab-Nav (Uebersicht | Notizen & Dokumente |
- *    Verrechnung & Kunde). → tabs/sticky-header.tsx
+ *    Belegungsplan | Verrechnung & Kunde). → tabs/sticky-header.tsx
+ *  - Tab «Belegungsplan» (gemeinsamer Kalender mit dem Partnerportal) nur an
+ *    Standorten mit partner_kalender = true.
  *  - Body: EIN Tab sichtbar.
  *  - Tab «Verrechnung & Kunde» (Verrechnungssaetze + Kunden-Verknuepfung) ist
  *    Admin-only und wird fuer Non-Admins nicht einmal in die Tab-Liste
  *    aufgenommen.
  *
- * Tab-State lebt in der URL (?tab=uebersicht|notizen|verrechnung), damit
+ * Tab-State lebt in der URL (?tab=uebersicht|notizen|belegungsplan|verrechnung), damit
  * ein Reload den gewuenschten Tab beibehaelt (§10 CLAUDE.md). Alter
  * Schluessel ?tab=einstellungen wird weiter angenommen.
  *
@@ -23,7 +25,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { Info, StickyNote, Settings } from "lucide-react";
+import { Info, StickyNote, Settings, CalendarDays } from "lucide-react";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
 import { Loading } from "@/components/ui/spinner";
@@ -41,6 +43,7 @@ import { StandortStickyHeader, type StandortTabKey } from "@/components/standort
 import { OverviewTab } from "@/components/standort/tabs/overview-tab";
 import { NotesDocsTab } from "@/components/standort/tabs/notes-docs-tab";
 import { SettingsTab } from "@/components/standort/tabs/settings-tab";
+import { BelegungsplanTab } from "@/components/standort/tabs/belegungsplan-tab";
 import { useStandortData } from "@/components/standort/tabs/use-standort-data";
 
 export default function StandortDetailPage() {
@@ -107,19 +110,24 @@ export default function StandortDetailPage() {
   // Alias: ?tab=einstellungen (Name vor der Umbenennung) → verrechnung.
   const rawTab = searchParams.get("tab");
   const urlTab = (rawTab === "einstellungen" ? "verrechnung" : rawTab) as StandortTabKey | null;
+  // Gemeinsamer Belegungsplan nur an freigeschalteten Standorten (vorerst Barakuba).
+  const kalenderAn = location?.partner_kalender === true;
   const isValidTab =
     urlTab === "uebersicht" ||
     urlTab === "notizen" ||
+    (urlTab === "belegungsplan" && kalenderAn) ||
     (urlTab === "verrechnung" && isAdmin);
 
   const activeTab: StandortTabKey = isValidTab ? (urlTab as StandortTabKey) : "uebersicht";
 
   useEffect(() => {
-    if (!permsReady || isValidTab) return;
+    // Erst nach dem Laden der Location pruefen — sonst fiele ?tab=belegungsplan
+    // beim Reload zurueck, bevor partner_kalender bekannt ist.
+    if (!permsReady || !location || isValidTab) return;
     const params = new URLSearchParams(searchParams.toString());
     params.set("tab", "uebersicht");
     router.replace(`/standorte/${locationId}?${params.toString()}`, { scroll: false });
-  }, [permsReady, isValidTab, locationId, router, searchParams]);
+  }, [permsReady, location, isValidTab, locationId, router, searchParams]);
 
   async function confirmArchive() {
     if (!archiveReason.trim()) {
@@ -180,11 +188,14 @@ export default function StandortDetailPage() {
       { key: "uebersicht", label: "Übersicht", icon: <Info className="h-4 w-4 max-md:hidden" /> },
       { key: "notizen", label: "Notizen & Dokumente", icon: <StickyNote className="h-4 w-4 max-md:hidden" /> },
     ];
+    if (kalenderAn) {
+      base.push({ key: "belegungsplan", label: "Belegungsplan", icon: <CalendarDays className="h-4 w-4 max-md:hidden" /> });
+    }
     if (isAdmin) {
       base.push({ key: "verrechnung", label: "Verrechnung & Kunde", icon: <Settings className="h-4 w-4 max-md:hidden" /> });
     }
     return base;
-  }, [isAdmin]);
+  }, [isAdmin, kalenderAn]);
 
   if (!location) return <Loading className="py-20" label="Laden…" />;
 
@@ -244,6 +255,9 @@ export default function StandortDetailPage() {
           onMoveDoc={moveDoc}
           onGetDocSignedUrl={getDocSignedUrl}
         />
+      )}
+      {activeTab === "belegungsplan" && kalenderAn && (
+        <BelegungsplanTab locationId={locationId} nurLesen={nurLesen} />
       )}
       {activeTab === "verrechnung" && isAdmin && (
         <SettingsTab

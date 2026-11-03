@@ -1,16 +1,26 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { readImpersonationCookie } from "@/lib/impersonation";
-import { PartnerBelegungsplan } from "@/components/partner-belegungsplan";
+import { partnerApi } from "@/lib/partner-api";
+import type { KalenderEintrag, TerminEingabeKalender } from "@/lib/standort-kalender";
+import {
+  BelegungsplanKalender,
+  type KalenderAktion,
+  type KalenderLadeErgebnis,
+  type KalenderSpeicherErgebnis,
+} from "@/components/belegungsplan/belegungsplan-kalender";
 
-// Partner-Belegungsplan: Monats-Kalender + Buchungs-Liste fuer die
-// zugewiesene Location. Eigene Anfragen status-gefaerbt (Entwurf,
-// Wartet, Bestaetigt, Abgelehnt); alles, was EVENTLINE sonst an der
-// Location eingetragen hat (Auftraege, Vermietungen), nur als «Belegt» —
-// ohne Titel, Kunde oder Status (Leo 2026-10-15). Daten ausschliesslich
-// ueber /api/partner/belegungsplan.
+// Partner-Belegungsplan: Monats-Kalender + Liste fuer die zugewiesene
+// Location. Eigene Anfragen status-gefaerbt (Entwurf, Wartet, Bestaetigt,
+// Abgelehnt). An Standorten mit partner_kalender (vorerst Barakuba) dazu
+// die eigenen Termine (eintragen/aendern/loeschen) und die EVENTLINE-
+// Auftraege mit Titel, Kunde, Status; sonst bleibt alles andere nur
+// «Belegt» ohne Details (Leo 2026-10-15). Daten ausschliesslich ueber
+// /api/partner/belegungsplan und /api/partner/kalender-termine.
+
+const SKELETT = <div className="h-64 rounded-xl bg-foreground/10 dark:bg-foreground/15 animate-pulse" />;
 
 export default function PartnerBelegungsplanPage() {
   const supabase = createClient();
@@ -34,9 +44,23 @@ export default function PartnerBelegungsplanPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  if (loading) {
-    return <div className="h-64 rounded-xl bg-foreground/10 dark:bg-foreground/15 animate-pulse" />;
-  }
+  const laden = useCallback(async (start: string, end: string): Promise<KalenderLadeErgebnis> => {
+    const r = await partnerApi<{ eintraege: KalenderEintrag[]; darfEintragen: boolean }>(
+      `/api/partner/belegungsplan?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`,
+    );
+    if (!r.ok) return { ok: false, fehler: r.fehler };
+    return { ok: true, eintraege: r.daten.eintraege ?? [], darfEintragen: r.daten.darfEintragen === true };
+  }, []);
+
+  const speichern = useCallback(
+    async (aktion: KalenderAktion, id?: string, eingabe?: TerminEingabeKalender): Promise<KalenderSpeicherErgebnis> => {
+      const r = await partnerApi<{ id?: string }>("/api/partner/kalender-termine", { aktion, id, ...eingabe });
+      return r.ok ? { ok: true, id: r.daten.id } : { ok: false, fehler: r.fehler };
+    },
+    [],
+  );
+
+  if (loading) return SKELETT;
 
   if (!locationId) {
     return (
@@ -54,10 +78,13 @@ export default function PartnerBelegungsplanPage() {
       <div className="max-md:hidden">
         <h1 className="text-2xl font-bold tracking-tight">Belegungsplan</h1>
         <p className="text-sm text-muted-foreground mt-1">
-          Übersicht deiner Location — eigene Anfragen und belegte Tage.
+          Übersicht deiner Location — Termine, Anfragen und belegte Tage.
         </p>
       </div>
-      <PartnerBelegungsplan />
+      {/* Suspense: der Kalender liest den Monat aus der URL (useSearchParams). */}
+      <Suspense fallback={SKELETT}>
+        <BelegungsplanKalender laden={laden} speichern={speichern} modus="partner" />
+      </Suspense>
     </div>
   );
 }
