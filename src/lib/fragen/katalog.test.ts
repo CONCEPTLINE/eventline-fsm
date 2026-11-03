@@ -15,7 +15,7 @@ const zeile = (antwort: string, at: string, extra: Partial<{ text_version: strin
 });
 
 describe("Katalog", () => {
-  it("Schlüssel und Optionswerte im Format der Datenbank (Migration 376), eindeutig", () => {
+  it("Schlüssel und Optionswerte im Format der Datenbank (Migration 381), eindeutig", () => {
     expect(new Set(FRAGEN.map((f) => f.schluessel)).size).toBe(FRAGEN.length);
     for (const f of FRAGEN) {
       expect(istFrageSchluessel(f.schluessel)).toBe(true);

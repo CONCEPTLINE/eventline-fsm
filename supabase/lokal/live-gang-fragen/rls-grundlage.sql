@@ -1,7 +1,7 @@
 -- NUR LOKAL (Wegwerf-Container postgres:17-alpine): die Teile von Supabase und
--- früheren Migrationen, die 376 braucht — Rollen, auth.uid(), profiles/roles,
+-- früheren Migrationen, die 381 braucht — Rollen, auth.uid(), profiles/roles,
 -- is_admin()/is_internal_user() (wie 338/329), lohn_schutz_nie_loeschen() (wie 360).
--- flow_abrufe/flow_abruf_* kommen aus 369 (Abschnitte 1–2) und 371 (Skript pruefen-rls.sh).
+-- flow_abrufe/flow_abruf_* kommen aus 369 (Abschnitte 1–2), 371, 377 (2.) und 380 (3.) (Skript pruefen-rls.sh).
 do $$ begin
   if not exists (select 1 from pg_roles where rolname = 'anon') then create role anon nologin; end if;
   if not exists (select 1 from pg_roles where rolname = 'authenticated') then create role authenticated nologin; end if;

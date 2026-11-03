@@ -1,4 +1,4 @@
-// POST /api/flow/antworten — Antworten aus «Fragen an dich» für Trust flow (Migration 376).
+// POST /api/flow/antworten — Antworten aus «Fragen an dich» für Trust flow (Migration 381).
 //
 // Körper: nur der Ausweis (kompaktes JWS, Content-Type application/jose), aud «erp-antworten»,
 // Claims profil_ids (1–500 ERP-Profil-IDs) und fragen (Schlüssel aus src/lib/fragen/katalog.ts,

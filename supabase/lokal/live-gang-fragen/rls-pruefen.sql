@@ -1,4 +1,4 @@
--- NUR LOKAL: Prüfungen zu 376 (RLS alle 4 Verben, Verlauf nur anhängen, Trust-flow-aud).
+-- NUR LOKAL: Prüfungen zu 381 (RLS alle 4 Verben, Verlauf nur anhängen, Trust-flow-aud).
 -- Erfundene IDs, keine echten Personen. Jede Prüfung meldet «OK …» oder bricht ab.
 \set ON_ERROR_STOP on
 \pset tuples_only on
@@ -97,6 +97,18 @@ do $$ declare r jsonb; begin
     raise exception 'FEHLT: Protokoll erp-antworten';
   end if;
   raise notice 'OK flow: erp-antworten angenommen und protokolliert (Gruppe abruf)';
+end $$;
+-- Audiences aus 377/380 bleiben erhalten, mit ihrer Gruppe (381 baut auf der Fassung 380 auf).
+do $$ declare r jsonb; a text; g text; begin
+  foreach a in array array['erp-stempel', 'erp-vergleich', 'erp-lohnabrechnung-ablage', 'erp-saetze', 'erp-abwesenheiten', 'erp-arztzeugnis'] loop
+    r := public.flow_abruf_beginnen(gen_random_uuid(), a, gen_random_uuid(), null, null, 1, now(), now() + interval '60 seconds');
+    if r ->> 'status' <> 'ok' then raise exception 'FEHLT: % nicht mehr angenommen: %', a, r; end if;
+    select gruppe into g from public.flow_abrufe where id = (r ->> 'id')::uuid;
+    if g <> (case when a in ('erp-lohnabrechnung-ablage', 'erp-saetze') then 'ablage' else 'abruf' end) then
+      raise exception 'FEHLT: % in falscher Gruppe %', a, g;
+    end if;
+  end loop;
+  raise notice 'OK flow: Audiences aus 369/377/380 weiterhin angenommen, Gruppen wie 380';
 end $$;
 reset role;
 

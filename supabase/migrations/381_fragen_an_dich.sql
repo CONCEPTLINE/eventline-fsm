@@ -1,11 +1,11 @@
--- 376: «Fragen an dich» — Pflicht-Fragen an Mitarbeitende + Abruf durch Trust flow. Additiv, idempotent.
+-- 381: «Fragen an dich» — Pflicht-Fragen an Mitarbeitende + Abruf durch Trust flow. Additiv, idempotent.
 --
--- !! Nummer beim Zusammenführen prüfen: höchste Nummer auf origin/main UND
--- !! allen Branches + 1 (Stand 03.11.2026: 375 auf main, 375_catering_bestell_anteile
--- !! auf origin/feat/getraenke-catering; lohn ohne neue Nummer).
+-- Nummer: höchste auf origin/main und allen Branches war 380 (Stand 03.11.2026; zuvor als 376
+-- gebaut, beim Zusammenführen mit 377–380 neu nummeriert).
 --
--- Braucht 369/371 (flow_abrufe, flow_abruf_beginnen). Code: src/lib/fragen/ (Katalog),
--- /api/mein-konto/fragen (Person), /api/flow/antworten (Trust flow, src/lib/flow/).
+-- Braucht 369 (flow_abrufe) und 380 (letzte Fassung von flow_abrufe_aud_check und
+-- flow_abruf_beginnen). Code: src/lib/fragen/ (Katalog), /api/profile/fragen (Person),
+-- /api/flow/antworten (Trust flow, src/lib/flow/).
 --
 -- Inhalt:
 --   1. mitarbeiter_antworten: Antworten der Mitarbeitenden auf die Fragen aus dem Katalog
@@ -15,8 +15,10 @@
 --      interne aktive Person und nur «selbst»; Admin liest alle; Ändern/Löschen für niemanden.
 --      anon ohne Rechte. Einträge der Verwaltung (quelle 'verwaltung') nur über den Server.
 --   3. Trust flow: aud 'erp-antworten' (POST /api/flow/antworten, Gruppe «abruf», 10 je Minute).
+--      Check und Funktion = Fassung 380 (inkl. erp-saetze, erp-abwesenheiten, erp-arztzeugnis)
+--      plus 'erp-antworten' — sonst nichts geändert.
 --
--- Rückweg: supabase/lokal/live-gang-fragen/376_rueckweg.sql (Funktion wie 371; Tabelle und
+-- Rückweg: supabase/lokal/live-gang-fragen/381_rueckweg.sql (Funktion wie 380; Tabelle und
 -- Antworten bleiben als Nachweis).
 
 -- ===========================================================================
@@ -42,7 +44,7 @@ create table if not exists public.mitarbeiter_antworten (
 create index if not exists mitarbeiter_antworten_neueste_idx
   on public.mitarbeiter_antworten (profile_id, frage_schluessel, beantwortet_at desc);
 comment on table public.mitarbeiter_antworten is
-  'Fragen an dich: Antworten der Mitarbeitenden (Katalog src/lib/fragen/katalog.ts) als Verlauf, nur anhängen; es gilt der neueste Eintrag je Person und Frage. Trust flow liest über POST /api/flow/antworten. Migration 376.';
+  'Fragen an dich: Antworten der Mitarbeitenden (Katalog src/lib/fragen/katalog.ts) als Verlauf, nur anhängen; es gilt der neueste Eintrag je Person und Frage. Trust flow liest über POST /api/flow/antworten. Migration 381.';
 
 -- Zeit und Akteur beim Einfügen festlegen: beantwortet_at = jetzt; «selbst» heisst
 -- akteur = die Person. Schutz gegen Ändern/Löschen: Verlauf (wie lohn_zustellung_wahl).
@@ -107,6 +109,7 @@ create policy mitarbeiter_antworten_delete on public.mitarbeiter_antworten
 -- 3. Trust flow: aud «erp-antworten»
 -- ===========================================================================
 -- Regel: bisherige Audiences bleiben (protokollierte Aufrufe stehen als Nachweis).
+-- Wie 380, zusätzlich 'erp-antworten'.
 do $$
 begin
   if not exists (select 1 from pg_constraint
@@ -114,13 +117,14 @@ begin
                     and pg_get_constraintdef(oid) like '%erp-antworten%') then
     alter table public.flow_abrufe drop constraint if exists flow_abrufe_aud_check;
     alter table public.flow_abrufe add constraint flow_abrufe_aud_check
-      check (aud in ('erp-stempel', 'erp-personen', 'erp-vergleich', 'erp-lohnabrechnung-ablage', 'flow-stammdaten', 'erp-antworten'));
+      check (aud in ('erp-stempel', 'erp-personen', 'erp-vergleich', 'erp-lohnabrechnung-ablage', 'flow-stammdaten', 'erp-saetze',
+                     'erp-abwesenheiten', 'erp-arztzeugnis', 'erp-antworten'));
   end if;
 end $$;
 comment on table public.flow_abrufe is
-  'Signierte Aufrufe aus Trust flow (/api/flow/*): Protokoll, Einmal-Schutz (jti) und Höchstzahl je Minute. Migration 369; A6 Stammdaten 370, entfernt 371 (Zeilen bleiben); Antworten 376.';
+  'Signierte Aufrufe aus Trust flow (/api/flow/*): Protokoll, Einmal-Schutz (jti) und Höchstzahl je Minute. Migration 369; A6 Stammdaten 370, entfernt 371 (Zeilen bleiben); Sätze 377; Abwesenheiten/Arztzeugnis 380; Antworten 381.';
 
--- Wie 371, einzige Änderung: aud 'erp-antworten' (Gruppe «abruf»).
+-- Wie 380, einzige Änderung: aud 'erp-antworten' erlaubt (Gruppe «abruf»: liest nur, Höchstzahl 10/min).
 create or replace function public.flow_abruf_beginnen(
   p_jti uuid,
   p_aud text,
@@ -142,14 +146,14 @@ declare
   v_aeltester timestamptz;
   v_id uuid;
 begin
-  if p_aud not in ('erp-stempel', 'erp-vergleich', 'erp-lohnabrechnung-ablage', 'erp-antworten') then
+  if p_aud not in ('erp-stempel', 'erp-vergleich', 'erp-lohnabrechnung-ablage', 'erp-saetze', 'erp-abwesenheiten', 'erp-arztzeugnis',
+                   'erp-antworten') then
     raise exception 'flow_abruf_beginnen: aud ungültig';
   end if;
   if p_jti is null or p_sub is null then
     raise exception 'flow_abruf_beginnen: jti/sub fehlt';
   end if;
-  -- Gruppe «abruf» = Stempel/Vergleich/Antworten (10 je Minute), «ablage» = Lohnabrechnung (30 je Minute).
-  v_gruppe := case when p_aud = 'erp-lohnabrechnung-ablage' then 'ablage' else 'abruf' end;
+  v_gruppe := case when p_aud in ('erp-lohnabrechnung-ablage', 'erp-saetze') then 'ablage' else 'abruf' end;
   v_limit := case when v_gruppe = 'ablage' then 30 else 10 end;
 
   -- Gleichzeitige Aufrufe derselben Gruppe nacheinander (Zählen + Eintragen atomar).

@@ -1,4 +1,4 @@
-// «Fragen an dich» — die eigenen Pflicht-Fragen und Antworten (Migration 376,
+// «Fragen an dich» — die eigenen Pflicht-Fragen und Antworten (Migration 381,
 // Katalog src/lib/fragen/katalog.ts).
 //
 // GET   → { fragen: Frage[] (die für mich gelten), antworten: { [schluessel]: Antwort }, offen: string[] }

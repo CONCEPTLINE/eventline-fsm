@@ -1,8 +1,8 @@
-// POST /api/flow/antworten — Vertrag mit Trust flow («Fragen an dich», Migration 376):
+// POST /api/flow/antworten — Vertrag mit Trust flow («Fragen an dich», Migration 381):
 // Ausweis (aud erp-antworten, Ed25519, 60 s, jti einmalig), Claims profil_ids/fragen,
 // Antwort { v: 1, antworten: [{ profil_id, frage, antwort, text_version, beantwortet_am }] },
 // je Person und Frage nur die neueste, keine anderen Daten; Fehler wie /api/flow/stempel.
-// Datenbank als Attrappe mit den Regeln von flow_abruf_beginnen (369/376).
+// Datenbank als Attrappe mit den Regeln von flow_abruf_beginnen (369/380/381).
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { claims, signiere, testSchluessel } from "@/lib/flow/test-hilfen";
 

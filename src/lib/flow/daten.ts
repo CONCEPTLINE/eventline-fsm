@@ -419,7 +419,7 @@ export async function arztzeugnisAntwort(admin: SupabaseClient, a: { timeOffId: 
 }
 
 // ---------------------------------------------------------------------------
-// POST /api/flow/antworten («Fragen an dich», Migration 376)
+// POST /api/flow/antworten («Fragen an dich», Migration 381)
 // ---------------------------------------------------------------------------
 type AntwortZeileDb = { id: string; profile_id: string; frage_schluessel: string; antwort: string; text_version: string; beantwortet_at: string };
 

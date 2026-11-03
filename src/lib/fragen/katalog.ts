@@ -2,7 +2,7 @@
 //
 // Jede Frage hat einen festen Schlüssel, eine Textfassung (`version`) und feste
 // Optionen. Antworten liegen als Verlauf in `mitarbeiter_antworten` (Migration
-// 376, nur anhängen); es gilt je Person und Frage der neueste Eintrag.
+// 381, nur anhängen); es gilt je Person und Frage der neueste Eintrag.
 // Offen ist eine Frage, solange es zur AKTUELLEN Fassung keine gültige Antwort
 // gibt — eine neue Fassung (Text inhaltlich geändert) fragt also alle neu.
 //
@@ -64,7 +64,7 @@ export const FRAGEN: readonly Frage[] = [
   },
 ];
 
-/** Gleiches Format wie die Datenbank-Regel (Migration 376). */
+/** Gleiches Format wie die Datenbank-Regel (Migration 381). */
 const SCHLUESSEL = /^[a-z][a-z0-9_]{0,63}$/;
 export const istFrageSchluessel = (x: unknown): x is string => typeof x === "string" && SCHLUESSEL.test(x);
 

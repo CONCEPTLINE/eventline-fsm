@@ -1,6 +1,7 @@
--- Rückweg 376: flow_abruf_beginnen wie 371 (nimmt 'erp-antworten' nicht mehr an).
+-- Rückweg 381: flow_abruf_beginnen wie 380 (nimmt 'erp-antworten' nicht mehr an; erp-saetze,
+-- erp-abwesenheiten, erp-arztzeugnis bleiben). Funktion wörtlich aus 380_flow_abwesenheiten.sql.
 -- Tabelle mitarbeiter_antworten, ihre Antworten und die erweiterte Regel flow_abrufe_aud_check bleiben
--- (Nachweis). Nur zusammen mit dem Code-Stand vor 376 (ohne /api/flow/antworten, ohne Pflicht-Modal).
+-- (Nachweis). Nur zusammen mit dem Code-Stand vor 381 (ohne /api/flow/antworten, ohne Pflicht-Modal).
 -- Wer die Fragen in der App abschalten will, ohne die Datenbank anzufassen: Katalog in
 -- src/lib/fragen/katalog.ts leeren (dann erscheint kein Modal mehr).
 
@@ -25,14 +26,13 @@ declare
   v_aeltester timestamptz;
   v_id uuid;
 begin
-  if p_aud not in ('erp-stempel', 'erp-vergleich', 'erp-lohnabrechnung-ablage') then
+  if p_aud not in ('erp-stempel', 'erp-vergleich', 'erp-lohnabrechnung-ablage', 'erp-saetze', 'erp-abwesenheiten', 'erp-arztzeugnis') then
     raise exception 'flow_abruf_beginnen: aud ungültig';
   end if;
   if p_jti is null or p_sub is null then
     raise exception 'flow_abruf_beginnen: jti/sub fehlt';
   end if;
-  -- Gruppe «abruf» = Stempel/Vergleich (10 je Minute), «ablage» = Lohnabrechnung (30 je Minute).
-  v_gruppe := case when p_aud = 'erp-lohnabrechnung-ablage' then 'ablage' else 'abruf' end;
+  v_gruppe := case when p_aud in ('erp-lohnabrechnung-ablage', 'erp-saetze') then 'ablage' else 'abruf' end;
   v_limit := case when v_gruppe = 'ablage' then 30 else 10 end;
 
   -- Gleichzeitige Aufrufe derselben Gruppe nacheinander (Zählen + Eintragen atomar).

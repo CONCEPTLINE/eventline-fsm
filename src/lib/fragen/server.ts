@@ -6,7 +6,7 @@ import { FRAGEN, type Frage, type FrageGilt } from "./katalog";
 
 // «Fragen an dich»: welche Fragen für eine Person gelten (nur Server, Admin-Client
 // für die Prüfung von Profil und Anstellung — die Antworten selbst liest/schreibt
-// die Route mit der Sitzung der Person, RLS Migration 376).
+// die Route mit der Sitzung der Person, RLS Migration 381).
 
 /**
  * Aktive interne Person (kein Partner-/Lieferanten-Zugang) mit Lohn-Anstellung,
