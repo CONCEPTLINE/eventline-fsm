@@ -6,7 +6,10 @@
 // Antwort: { monat, monat_gesperrt, personen: [{ erp_profil_id, momentaufnahme: null | {
 //   fassung, art, kern_version, pruefsumme, auszahlungsdatum, brutto,
 //   positionen: [{ lohnart, minuten, betrag }], ahv_lohn, alv_lohn, uvg_lohn, uvg_art,
-//   nbu: { versichert, massgebend }, bisher: { ahv_lohn, alv_lohn, uvg_lohn } } }] }
+//   nbu: { versichert, massgebend }, bisher: { ahv_lohn, alv_lohn, uvg_lohn },
+//   abzuege: { ahv_an, alv_an, nbu_an, ktg_an, bvg_an, qst }, spesen, netto } }] }
+// abzuege/spesen/netto (seit 03.11.2026, für den Lohnausweis): CHF, 2 Nachkommastellen, Abzüge je Art
+// inkl. Rückerstattungen; fehlt ein Wert im ERP-Ergebnis → null (nie geschätzt).
 // Keine Namen, keine Bezeichnungen, keine IDs ausser der ERP-Profil-ID. Personen: aus `profile` jene mit
 // Lohn-Anstellung im ERP, die den Stempel-Bereich berührt (wie die ERP-Abrechnung bis November).
 

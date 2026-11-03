@@ -301,11 +301,14 @@ try {
   await platz(2);
   const r6 = await flow("vergleich", ausweis("erp-vergleich", { jahr: Number(maJ), monat: Number(maM), profile: [maPid, ID.elias] }).token);
   const v = r6.json?.personen?.find((p) => p.erp_profil_id === maPid)?.momentaufnahme;
-  const dbM = sql(`select fassung || '|' || brutto || '|' || ahv_lohn || '|' || uvg_art || '|' || pruefsumme from lohn_fassungen_gueltig where profile_id = '${maPid}' and jahr = ${maJ} and monat = ${maM}`).split("|");
+  const dbM = sql(`select fassung || '|' || brutto || '|' || ahv_lohn || '|' || uvg_art || '|' || pruefsumme || '|' || netto || '|' || coalesce((select sum((a->>'betrag')::numeric) from jsonb_array_elements(ergebnis->'abzuege') a where a->>'art' = 'ahv_iv_eo')::text, '') from lohn_fassungen_gueltig where profile_id = '${maPid}' and jahr = ${maJ} and monat = ${maM}`).split("|");
   ok(r6.status === 200 && r6.json?.monat === `${maJ}-${pad(maM)}`, `→ ${r6.status} ${r6.json?.monat}`);
   ok(v && v.fassung === Number(dbM[0]) && Math.abs(v.brutto - Number(dbM[1])) < 0.005 && Math.abs(v.ahv_lohn - Number(dbM[2])) < 0.005 && v.uvg_art === dbM[3] && v.pruefsumme === dbM[4],
     `Momentaufnahme wie in der DB (Fassung ${v?.fassung}, Brutto ${v?.brutto}, AHV-Lohn ${v?.ahv_lohn})`);
   ok(Array.isArray(v?.positionen) && v.positionen.length > 0 && v.positionen.every((p) => Object.keys(p).join(",") === "lohnart,minuten,betrag") && v.bisher && "versichert" in (v.nbu ?? {}), `Positionen nur Lohnart/Minuten/Betrag (${v?.positionen?.length}), NBU, bisher`);
+  ok(v && Object.keys(v.abzuege ?? {}).join(",") === "ahv_an,alv_an,nbu_an,ktg_an,bvg_an,qst" && Math.abs(v.netto - Number(dbM[5])) < 0.005
+    && (dbM[6] === "" ? v.abzuege.ahv_an === null : Math.abs(v.abzuege.ahv_an - Number(dbM[6])) < 0.005) && "spesen" in v,
+    `Abzüge/Netto/Spesen wie in der DB (Netto ${v?.netto}, AHV AN ${v?.abzuege?.ahv_an}, Spesen ${v?.spesen})`);
   ok(!r6.json?.personen?.some((p) => p.erp_profil_id === ID.elias), "Elias (keine Anstellung) fehlt");
   const r6b = await flow("vergleich", ausweis("erp-vergleich", { jahr: 2026, monat: 12, profile: [ID.lara] }).token);
   ok(r6b.status === 422 && r6b.json?.code === "monat_nicht_erlaubt", `Dezember 2026 → ${r6b.status} ${r6b.json?.code}`);

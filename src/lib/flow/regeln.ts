@@ -16,7 +16,7 @@
 // Unit-Tests: regeln.test.ts.
 
 import { createHash } from "node:crypto";
-import { lokalesDatum, stempelBereich } from "@/lib/lohn/kern";
+import { lokalesDatum, stempelBereich, summeChf } from "@/lib/lohn/kern";
 import { istIntern } from "@/lib/roles";
 import { FRAGEN, istFrageSchluessel, neuesteAntworten, type Frage } from "@/lib/fragen/katalog";
 import { istUuid } from "./ausweis";
@@ -533,6 +533,22 @@ export interface MomentaufnahmeRoh {
   positionen: unknown;
   nbu: unknown;
   bisher: unknown;
+  /** ergebnis->abzuege (Kern: je Art eine Zeile, Rückerstattungen als eigene Zeilen mit negativem Betrag). */
+  abzuege?: unknown;
+  /** ergebnis->spesen (fehlt in Fassungen vor Phase 4 und im Altbestand). */
+  spesen?: unknown;
+  /** Spalte netto (Netto vor Spesen). */
+  netto?: unknown;
+}
+
+/** Arbeitnehmer-Abzüge je Art (CHF, Rückerstattungen eingerechnet); null = nicht im ERP-Ergebnis. */
+export interface VergleichsAbzuege {
+  ahv_an: number | null;
+  alv_an: number | null;
+  nbu_an: number | null;
+  ktg_an: number | null;
+  bvg_an: number | null;
+  qst: number | null;
 }
 
 export interface VergleichsWerte {
@@ -549,9 +565,30 @@ export interface VergleichsWerte {
   uvg_art: string;
   nbu: { versichert: boolean; massgebend: number | null } | null;
   bisher: { ahv_lohn: number; alv_lohn: number; uvg_lohn: number } | null;
+  abzuege: VergleichsAbzuege;
+  /** Spesen (nicht im Brutto, nach dem Netto ausbezahlt); null = nicht im ERP-Ergebnis. */
+  spesen: number | null;
+  /** Netto (Brutto − Abzüge, ohne Spesen); null = nicht im ERP-Ergebnis. */
+  netto: number | null;
 }
 
 const zahl = (v: unknown): number => Number(v);
+
+/** CHF mit 2 Nachkommastellen; fehlt der Wert oder ist er keine Zahl: null (nie raten). */
+function chfOderNull(v: unknown): number | null {
+  if (v == null || (typeof v !== "number" && typeof v !== "string") || (typeof v === "string" && v.trim() === "")) return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? summeChf([n]) : null;
+}
+
+/** Summe der Abzugszeilen einer Art (inkl. Rückerstattungen); keine Zeile oder ein ungültiger Betrag: null. */
+function abzugJeArt(abzuege: unknown, art: string): number | null {
+  if (!Array.isArray(abzuege)) return null;
+  const zeilen = abzuege.filter((a): a is Record<string, unknown> => !!a && typeof a === "object" && (a as Record<string, unknown>).art === art);
+  if (zeilen.length === 0) return null;
+  const betraege = zeilen.map((z) => chfOderNull(z.betrag));
+  return betraege.every((b): b is number => b != null) ? summeChf(betraege) : null;
+}
 
 /** ERP-Momentaufnahme → Vergleichswerte (ohne Namen, ohne Bezeichnungen, ohne IDs). */
 export function vergleichAusMomentaufnahme(r: MomentaufnahmeRoh): VergleichsWerte {
@@ -576,6 +613,16 @@ export function vergleichAusMomentaufnahme(r: MomentaufnahmeRoh): VergleichsWert
     uvg_art: r.uvg_art,
     nbu: nbu ? { versichert: nbu.versichert === true, massgebend: nbu.massgebend == null ? null : zahl(nbu.massgebend) } : null,
     bisher: bisher ? { ahv_lohn: zahl(bisher.ahvLohn), alv_lohn: zahl(bisher.alvLohn), uvg_lohn: zahl(bisher.uvgLohn) } : null,
+    abzuege: {
+      ahv_an: abzugJeArt(r.abzuege, "ahv_iv_eo"),
+      alv_an: abzugJeArt(r.abzuege, "alv"),
+      nbu_an: abzugJeArt(r.abzuege, "nbu"),
+      ktg_an: abzugJeArt(r.abzuege, "ktg"),
+      bvg_an: abzugJeArt(r.abzuege, "bvg"),
+      qst: abzugJeArt(r.abzuege, "quellensteuer"),
+    },
+    spesen: chfOderNull(r.spesen),
+    netto: chfOderNull(r.netto),
   };
 }
 

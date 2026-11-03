@@ -117,6 +117,66 @@ describe("Vergleich", () => {
     expect(v.nbu).toEqual({ versichert: false, massgebend: null });
     expect(v.bisher).toEqual({ ahv_lohn: 1000, alv_lohn: 1000, uvg_lohn: 1000 });
     expect(JSON.stringify(v)).not.toMatch(/Bonus|Stundenlohn|z1/);
+    // Ohne abzuege/spesen/netto in der Momentaufnahme: alles null, nie geschätzt.
+    expect(v.abzuege).toEqual({ ahv_an: null, alv_an: null, nbu_an: null, ktg_an: null, bvg_an: null, qst: null });
+    expect(v.spesen).toBeNull();
+    expect(v.netto).toBeNull();
+  });
+
+  const roh = (extra: Record<string, unknown>) => ({
+    profile_id: P1, fassung: 2, art: "korrektur", kern_version: "2026.11-2", pruefsumme: "cd", auszahlungsdatum: "2026-11-25",
+    brutto: "1000.00", ahv_lohn: "1000.00", alv_lohn: "1000.00", uvg_lohn: "1000.00", uvg_art: "bu_nbu",
+    positionen: [], nbu: { versichert: true, massgebend: 9.5 }, bisher: null, ...extra,
+  });
+
+  it("Abzüge je Art (inkl. Rückerstattung), Spesen und Netto: CHF mit 2 Nachkommastellen", () => {
+    const v = vergleichAusMomentaufnahme(roh({
+      abzuege: [
+        { art: "ahv_iv_eo", bezeichnung: "AHV/IV/EO", prozent: 5.3, basis: 1000, betrag: 53 },
+        { art: "alv", bezeichnung: "ALV", prozent: 1.1, basis: 1000, betrag: "11.00" },
+        { art: "nbu", bezeichnung: "NBU", prozent: 1.2, basis: 1000, betrag: 12 },
+        { art: "bvg", bezeichnung: "BVG", prozent: 0, basis: 1000, betrag: 0 },
+        { art: "ktg", bezeichnung: "KTG", prozent: 0.5, basis: 1000, betrag: 5 },
+        { art: "quellensteuer", bezeichnung: "Quellensteuer", prozent: 4.15, basis: 1000, betrag: 41.5 },
+        { art: "ahv_iv_eo", bezeichnung: "Rückerstattung Muster", prozent: 0, basis: 0, betrag: -3.1, rueckerstattung: true, zusatzpostenId: "z9" },
+      ],
+      spesen: 120.3,
+      netto: "880.60",
+    }));
+    expect(v.abzuege).toEqual({ ahv_an: 49.9, alv_an: 11, nbu_an: 12, ktg_an: 5, bvg_an: 0, qst: 41.5 });
+    expect(v.spesen).toBe(120.3);
+    expect(v.netto).toBe(880.6);
+    // Bestehende Felder unverändert, keine Bezeichnungen/IDs aus den Abzügen.
+    expect(v.brutto).toBe(1000);
+    expect(v.nbu).toEqual({ versichert: true, massgebend: 9.5 });
+    expect(JSON.stringify(v)).not.toMatch(/Rückerstattung|Muster|z9|bezeichnung/);
+  });
+
+  it("Fehlende oder ungültige Werte → null (nie geschätzt)", () => {
+    // Altbestand ohne KTG-/Quellensteuer-Zeile, ungültiger BVG-Betrag, Spesen fehlen (vor Phase 4).
+    const v = vergleichAusMomentaufnahme(roh({
+      art: "altbestand",
+      abzuege: [
+        { art: "ahv_iv_eo", betrag: 53 },
+        { art: "alv", betrag: 11 },
+        { art: "nbu", betrag: 0 },
+        { art: "bvg", betrag: "x" },
+        null,
+      ],
+      spesen: null,
+      netto: 936,
+    }));
+    expect(v.abzuege).toEqual({ ahv_an: 53, alv_an: 11, nbu_an: 0, ktg_an: null, bvg_an: null, qst: null });
+    expect(v.spesen).toBeNull();
+    expect(v.netto).toBe(936);
+    // Abzüge kein Array, Netto leer
+    const w = vergleichAusMomentaufnahme(roh({ abzuege: { ahv: 53 }, spesen: "", netto: undefined }));
+    expect(Object.values(w.abzuege).every((x) => x === null)).toBe(true);
+    expect(w.spesen).toBeNull();
+    expect(w.netto).toBeNull();
+    // Spesen 0 bleibt 0 (Wert vorhanden), kein −0
+    expect(vergleichAusMomentaufnahme(roh({ spesen: 0, netto: -0 }))).toMatchObject({ spesen: 0, netto: 0 });
+    expect(Object.is(vergleichAusMomentaufnahme(roh({ netto: -0 })).netto, 0)).toBe(true);
   });
 });
 

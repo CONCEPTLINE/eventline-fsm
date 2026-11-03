@@ -158,7 +158,8 @@ export async function vergleichAntwort(admin: SupabaseClient, a: MonatsAnfrage):
     zeilen.push(...(await ladeAlleSeiten<MomentaufnahmeRoh>(
       (x, y) => admin.from("lohn_fassungen_gueltig")
         .select("profile_id, fassung, art, kern_version, pruefsumme, auszahlungsdatum, brutto, ahv_lohn, alv_lohn, uvg_lohn, uvg_art, " +
-          "positionen:ergebnis->positionen, nbu:ergebnis->nbu, bisher:eingaben->kern->bisher")
+          "netto, positionen:ergebnis->positionen, nbu:ergebnis->nbu, abzuege:ergebnis->abzuege, spesen:ergebnis->spesen, " +
+          "bisher:eingaben->kern->bisher")
         .eq("jahr", a.jahr).eq("monat", a.monat).in("profile_id", teil).order("profile_id").range(x, y) as unknown as PromiseLike<{ data: MomentaufnahmeRoh[] | null; error: { message: string } | null }>,
       "Momentaufnahmen",
     )));
