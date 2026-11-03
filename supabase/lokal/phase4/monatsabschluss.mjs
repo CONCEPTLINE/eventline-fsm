@@ -164,8 +164,8 @@ export async function pruefe(ctx) {
       `Nachweis: bereitgestellt (Wahl ${wahlVorher === "-" ? "noch keine" : wahlVorher}), benachrichtigt (${zu.split("|")[3]}), 0× geöffnet; «Meine» liefert die Wahl`);
     // (gebündelt «n× …», wenn kurz davor schon eine Meldung kam)
     const meld = sql(`select title || '|' || coalesce(message,'') || '|' || coalesce(link,'') from notifications where user_id = '${ID.jonas}' and type = 'lohn_dokument' and created_at > now() - interval '3 minutes' order by created_at desc limit 1`);
-    ok(/^(\d+× )?Deine Lohnabrechnung \S+ \d{4} liegt bereit\|/.test(meld) && !/CHF|\d+[.,]\d{2}\b/.test(meld) && meld.endsWith("/lohn?ansicht=meine"),
-      `Meldung: «${meld.split("|")[0]}» — ohne Beträge, Link auf Lohn › Meine`);
+    ok(/^(\d+× )?Deine Lohnabrechnung \S+ \d{4} liegt bereit\|/.test(meld) && !/CHF|\d+[.,]\d{2}\b/.test(meld) && meld.endsWith("/lohn"),
+      `Meldung: «${meld.split("|")[0]}» — ohne Beträge, Link auf Lohn`);
     ok(!mailEingerichtet ? !zu.includes("mail") : true, mailEingerichtet ? "Mail eingerichtet" : "Mail-Kanal: lokal kein Versand (RESEND_API_KEY leer) → nicht als «mail» vermerkt");
 
     const wp = await post(jonas, "/api/hr/lohn-zustellung", { wahl: "papier" });

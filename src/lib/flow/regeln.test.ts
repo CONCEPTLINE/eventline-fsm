@@ -9,6 +9,8 @@ import {
   pruefeAblageClaims,
   pruefeAblageKoerper,
   pruefeMonatsClaims,
+  pruefeSaetzeClaims,
+  protokollKennzahlen,
   sha256Hex,
   vergleichAusMomentaufnahme,
   VERGLEICH_BIS,
@@ -119,11 +121,22 @@ describe("Lohnabrechnung aus Bexio (A5)", () => {
   const c = (extra: Record<string, unknown> = {}) => ({ erp_profil_id: P1, jahr: 2026, monat: 12, fassung: 1, sha256: sha, ...extra });
 
   it("Claims: ab Lohnmonat 2026-12, Fassung 1–99, sha256 hex", () => {
-    expect(pruefeAblageClaims(c())).toEqual({ ok: true, anfrage: { profileId: P1, jahr: 2026, monat: 12, fassung: 1, sha256: sha } });
+    expect(pruefeAblageClaims(c())).toEqual({ ok: true, anfrage: { profileId: P1, art: "lohnabrechnung", jahr: 2026, monat: 12, fassung: 1, sha256: sha } });
+    expect(pruefeAblageClaims(c({ art: "lohnabrechnung" }))).toMatchObject({ ok: true, anfrage: { art: "lohnabrechnung", monat: 12 } });
+    expect(pruefeAblageClaims(c({ art: "lohn" }))).toMatchObject({ code: "art_ungueltig" });
     expect(pruefeAblageClaims(c({ monat: 11 }))).toMatchObject({ code: "erp_monat", status: 422 });
     expect(pruefeAblageClaims(c({ fassung: 0 }))).toMatchObject({ code: "fassung_ungueltig" });
     expect(pruefeAblageClaims(c({ sha256: sha.toUpperCase() }))).toMatchObject({ code: "sha256_ungueltig" });
     expect(pruefeAblageClaims(c({ erp_profil_id: "x" }))).toMatchObject({ code: "person_ungueltig" });
+  });
+  it("Lohnausweis: jahr ab 2026, ohne monat", () => {
+    const a = (extra: Record<string, unknown> = {}) => ({ erp_profil_id: P1, art: "lohnausweis", jahr: 2026, fassung: 1, sha256: sha, ...extra });
+    expect(pruefeAblageClaims(a())).toEqual({ ok: true, anfrage: { profileId: P1, art: "lohnausweis", jahr: 2026, monat: null, fassung: 1, sha256: sha } });
+    expect(pruefeAblageClaims(a({ monat: 12 }))).toMatchObject({ code: "monat_nicht_erlaubt", status: 400 });
+    expect(pruefeAblageClaims(a({ jahr: 2025 }))).toMatchObject({ code: "erp_jahr", status: 422 });
+    expect(pruefeAblageClaims(a({ jahr: "2026" }))).toMatchObject({ code: "jahr_ungueltig" });
+    expect(pruefeAblageClaims(a({ fassung: 100 }))).toMatchObject({ code: "fassung_ungueltig" });
+    expect(protokollKennzahlen(a())).toEqual({ jahr: 2026, monat: null, angefragt: 1 });
   });
   it("Körper { ausweis, pdf_base64 }", () => {
     expect(pruefeAblageKoerper(JSON.stringify({ ausweis: " a.b.c ", pdf_base64: "QQ==" }))).toEqual({ ok: true, ausweis: "a.b.c", pdfBase64: "QQ==" });
@@ -140,5 +153,37 @@ describe("Lohnabrechnung aus Bexio (A5)", () => {
     const gross = Buffer.alloc(2 * 1024 * 1024 + 10, 0x20);
     gross.write("%PDF-");
     expect(dekodierePdf(gross.toString("base64"), sha256Hex(gross))).toMatchObject({ code: "zu_gross", status: 413 });
+  });
+});
+
+describe("Personal-Sätze (/saetze)", () => {
+  const e = (extra: Record<string, unknown> = {}) => ({ erp_profil_id: P1, gueltig_ab: "2026-12-01", kosten_chf_h: 41.35, netto_chf_h: 28, ...extra });
+
+  it("gültige Liste → Sätze in Reihenfolge, IDs klein", () => {
+    expect(pruefeSaetzeClaims({ saetze: [e(), e({ erp_profil_id: P2.toUpperCase(), gueltig_ab: "2027-01-01", kosten_chf_h: 0, netto_chf_h: 0.05 })] })).toEqual({
+      ok: true,
+      anfrage: [
+        { profileId: P1, gueltigAb: "2026-12-01", kostenChfH: 41.35, nettoChfH: 28 },
+        { profileId: P2, gueltigAb: "2027-01-01", kostenChfH: 0, nettoChfH: 0.05 },
+      ],
+    });
+    expect(protokollKennzahlen({ saetze: [e(), e()] })).toEqual({ jahr: null, monat: null, angefragt: 2 });
+  });
+  it("1–50 Einträge", () => {
+    expect(pruefeSaetzeClaims({})).toMatchObject({ code: "saetze_fehlen" });
+    expect(pruefeSaetzeClaims({ saetze: [] })).toMatchObject({ code: "saetze_fehlen" });
+    const viele = Array.from({ length: 51 }, (_, i) => e({ gueltig_ab: `2026-12-${String((i % 28) + 1).padStart(2, "0")}`, erp_profil_id: i < 28 ? P1 : P2 }));
+    expect(pruefeSaetzeClaims({ saetze: viele })).toMatchObject({ code: "saetze_zu_viele" });
+  });
+  it("Person, Datum, Zahlen ≥ 0 mit höchstens 2 Nachkommastellen, keine Doppel", () => {
+    expect(pruefeSaetzeClaims({ saetze: [e({ erp_profil_id: "x" })] })).toMatchObject({ code: "person_ungueltig" });
+    expect(pruefeSaetzeClaims({ saetze: [e({ gueltig_ab: "2026-02-30" })] })).toMatchObject({ code: "datum_ungueltig" });
+    expect(pruefeSaetzeClaims({ saetze: [e({ gueltig_ab: "01.12.2026" })] })).toMatchObject({ code: "datum_ungueltig" });
+    expect(pruefeSaetzeClaims({ saetze: [e({ kosten_chf_h: -1 })] })).toMatchObject({ code: "satz_ungueltig" });
+    expect(pruefeSaetzeClaims({ saetze: [e({ kosten_chf_h: 1.005 })] })).toMatchObject({ code: "satz_ungueltig" });
+    expect(pruefeSaetzeClaims({ saetze: [e({ netto_chf_h: "28.00" })] })).toMatchObject({ code: "satz_ungueltig" });
+    expect(pruefeSaetzeClaims({ saetze: [e({ netto_chf_h: Number.NaN })] })).toMatchObject({ code: "satz_ungueltig" });
+    expect(pruefeSaetzeClaims({ saetze: ["x"] })).toMatchObject({ code: "satz_ungueltig" });
+    expect(pruefeSaetzeClaims({ saetze: [e(), e({ erp_profil_id: P1.toUpperCase(), kosten_chf_h: 50 })] })).toMatchObject({ code: "satz_doppelt" });
   });
 });

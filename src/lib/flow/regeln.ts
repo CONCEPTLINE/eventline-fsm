@@ -1,7 +1,9 @@
 // Regeln der Trust-flow-Schnittstelle je Route (rein, ohne Datenbank).
 //
 //   pruefeMonatsClaims     Stempel/Vergleich: jahr, monat, profile (≤ 50), Stempel-Bereich
-//   pruefeAblageClaims     Lohnabrechnung: erp_profil_id, jahr, monat (ab 12/2026), fassung, sha256
+//   pruefeAblageClaims     Ablage: erp_profil_id, art (lohnabrechnung: jahr+monat ab 12/2026 |
+//                          lohnausweis: jahr ab 2026, ohne monat), fassung, sha256
+//   pruefeSaetzeClaims     Personal-Sätze: saetze [{ erp_profil_id, gueltig_ab, kosten_chf_h, netto_chf_h }] (1–50)
 //   lokalerMonat, monateDesStempels, zaehleUeberlappungen, nachtraeglichGeaendert
 //   vergleichAusMomentaufnahme
 //   pruefeAblageKoerper, dekodierePdf
@@ -45,11 +47,16 @@ function jahrMonat(c: Record<string, unknown>): { jahr: number; monat: number } 
   return { jahr: jahr as number, monat: monat as number };
 }
 
-/** Kennzahlen fürs Protokoll, bevor die Route die Claims streng prüft (nie Wurf). */
+/** Kennzahlen fürs Protokoll, bevor die Route die Claims streng prüft (nie Wurf).
+ *  Lohnausweis: nur jahr (monat leer); Sätze: angefragt = Anzahl Einträge. */
 export function protokollKennzahlen(c: Record<string, unknown>): { jahr: number | null; monat: number | null; angefragt: number | null } {
   const jm = jahrMonat(c);
-  const angefragt = Array.isArray(c.profile) ? c.profile.length : istUuid(c.erp_profil_id) ? 1 : null;
-  return { jahr: jm?.jahr ?? null, monat: jm?.monat ?? null, angefragt };
+  const nurJahr = !jm && c.monat === undefined && Number.isInteger(c.jahr) && (c.jahr as number) >= 2020 && (c.jahr as number) <= 2100
+    ? (c.jahr as number) : null;
+  const angefragt = Array.isArray(c.profile) ? c.profile.length
+    : Array.isArray(c.saetze) ? c.saetze.length
+    : istUuid(c.erp_profil_id) ? 1 : null;
+  return { jahr: jm?.jahr ?? nurJahr, monat: jm?.monat ?? null, angefragt };
 }
 
 export interface MonatsAnfrage {
@@ -96,22 +103,47 @@ function pruefeProfilListe(c: Record<string, unknown>): { ok: true; profile: str
   return { ok: true, profile };
 }
 
+/** Was abgelegt wird: Lohnabrechnung (je Lohnmonat) oder Lohnausweis (je Jahr). */
+export type AblageArt = "lohnabrechnung" | "lohnausweis";
+/** Lohnausweise aus Bexio ab diesem Jahr. */
+export const AUSWEIS_AB_JAHR = 2026;
+
 export interface AblageAnfrage {
   profileId: string;
+  art: AblageArt;
   jahr: number;
-  monat: number;
-  /** Fassung laut Trust flow/Bexio (1 = erste Abrechnung des Monats). */
+  /** Lohnmonat; null beim Lohnausweis. */
+  monat: number | null;
+  /** Fassung laut Trust flow/Bexio (1 = erste Fassung der Periode). */
   fassung: number;
   sha256: string;
 }
 
-/** Claims der Lohnabrechnungs-Ablage (A5). */
+/** Claims der Ablage (A5): Lohnabrechnung (art fehlt oder «lohnabrechnung») oder Lohnausweis. */
 export function pruefeAblageClaims(c: Record<string, unknown>): { ok: true; anfrage: AblageAnfrage } | RegelFehler {
   if (!istUuid(c.erp_profil_id)) return fehler("person_ungueltig", "erp_profil_id fehlt oder ist ungültig.");
-  const jm = jahrMonat(c);
-  if (!jm) return fehler("monat_ungueltig", "jahr/monat fehlen oder sind ungültig.");
-  if (vor(jm, BEXIO_AB)) {
-    return fehler("erp_monat", `Lohnabrechnungen aus Bexio erst ab Lohnmonat ${monatText(BEXIO_AB.jahr, BEXIO_AB.monat)}.`, 422);
+  if (c.art !== undefined && c.art !== "lohnabrechnung" && c.art !== "lohnausweis") {
+    return fehler("art_ungueltig", "art muss «lohnabrechnung» oder «lohnausweis» sein.");
+  }
+  const art: AblageArt = c.art === "lohnausweis" ? "lohnausweis" : "lohnabrechnung";
+  let jahr: number;
+  let monat: number | null;
+  if (art === "lohnausweis") {
+    if (c.monat !== undefined) return fehler("monat_nicht_erlaubt", "Lohnausweis: monat darf nicht gesetzt sein.");
+    if (!Number.isInteger(c.jahr) || (c.jahr as number) < 2020 || (c.jahr as number) > 2100) {
+      return fehler("jahr_ungueltig", "jahr fehlt oder ist ungültig.");
+    }
+    jahr = c.jahr as number;
+    if (jahr < AUSWEIS_AB_JAHR) return fehler("erp_jahr", `Lohnausweise aus Bexio erst ab Jahr ${AUSWEIS_AB_JAHR}.`, 422);
+    monat = null;
+  } else {
+    const jm = jahrMonat(c);
+    if (!jm) return fehler("monat_ungueltig", "jahr/monat fehlen oder sind ungültig.");
+    if (vor(jm, BEXIO_AB)) {
+      return fehler("erp_monat", `Lohnabrechnungen aus Bexio erst ab Lohnmonat ${monatText(BEXIO_AB.jahr, BEXIO_AB.monat)}.`, 422);
+    }
+    jahr = jm.jahr;
+    monat = jm.monat;
   }
   if (!Number.isInteger(c.fassung) || (c.fassung as number) < 1 || (c.fassung as number) > 99) {
     return fehler("fassung_ungueltig", "fassung (1–99) fehlt oder ist ungültig.");
@@ -121,8 +153,60 @@ export function pruefeAblageClaims(c: Record<string, unknown>): { ok: true; anfr
   }
   return {
     ok: true,
-    anfrage: { profileId: (c.erp_profil_id as string).toLowerCase(), ...jm, fassung: c.fassung as number, sha256: c.sha256 },
+    anfrage: { profileId: (c.erp_profil_id as string).toLowerCase(), art, jahr, monat, fassung: c.fassung as number, sha256: c.sha256 },
   };
+}
+
+// ---------------------------------------------------------------------------
+// Personal-Sätze (POST /api/flow/saetze, Migration 377)
+// ---------------------------------------------------------------------------
+
+/** Höchstens so viele Sätze je Ausweis. */
+export const SAETZE_MAX = 50;
+/** Grösster Satz in CHF/h (numeric(8,2)). */
+const SATZ_MAX = 999_999.99;
+
+export interface Satz {
+  profileId: string;
+  /** YYYY-MM-DD */
+  gueltigAb: string;
+  kostenChfH: number;
+  nettoChfH: number;
+}
+
+const istDatum = (v: unknown): v is string => {
+  if (typeof v !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(v)) return false;
+  const [j, m, t] = v.split("-").map(Number);
+  const d = new Date(Date.UTC(j, m - 1, t));
+  return j >= 2020 && j <= 2100 && d.getUTCFullYear() === j && d.getUTCMonth() === m - 1 && d.getUTCDate() === t;
+};
+
+/** Zahl ≥ 0 mit höchstens 2 Nachkommastellen (als JSON-Zahl). */
+const istSatz = (v: unknown): v is number =>
+  typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= SATZ_MAX && Math.abs(Math.round(v * 100) - v * 100) < 1e-6;
+
+/** Claim `saetze`: 1–50 Einträge, je Person und Datum höchstens einmal. */
+export function pruefeSaetzeClaims(c: Record<string, unknown>): { ok: true; anfrage: Satz[] } | RegelFehler {
+  if (!Array.isArray(c.saetze) || c.saetze.length === 0) return fehler("saetze_fehlen", "saetze fehlt oder ist leer.");
+  if (c.saetze.length > SAETZE_MAX) return fehler("saetze_zu_viele", `Höchstens ${SAETZE_MAX} Sätze je Aufruf.`);
+  const out: Satz[] = [];
+  const gesehen = new Set<string>();
+  for (let i = 0; i < c.saetze.length; i++) {
+    const e: unknown = c.saetze[i];
+    const o = e && typeof e === "object" && !Array.isArray(e) ? (e as Record<string, unknown>) : null;
+    const nr = `saetze[${i}]`;
+    if (!o) return fehler("satz_ungueltig", `${nr} ist kein Objekt.`);
+    if (!istUuid(o.erp_profil_id)) return fehler("person_ungueltig", `${nr}.erp_profil_id fehlt oder ist ungültig.`);
+    if (!istDatum(o.gueltig_ab)) return fehler("datum_ungueltig", `${nr}.gueltig_ab (YYYY-MM-DD) fehlt oder ist ungültig.`);
+    if (!istSatz(o.kosten_chf_h)) return fehler("satz_ungueltig", `${nr}.kosten_chf_h: Zahl ≥ 0 mit höchstens 2 Nachkommastellen.`);
+    if (!istSatz(o.netto_chf_h)) return fehler("satz_ungueltig", `${nr}.netto_chf_h: Zahl ≥ 0 mit höchstens 2 Nachkommastellen.`);
+    const profileId = (o.erp_profil_id as string).toLowerCase();
+    const k = `${profileId}|${o.gueltig_ab}`;
+    if (gesehen.has(k)) return fehler("satz_doppelt", `${nr}: Person und gueltig_ab kommen doppelt vor.`);
+    gesehen.add(k);
+    out.push({ profileId, gueltigAb: o.gueltig_ab, kostenChfH: o.kosten_chf_h, nettoChfH: o.netto_chf_h });
+  }
+  return { ok: true, anfrage: out };
 }
 
 // ---------------------------------------------------------------------------

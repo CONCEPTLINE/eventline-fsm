@@ -5,7 +5,7 @@ import { istMonatGesperrtDb } from "@/lib/lohn/abrechnung";
 import { ladeStempelProbleme } from "@/lib/lohn/stempel-pruefung";
 import { ladeLohnEinstellungen, nachLaufBis } from "@/lib/lohn/zugriff";
 import { speichereBexioFassung } from "@/lib/lohn/fassung";
-import { meldeNeueAbrechnung } from "@/lib/lohn/zustellung";
+import { ladeAktuelleWahl, meldeNeueAbrechnung } from "@/lib/lohn/zustellung";
 import type { Ausgefuehrt } from "./aufruf";
 import type { FlowAusweis } from "./ausweis";
 import {
@@ -17,6 +17,7 @@ import {
   type AblageAnfrage,
   type MomentaufnahmeRoh,
   type MonatsAnfrage,
+  type Satz,
   type StempelAenderung,
 } from "./regeln";
 
@@ -177,13 +178,21 @@ export async function lohnabrechnungAblegen(
   if ((await nurInterne(admin, [a.profileId])).length === 0) {
     return ablehnen(422, "person_unbekannt", "Keine Mitarbeiterin / kein Mitarbeiter mit dieser ERP-Profil-ID.");
   }
-  const einst = await ladeLohnEinstellungen(admin);
-  if (!nachLaufBis(einst.laufBis, { jahr: a.jahr, monat: a.monat })) {
-    return ablehnen(422, "erp_monat", "Für diesen Lohnmonat rechnet das ERP — keine Lohnabrechnung aus Bexio.");
+  // Lohnabrechnung: nur Lohnmonate nach lauf_bis. Lohnausweis: das ERP stellt keine mehr aus (Prüfung Jahr in der DB).
+  if (a.art === "lohnabrechnung") {
+    const einst = await ladeLohnEinstellungen(admin);
+    if (!nachLaufBis(einst.laufBis, { jahr: a.jahr, monat: a.monat as number })) {
+      return ablehnen(422, "erp_monat", "Für diesen Lohnmonat rechnet das ERP — keine Lohnabrechnung aus Bexio.");
+    }
   }
+
+  // Aktuelle Zustell-Wahl der Person (vor dem Ablegen geladen: ein Ladefehler bricht ab, bevor etwas
+  // gespeichert ist). Trust flow schickt «papier» und null (noch nicht gewählt) auf Papier.
+  const zustellung = (await ladeAktuelleWahl(admin, a.profileId))?.wahl ?? null;
 
   const r = await speichereBexioFassung(admin, {
     profileId: a.profileId,
+    docType: a.art,
     jahr: a.jahr,
     monat: a.monat,
     fassung: a.fassung,
@@ -192,9 +201,9 @@ export async function lohnabrechnungAblegen(
     flowAbrufId: abrufId,
     flowSub: ausweis.sub,
   });
-  if (r.modus === "abgelehnt") return ablehnen(r.code === "erp_monat" ? 422 : 409, r.code, r.meldung);
+  if (r.modus === "abgelehnt") return ablehnen(r.code === "erp_monat" || r.code === "erp_jahr" ? 422 : 409, r.code, r.meldung);
   if (r.modus === "vorhanden") {
-    return { ok: true, geliefert: 0, body: { ok: true, modus: "vorhanden", dokument_id: r.id, erp_fassung: r.version } };
+    return { ok: true, geliefert: 0, body: { ok: true, modus: "vorhanden", dokument_id: r.id, erp_fassung: r.version, zustellung } };
   }
   // Wie bei ERP-Abrechnungen: «liegt bereit» an die Person (ohne Beträge), Zustellnachweis. Wirft nie.
   await meldeNeueAbrechnung(admin, {
@@ -203,6 +212,54 @@ export async function lohnabrechnungAblegen(
     monat: a.monat,
     wageDocumentId: r.id,
     art: a.fassung > 1 ? "korrektur" : "regulaer",
+    dokument: a.art,
   });
-  return { ok: true, geliefert: 1, body: { ok: true, modus: "abgelegt", dokument_id: r.id, erp_fassung: r.version } };
+  return { ok: true, geliefert: 1, body: { ok: true, modus: "abgelegt", dokument_id: r.id, erp_fassung: r.version, zustellung } };
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/flow/saetze (Migration 377)
+// ---------------------------------------------------------------------------
+
+/** Rappen-genauer Vergleich (numeric(8,2) aus der DB kommt als Zahl oder Text). */
+const gleich = (x: unknown, y: number) => Math.round(Number(x) * 100) === Math.round(y * 100);
+
+export async function saetzeSpeichern(admin: SupabaseClient, saetze: Satz[]): Promise<Ausgefuehrt> {
+  const ids = [...new Set(saetze.map((s) => s.profileId))];
+  const intern = new Set(await nurInterne(admin, ids));
+  const unbekannt = ids.filter((id) => !intern.has(id));
+  if (unbekannt.length > 0) {
+    return ablehnen(422, "person_unbekannt", `Keine Mitarbeiterin / kein Mitarbeiter mit diesen ERP-Profil-IDs: ${unbekannt.join(", ")}.`);
+  }
+
+  type Zeile = { profile_id: string; gueltig_ab: string; kosten_chf_h: unknown; netto_chf_h: unknown };
+  const bisher: Zeile[] = [];
+  for (const teil of inStuecken(ids)) {
+    bisher.push(...(await ladeAlleSeiten<Zeile>(
+      (x, y) => admin.from("personal_saetze").select("profile_id, gueltig_ab, kosten_chf_h, netto_chf_h")
+        .in("profile_id", teil).in("gueltig_ab", [...new Set(saetze.map((s) => s.gueltigAb))]).order("id").range(x, y),
+      "Personal-Sätze",
+    )));
+  }
+  const je = new Map(bisher.map((z) => [`${z.profile_id}|${z.gueltig_ab}`, z]));
+  const neu = saetze.filter((s) => {
+    const z = je.get(`${s.profileId}|${s.gueltigAb}`);
+    return !z || !gleich(z.kosten_chf_h, s.kostenChfH) || !gleich(z.netto_chf_h, s.nettoChfH);
+  });
+  if (neu.length > 0) {
+    const jetzt = new Date().toISOString();
+    const { error } = await admin.from("personal_saetze").upsert(
+      neu.map((s) => ({
+        profile_id: s.profileId,
+        gueltig_ab: s.gueltigAb,
+        kosten_chf_h: s.kostenChfH,
+        netto_chf_h: s.nettoChfH,
+        quelle: "trust-flow",
+        updated_at: jetzt,
+      })),
+      { onConflict: "profile_id,gueltig_ab" },
+    );
+    if (error) throw new Error(`Personal-Sätze konnten nicht gespeichert werden: ${error.message}`);
+  }
+  return { ok: true, geliefert: neu.length, body: { ok: true, gespeichert: neu.length, unveraendert: saetze.length - neu.length } };
 }

@@ -546,7 +546,7 @@ export async function notifyStempelMonatsendeUebersicht(
   client: SupabaseClient,
   args: BaseArgs & {
     monatLabel: string;
-    /** YYYY-MM fuer den Link auf Lohn › Monatsstunden. */
+    /** YYYY-MM fuer den Link auf Stempelzeiten › Prüfen. */
     monat: string;
     sperreText: string;
     offen: number;
@@ -563,7 +563,7 @@ export async function notifyStempelMonatsendeUebersicht(
   if (args.zeilen.length > 15) liste.push(`… und ${args.zeilen.length - 15} weitere`);
   const monatName = args.monatLabel.split(" ")[0];
   const einleitung = `Am ${args.sperreText} wird der ${monatName} abgeschlossen. Diese Stempel blockieren sonst die Lohnabrechnung:`;
-  const pfad = `/lohn?ansicht=team&tab=monatsstunden&monat=${args.monat}`;
+  const pfad = `/stempelzeiten?ansicht=pruefen&monat=${args.monat}`;
   return deliver(client, args.recipients, "stempel_reminder", {
     title,
     message: `${einleitung}\n${liste.join("\n")}`,
@@ -572,38 +572,43 @@ export async function notifyStempelMonatsendeUebersicht(
     resource_id: null,
   }, {
     subject: `EVENTLINE: ${title}`,
-    html: appMailHtml("EVENTLINE · Monatsabschluss", [einleitung, liste.join("\n")], { text: "Lohn › Monatsstunden öffnen", pfad }, FUSS_EINSTELLBAR),
+    html: appMailHtml("EVENTLINE · Monatsabschluss", [einleitung, liste.join("\n")], { text: "Stempelzeiten › Prüfen öffnen", pfad }, FUSS_EINSTELLBAR),
   }, { nieBuendeln: true });
 }
 
 // --- LOHNABRECHNUNG BEREIT (Phase 4, Zustellung) -------------
 
-/** Person: eine neue Lohnabrechnung liegt bereit. OHNE Betraege (Mail ist kein
- *  sicherer Kanal fuer Lohndaten). Liefert die erreichten Kanaele. */
+/** Person: eine neue Lohnabrechnung (bzw. ein Lohnausweis) liegt bereit. OHNE
+ *  Betraege (Mail ist kein sicherer Kanal fuer Lohndaten). Liefert die erreichten Kanaele. */
 export async function notifyLohnDokument(
   client: SupabaseClient,
   args: {
     userId: string;
     wageDocumentId: string;
-    /** «Oktober 2026» */
+    /** Vorgabe Lohnabrechnung. */
+    dokument?: "lohnabrechnung" | "lohnausweis";
+    /** «Oktober 2026» (Lohnausweis: «2026») */
     monatLabel: string;
     korrektur: boolean;
     /** Person hat Papier gewaehlt bzw. noch nicht digital eingewilligt. */
     papier: boolean;
   },
 ): Promise<Zugestellt> {
+  const ausweis = args.dokument === "lohnausweis";
+  const name = ausweis ? "Lohnausweis" : "Lohnabrechnung";
+  const dein = ausweis ? "Dein" : "Deine";
   const title = args.korrektur
-    ? `Deine korrigierte Lohnabrechnung ${args.monatLabel} liegt bereit`
-    : `Deine Lohnabrechnung ${args.monatLabel} liegt bereit`;
+    ? `${dein} ${ausweis ? "korrigierter" : "korrigierte"} ${name} ${args.monatLabel} liegt bereit`
+    : `${dein} ${name} ${args.monatLabel} liegt bereit`;
   const saetze = [
     args.korrektur
-      ? `Für ${args.monatLabel} gibt es eine korrigierte Lohnabrechnung; sie ersetzt die bisherige.`
-      : `Deine Lohnabrechnung ${args.monatLabel} ist erstellt.`,
+      ? `Für ${args.monatLabel} gibt es ${ausweis ? "einen korrigierten Lohnausweis; er" : "eine korrigierte Lohnabrechnung; sie"} ersetzt ${ausweis ? "den bisherigen" : "die bisherige"}.`
+      : `${dein} ${name} ${args.monatLabel} ist erstellt.`,
     args.papier
-      ? "Du erhältst sie auf Papier. In der App unter Lohn › Meine ist sie zusätzlich abrufbar."
-      : "Du findest sie in der App unter Lohn › Meine.",
+      ? `Du erhältst ${ausweis ? "ihn" : "sie"} auf Papier. In der App unter Lohn ist ${ausweis ? "er" : "sie"} zusätzlich abrufbar.`
+      : `Du findest ${ausweis ? "ihn" : "sie"} in der App unter Lohn.`,
   ];
-  const pfad = "/lohn?ansicht=meine";
+  const pfad = "/lohn";
   return deliver(client, [args.userId], "lohn_dokument", {
     title,
     message: saetze.join(" "),
@@ -612,7 +617,7 @@ export async function notifyLohnDokument(
     resource_id: args.wageDocumentId,
   }, {
     subject: `EVENTLINE: ${title}`,
-    html: appMailHtml("EVENTLINE · Lohnabrechnung", saetze, { text: "Lohnabrechnung öffnen", pfad }, `Aus Sicherheitsgründen stehen in dieser Mail keine Beträge. ${FUSS_EINSTELLBAR}`),
+    html: appMailHtml(`EVENTLINE · ${name}`, saetze, { text: `${name} öffnen`, pfad }, `Aus Sicherheitsgründen stehen in dieser Mail keine Beträge. ${FUSS_EINSTELLBAR}`),
   }, { nieBuendeln: true }); // je Dokument eine Meldung («3× … Juli» wäre irreführend)
 }
 

@@ -221,8 +221,10 @@ export async function speichereFassung(admin: SupabaseClient, i: FassungInput): 
 
 export interface BexioFassungInput {
   profileId: string;
+  /** Lohnabrechnung (je Lohnmonat, Vorgabe) oder Lohnausweis (je Jahr, monat null; Migration 377). */
+  docType?: DocType;
   jahr: number;
-  monat: number;
+  monat: number | null;
   /** Fassung laut Trust flow/Bexio. */
   fassung: number;
   pdf: Uint8Array;
@@ -239,35 +241,40 @@ export type BexioFassungErgebnis =
 
 /** PDF aus Bexio unter eigenem Pfad ablegen, dann Zeile + Protokoll + Zuordnung
  *  zur Bexio-Fassung in EINER Transaktion (RPC lohn_bexio_fassung_speichern:
- *  nur Lohnmonate nach lauf_bis, gleiche Fassung = vorhanden, ältere = abgelehnt).
+ *  nur Lohnmonate nach lauf_bis; Lohnausweis: lohn_bexio_ausweis_speichern, je Jahr;
+ *  gleiche Fassung = vorhanden, ältere = abgelehnt).
  *  Ausser bei einer neuen Fassung ist die eben hochgeladene Datei danach wieder weg. */
 export async function speichereBexioFassung(admin: SupabaseClient, i: BexioFassungInput): Promise<BexioFassungErgebnis> {
+  const docType: DocType = i.docType ?? "lohnabrechnung";
+  const monat = docType === "lohnausweis" ? null : i.monat;
   const version = await naechsteVersion(admin, {
-    profileId: i.profileId, docType: "lohnabrechnung", year: i.jahr, month: i.monat,
+    profileId: i.profileId, docType, year: i.jahr, month: monat,
     pdf: i.pdf, source: "manual", actorId: null, actorName: null,
   });
   const pfad = fassungsPfad({
-    profileId: i.profileId, docType: "lohnabrechnung", year: i.jahr, month: i.monat, version,
+    profileId: i.profileId, docType, year: i.jahr, month: monat, version,
     jetzt: i.jetzt ?? new Date(), zufall: i.zufall ?? randomBytes(3).toString("hex"),
   });
   const { error: upErr } = await admin.storage.from(LOHN_BUCKET).upload(pfad, i.pdf, { contentType: "application/pdf", upsert: false });
   if (upErr) throw new LohnFehler(`PDF konnte nicht gespeichert werden: ${upErr.message}`);
 
-  const { data, error } = await admin.rpc("lohn_bexio_fassung_speichern", {
+  const gemeinsam = {
     p_profile_id: i.profileId,
     p_jahr: i.jahr,
-    p_monat: i.monat,
     p_fassung: i.fassung,
     p_pdf_sha256: i.pdfSha256,
     p_storage_path: pfad,
     p_file_size: i.pdf.byteLength,
     p_flow_abruf_id: i.flowAbrufId,
     p_flow_sub: i.flowSub,
-  });
+  };
+  const { data, error } = docType === "lohnausweis"
+    ? await admin.rpc("lohn_bexio_ausweis_speichern", gemeinsam)
+    : await admin.rpc("lohn_bexio_fassung_speichern", { ...gemeinsam, p_monat: monat });
   if (error || !data) {
     const aufraeumFehler = await entferneEigeneDatei(admin, pfad);
     throw new LohnFehler(
-      `Lohnabrechnung aus Bexio konnte nicht gespeichert werden: ${error?.message ?? "keine Antwort"}` +
+      `${docType === "lohnausweis" ? "Lohnausweis" : "Lohnabrechnung"} aus Bexio konnte nicht gespeichert werden: ${error?.message ?? "keine Antwort"}` +
         (aufraeumFehler ? ` — zusätzlich verwaiste Datei ${pfad} (${aufraeumFehler})` : ""),
     );
   }

@@ -16,6 +16,8 @@
 //   F8 Lohnabrechnung aus Bexio: Ablage, Fassungen, nie überschreiben, Meldung, «Meine Lohndokumente»,
 //      Statusspalte «über Trust flow», Lohnlauf (Probe) erzeugt für Dezember nichts
 //   F9 ohne FLOW_ABRUF_PUBLIC_KEY → 503 auf allen Routen
+//   F10 Lohnausweis aus Bexio (art «lohnausweis», 377): Ablage je Jahr, Fassungen, Antwort mit zustellung
+//   F11 Personal-Sätze /api/flow/saetze (aud «erp-saetze», 377): speichern, unverändert, ändern, unbekannte Person
 //
 // Aufruf: node supabase/lokal/pruefen-flow.mjs   (~2–3 min: wartet auf das Minuten-Fenster)
 // Meldet sich nur LOKAL ab (signOut({ scope: "local" })).
@@ -323,6 +325,8 @@ try {
   const r9 = await ablage(pdf1, { erp_profil_id: ID.lara, jahr: 2026, monat: 12, fassung: f1 });
   const docId = r9.json?.dokument_id;
   ok(r9.status === 200 && r9.json?.modus === "abgelegt" && !!docId, `Fassung ${f1} → ${r9.status} ${r9.json?.modus}, ERP-Fassung ${r9.json?.erp_fassung}`);
+  const wahlLara = sql(`select coalesce((select wahl from lohn_zustellung_wahl where profile_id = '${ID.lara}' order by gewaehlt_at desc limit 1), case when (select lohndokumente_digital_accepted_at from profiles where id = '${ID.lara}') is not null then 'digital' end, 'null')`);
+  ok(String(r9.json?.zustellung) === wahlLara, `Antwort nennt die Zustell-Wahl der Person (${r9.json?.zustellung})`);
   const w = sql(`select source || '|' || doc_type || '|' || year || '|' || period_month || '|' || storage_path || '|' || version from wage_documents where id = '${docId}'`).split("|");
   ok(w[0] === "bexio" && w[1] === "lohnabrechnung" && w[2] === "2026" && w[3] === "12", `wage_documents: Quelle ${w[0]}, ${w[1]} ${w[2]}-${w[3]}`);
   const { data: blob } = await service.storage.from("lohndokumente").download(w[4]);
@@ -374,6 +378,45 @@ try {
   const falscherAud = ablageKoerper(pdf2, { erp_profil_id: ID.lara, jahr: 2026, monat: 12, fassung: f2 });
   const rAud = await flow("stempel", JSON.parse(falscherAud.body).ausweis);
   ok(rAud.status === 401, `Ablage-Ausweis an /api/flow/stempel → ${rAud.status}`);
+
+  titel("F10 Lohnausweis aus Bexio (art «lohnausweis»)");
+  const fa = Number(sql(`select coalesce(max(fassung), 0) from lohn_bexio_fassungen where profile_id = '${ID.lara}' and doc_type = 'lohnausweis' and jahr = 2026`)) + 1;
+  const ausweisPdf = testPdf(`Testlohnausweis 2026 Fassung ${fa} ${Date.now()}`);
+  const objAusweis = speicherObjekte(ID.lara, "lohnausweis");
+  const ra = await ablage(ausweisPdf, { erp_profil_id: ID.lara, art: "lohnausweis", jahr: 2026, fassung: fa });
+  const ausweisId = ra.json?.dokument_id;
+  ok(ra.status === 200 && ra.json?.modus === "abgelegt" && "zustellung" in (ra.json ?? {}), `Lohnausweis 2026 Fassung ${fa} → ${ra.status} ${ra.json?.modus}, zustellung ${ra.json?.zustellung}`);
+  const wa = sql(`select source || '|' || doc_type || '|' || year || '|' || coalesce(period_month::text, 'null') from wage_documents where id = '${ausweisId}'`);
+  ok(wa === "bexio|lohnausweis|2026|null", `wage_documents: ${wa}`);
+  ok(sql(`select count(*) from lohn_bexio_fassungen where wage_document_id = '${ausweisId}' and doc_type = 'lohnausweis' and monat is null`) === "1", "Zuordnung Bexio-Fassung (Lohnausweis, ohne Monat)");
+  ok(speicherObjekte(ID.lara, "lohnausweis") === objAusweis + 1, "genau eine neue Datei unter …/2026/lohnausweis/");
+  const mAusweis = sql(`select title from notifications where user_id = '${ID.lara}' and resource_id = '${ausweisId}' order by created_at desc limit 1`);
+  ok(/Lohnausweis 2026/.test(mAusweis), `Meldung an Lara: «${mAusweis}»`);
+  const raB = await ablage(ausweisPdf, { erp_profil_id: ID.lara, art: "lohnausweis", jahr: 2026, fassung: fa });
+  ok(raB.status === 200 && raB.json?.modus === "vorhanden" && raB.json?.dokument_id === ausweisId, `gleicher Lohnausweis nochmals → ${raB.status} ${raB.json?.modus}`);
+  const raC = await ablage(testPdf("anderer Ausweis"), { erp_profil_id: ID.lara, art: "lohnausweis", jahr: 2026, fassung: fa });
+  ok(raC.status === 409 && raC.json?.code === "fassung_abweichend", `gleiche Fassung, andere PDF → ${raC.status} ${raC.json?.code}`);
+  const raM = await ablage(testPdf("mit Monat"), { erp_profil_id: ID.lara, art: "lohnausweis", jahr: 2026, monat: 12, fassung: fa + 1 });
+  ok(raM.status === 400 && raM.json?.code === "monat_nicht_erlaubt", `Lohnausweis mit monat → ${raM.status} ${raM.json?.code}`);
+  const raJ = await ablage(testPdf("2025"), { erp_profil_id: ID.lara, art: "lohnausweis", jahr: 2025, fassung: 1 });
+  ok(raJ.status === 422 && raJ.json?.code === "erp_jahr", `Lohnausweis 2025 → ${raJ.status} ${raJ.json?.code}`);
+
+  titel("F11 Personal-Sätze /api/flow/saetze");
+  const saetze = (liste, opts) => flow("saetze", JSON.stringify({ ausweis: ausweis("erp-saetze", { saetze: liste }, opts).token }), "application/json");
+  const tag = `2031-${pad(1 + (Date.now() % 12))}-01`; // eigenes Datum je Lauf, nie Live-Daten
+  const sa1 = await saetze([{ erp_profil_id: ID.lara, gueltig_ab: tag, kosten_chf_h: 41.35, netto_chf_h: 28 }, { erp_profil_id: ID.noah, gueltig_ab: tag, kosten_chf_h: 39.1, netto_chf_h: 26.55 }]);
+  ok(sa1.status === 200 && sa1.json?.ok === true && sa1.json?.gespeichert + sa1.json?.unveraendert === 2, `zwei Sätze → ${sa1.status} gespeichert ${sa1.json?.gespeichert}, unverändert ${sa1.json?.unveraendert}`);
+  ok(sql(`select kosten_chf_h || '|' || netto_chf_h || '|' || quelle from personal_saetze where profile_id = '${ID.lara}' and gueltig_ab = '${tag}'`) === "41.35|28.00|trust-flow", "personal_saetze: Lara gespeichert");
+  const sa2 = await saetze([{ erp_profil_id: ID.lara, gueltig_ab: tag, kosten_chf_h: 41.35, netto_chf_h: 28 }]);
+  ok(sa2.status === 200 && sa2.json?.gespeichert === 0 && sa2.json?.unveraendert === 1, `gleicher Satz nochmals → gespeichert ${sa2.json?.gespeichert}, unverändert ${sa2.json?.unveraendert}`);
+  const sa3 = await saetze([{ erp_profil_id: ID.lara, gueltig_ab: tag, kosten_chf_h: 42, netto_chf_h: 28.5 }]);
+  ok(sa3.status === 200 && sa3.json?.gespeichert === 1 && sql(`select kosten_chf_h::text from personal_saetze where profile_id = '${ID.lara}' and gueltig_ab = '${tag}'`) === "42.00", "geänderter Satz → überschrieben");
+  const sa4 = await saetze([{ erp_profil_id: randomUUID(), gueltig_ab: tag, kosten_chf_h: 1, netto_chf_h: 1 }]);
+  ok(sa4.status === 422 && sa4.json?.code === "person_unbekannt", `unbekannte Person → ${sa4.status} ${sa4.json?.code}`);
+  const sa5 = await saetze([{ erp_profil_id: ID.lara, gueltig_ab: tag, kosten_chf_h: 1.005, netto_chf_h: 1 }]);
+  ok(sa5.status === 400 && sa5.json?.code === "satz_ungueltig", `drei Nachkommastellen → ${sa5.status} ${sa5.json?.code}`);
+  ok(sql(`select gruppe from flow_abrufe where aud = 'erp-saetze' order by empfangen_at desc limit 1`) === "ablage", "Protokoll: aud erp-saetze, Gruppe «ablage»");
+  sql(`delete from personal_saetze where gueltig_ab = '${tag}'`);
 
   const lara = await login("lara.steiner@example.com");
   const meine = await lara("/api/hr/wage-documents");

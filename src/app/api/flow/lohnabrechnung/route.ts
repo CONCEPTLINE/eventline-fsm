@@ -1,17 +1,22 @@
 // POST /api/flow/lohnabrechnung — Lohnabrechnung (PDF aus Bexio) je Person und
-// Lohnmonat von Trust flow ins ERP (A5, aud «erp-lohnabrechnung-ablage»).
+// Lohnmonat bzw. Lohnausweis je Person und Jahr von Trust flow ins ERP
+// (A5, aud «erp-lohnabrechnung-ablage»).
 //
 // Körper (JSON): { "ausweis": "<JWS>", "pdf_base64": "<Base64>" }
-//   Ausweis wie A1 (EdDSA, 60 s, jti einmalig) mit erp_profil_id, jahr, monat
-//   (ab 2026-12 und nach lohn_einstellungen.lauf_bis), fassung (1–99, laut
-//   Trust flow) und sha256 (hex) der PDF — die PDF ist damit mit signiert.
+//   Ausweis wie A1 (EdDSA, 60 s, jti einmalig) mit erp_profil_id, art
+//   («lohnabrechnung» = Vorgabe | «lohnausweis», Migration 377), fassung (1–99,
+//   laut Trust flow) und sha256 (hex) der PDF — die PDF ist damit mit signiert.
+//     lohnabrechnung: jahr, monat (ab 2026-12 und nach lohn_einstellungen.lauf_bis)
+//     lohnausweis:    jahr (ab 2026), kein monat
 //   PDF höchstens 2 MB.
 // Ablage: eigene Fassung mit Quelle «bexio» im Bucket lohndokumente (nie
-// überschreiben, eigener Pfad, Protokoll), sichtbar unter «Meine Lohndokumente»,
+// überschreiben, eigener Pfad, Protokoll), sichtbar unter Lohn (/lohn),
 // Meldung an die Person ohne Beträge. Gleiche Fassung + gleiche PDF nochmals =
 // «vorhanden» (Wiederholen ist sicher); gleiche Fassung mit anderer PDF oder
 // ältere Fassung = 409.
-// Antwort: { ok: true, modus: "abgelegt" | "vorhanden", dokument_id, erp_fassung }.
+// Antwort: { ok: true, modus: "abgelegt" | "vorhanden", dokument_id, erp_fassung,
+//            zustellung: "digital" | "papier" | null }  — aktuelle Wahl der Person
+//            (null = noch nicht gewählt; Trust flow stellt dann auf Papier zu).
 
 import { flowAufruf, flowNichtEingerichtet, leseKoerper, zuGross } from "@/lib/flow/server";
 import { lohnabrechnungAblegen } from "@/lib/flow/daten";

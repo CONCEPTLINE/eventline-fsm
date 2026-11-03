@@ -29,9 +29,12 @@ import { monatLabel } from "./monate";
 export interface NeueAbrechnung {
   profileId: string;
   jahr: number;
-  monat: number;
+  /** Lohnmonat; beim Lohnausweis null. */
+  monat: number | null;
   wageDocumentId: string;
   art: "regulaer" | "korrektur";
+  /** Vorgabe Lohnabrechnung; Lohnausweis aus Bexio über Trust flow (Migration 377). */
+  dokument?: "lohnabrechnung" | "lohnausweis";
 }
 
 export type ZustellWahl = "digital" | "papier";
@@ -172,10 +175,12 @@ export async function meldeNeueAbrechnung(admin: SupabaseClient, a: NeueAbrechnu
     }
     if (p?.is_active !== true) return;
 
+    const ausweis = a.dokument === "lohnausweis" || a.monat == null;
     const zugestellt = await notifyLohnDokument(admin, {
       userId: a.profileId,
       wageDocumentId: a.wageDocumentId,
-      monatLabel: monatLabel({ jahr: a.jahr, monat: a.monat }),
+      dokument: ausweis ? "lohnausweis" : "lohnabrechnung",
+      monatLabel: ausweis ? String(a.jahr) : monatLabel({ jahr: a.jahr, monat: a.monat as number }),
       korrektur: a.art === "korrektur",
       papier: wahl !== "digital",
     });
