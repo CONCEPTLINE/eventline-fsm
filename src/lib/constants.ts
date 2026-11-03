@@ -122,7 +122,7 @@ export interface NavGroup {
 //   Kontakte  Kunden, Locations, Lieferanten. Locations soll ein Klick
 //             bleiben (Leo, 2026-09-05, Schluesselcodes) → wer den Bereich
 //             offen laesst, hat ihn; die Sidebar merkt sich offene Bereiche.
-//   HR        Anträge, Stempelzeiten, Tickets & Belege, Abwesenheit, Lohn
+//   HR        Freigaben, Meine Anfragen | Tickets, Stempelzeiten, Abwesenheit, Lohn
 //   Finanzen  Abrechnung (+ kuenftige Finanzseiten)
 //   Admin     Ablage, Technik, Einstellungen
 // Admin-Einstellungen leben an EINEM Ort: /einstellungen (Firmenportal mit

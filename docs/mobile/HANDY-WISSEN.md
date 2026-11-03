@@ -5,7 +5,7 @@ Zuerst lesen, dann bauen. Regeln aus `CLAUDE.md` (A + B) gelten zusätzlich.
 
 ## 1. Grundsätze (Entscheide Leo/Mischa)
 - **Wer und wo:** Das Handy bekommt nur Feld-/Operations-Funktionen (Stempeln, Einsätze, Kalender, Todos,
-  Tickets & Belege, Rapporte, Ferien, Locations nachschlagen). Admin-, Technik- und Auswertungsseiten sind
+  Melden & Meine Anfragen, Rapporte, Abwesenheit, Lohn, Locations nachschlagen). Admin-, Technik- und Auswertungsseiten sind
   Laptop-Seiten. Der Büro-Bildschirm (`/bildschirm`) ist ein Wand-TV, kein Handy-Thema.
 - **Desktop bleibt unverändert.** Handy-Anpassungen nur mit `max-md:`-Klassen bzw. eigenem Handy-Baum
   (`useIsMobile()`); md = 768 px.
@@ -26,13 +26,16 @@ Zuerst lesen, dann bauen. Regeln aus `CLAUDE.md` (A + B) gelten zusätzlich.
 |---|---|
 | Weiche Handy/Desktop | `src/lib/use-is-mobile.ts` (true/false/null — bei null Skelett, keine Abfragen starten) |
 | Mobiler Kopf | `src/components/mobile/mobile-kopf.tsx` — Titel aus den Breadcrumbs der Seite (Detailseiten setzen ihren Namen nur am Handy, Muster `standorte/[id]/page.tsx`) |
-| Untere Leiste | `src/components/layout/mobile-nav.tsx` (Dashboard, Todos, Stempeln, Kalender, Mehr) + `mobile/mehr-sheet.tsx` |
+| Untere Leiste | `src/components/layout/mobile-nav.tsx` (Dashboard, Todos, Stempeln, Kalender, **Mein Konto**) — das Mehr-Sheet gibt es seit 03.11.2026 nicht mehr |
+| Mein Konto = Startpunkt | `mobile/mein-konto-mobil.tsx` + `mein-konto/konto-hub.tsx`: Melden (4 Kacheln + Anderes), Meine Anfragen (3), Stempelzeiten/Abwesenheit/Lohn, «Arbeit» (Suchen, Aufträge, Locations, Tickets für tickets:manage), Konto-Zeilen, Abmelden (Warnung bei wartenden Aktionen) |
+| Melden | `lib/melden.ts` `oeffneMelden(art)` → `melden/melden-host.tsx` (im Layout) öffnet direkt das Formular: Beleg/Stempel/Anderes = `tickets/new-ticket-modal.tsx` mit festem Typ, Abwesenheit = `melden/abwesenheit-modal.tsx`, Krank = `melden/krank-modal.tsx`. Beleg am Handy: Kamera direkt (`capture="environment"`) + «Aus Galerie/PDF» |
+| Meine Anfragen | `/anfragen` → `anfragen/meine-anfragen.tsx` (Laptop-Tabelle, Handy-Liste; Offen\|Erledigt per `?stand=`); Daten `/api/anfragen` (`lib/anfragen.ts`). Krank: «Wieder gesund», Arztzeugnis (privater Bucket, `/api/krank/[id]/arztzeugnis`), Regel `lib/krank.ts` |
 | Höhen | `globals.css`: `--kopf-h` calc(46px + safe-area) bzw. 82px mit Büro-Hinweis, `--nav-h` 52px; Toasts +54 px |
 | Statusleiste | `src/components/theme-color-sync.tsx`: genau EIN `theme-color`-Meta, folgt dem App-Theme (next-themes), nicht dem Handy. Keine `themeColor` in Layout-`viewport`-Exports. Manifest `#fafafa`. Am S22 bestätigt: keine schwarzen Ränder mehr (14.10.). |
 | Dashboard | `(app)/dashboard/page.tsx`: Handy + Nicht-Admin → `mobile/heute-screen.tsx`; Admin behält das Raster |
 | Kalender | `(app)/kalender/page.tsx` → `mobile/kalender-monat.tsx` (iPhone-Monatsansicht, s. u.) |
 | Auftrag / Rapport | `mobile/auftrag-feld.tsx`, `mobile/rapport-mobil.tsx` |
-| Weitere Handy-Screens | `mobile/stempel-sheet.tsx`, `stempelzeiten-mobil.tsx`, `ferien-mobil.tsx`, `tickets-mobil.tsx`, `todos-mobil.tsx`, `mein-konto-mobil.tsx`, `lade-fehler.tsx`, `offline-streifen.tsx`, `uebertragungen-sheet.tsx`, `app-install-hinweis.tsx` |
+| Weitere Handy-Screens | `mobile/stempel-sheet.tsx`, `stempelzeiten-mobil.tsx`, `ferien-mobil.tsx`, `tickets-mobil.tsx` (nur tickets:manage; andere → /anfragen), `todos-mobil.tsx`, `mein-konto-mobil.tsx`, `lade-fehler.tsx`, `offline-streifen.tsx`, `uebertragungen-sheet.tsx`, `app-install-hinweis.tsx` |
 | Lohn | `components/lohn/mein-lohn.tsx` — gleiche Komponente wie am Laptop, am Handy Monatskarten (Stunden, «PDF»-Knopf 34 px, NEU-Marke), Lohnausweis-Karte, Zustellung «ändern» (03.11.2026) |
 | Modals | `ui/modal.tsx` wird am Handy zum Bottom-Sheet (`max-md:`); Formulare darin einspaltig |
 | Partnerportal | `components/partner/partner-mobil-nav.tsx`, `app/partner/(portal)/layout.tsx` (Seitenrand 10 px). Daten seit 16.10. NUR über `/api/partner/**` (`lib/partner-api.ts`, Uploads `lib/partner-upload.ts`) — direkte Abfragen auf jobs/documents/Termine/Kunden/Storage liefern für Partner nichts mehr (Migration 346) |
@@ -54,7 +57,7 @@ Zuerst lesen, dann bauen. Regeln aus `CLAUDE.md` (A + B) gelten zusätzlich.
 - **Ausstempeln nach > 16 h:** `stempelzeiten/lang-ausstempeln-dialog.tsx` (vom StempelProvider für ALLE
   Ausstempeln-Knöpfe gerendert) fragt Endzeit (Datum + ZeitFeld) und Begründung. `clockOut()` liefert
   `{ abgebrochen: true }` beim Abbrechen — neue Aufrufer müssen das ohne Toast behandeln (`if (res.abgebrochen) return;`).
-- Stempelzeiten am Handy: abgerechnete Zeilen zeigen «Lohnverwaltung per Antrag» und bieten «Stempel-Änderung melden».
+- Stempelzeiten am Handy: Zeile antippen → «Stempel korrigieren» (vorbelegt, über `oeffneMelden("stempel", …)`); abgerechnete Zeilen setzt die Lohnverwaltung mit zweiter Bestätigung um.
 
 ## 4. Kalender am Handy (`mobile/kalender-monat.tsx`)
 - Monatsraster wie iPhone: heute roter Kreis, gewählter Tag dunkler Kreis, Punkte/Pillen (max. 4 Segmente) in

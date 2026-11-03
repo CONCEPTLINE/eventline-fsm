@@ -1,16 +1,15 @@
 "use client";
 
 /**
- * Tickets & Belege am Handy (< md). Oben die Zeile «Beleg oder Stempel-
- * Änderung melden …» → Sheet mit zwei Kacheln (Beleg / Stempel-Änderung,
- * Begriff wie Desktop + NewTicketModal) → das bestehende NewTicketModal als
- * Bottom-Sheet. IT/Material bleiben Buero.
+ * Tickets am Handy (< md) — nur fuer tickets:manage (Mitarbeiter landen
+ * auf /anfragen). Neues gemeldet wird ueber Mein Konto › Melden
+ * (lib/melden.ts), nicht hier.
  *
  * Segmente «Offen · n | Erledigt» (localStorage-Key wie der Desktop:
  * tickets-status). Segmentwechsel zeigt das Skeleton und beginnt das Paging
  * neu. Mit tickets:manage steht oben die Gruppe «Zu genehmigen» (offene
- * Tickets anderer). Anders als die Desktop-Liste zeigt diese Seite auch
- * Belege — am Handy ist sie die eine Stelle fuer «meine Meldungen».
+ * Tickets anderer); darunter die eigenen (alle eigenen Meldungen inkl.
+ * Abwesenheiten stehen unter Meine Anfragen, /anfragen).
  *
  * Realtime: Window-Event "realtime:tickets" (Layout-Channel) → gebuendelt
  * neu laden. Ladefehler ohne Daten → EmptyState «Erneut versuchen» statt
@@ -22,20 +21,17 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
 import {
-  Camera, ChevronDown, Clock, Loader2, Package, Plus, Receipt,
+  ChevronDown, Clock, Loader2, Package, Receipt,
   Ticket as TicketIcon, Wrench,
 } from "lucide-react";
-import { Modal } from "@/components/ui/modal";
 import { EmptyState } from "@/components/ui/empty-state";
 import { LadeFehler } from "@/components/mobile/lade-fehler";
-import { NewTicketModal } from "@/components/tickets/new-ticket-modal";
 import { createClient } from "@/lib/supabase/client";
 import { usePermissions } from "@/lib/use-permissions";
 import { formatDate } from "@/lib/format";
 import type { TicketPriority, TicketStatus, TicketType } from "@/types";
 
 type Segment = "offen" | "erledigt";
-type NeuTyp = Extract<TicketType, "beleg" | "stempel_aenderung">;
 
 /** Felder, die die Handy-Zeile braucht. data bleibt jsonb (Betrag). */
 interface TicketZeile {
@@ -102,7 +98,6 @@ function lsSegment(): Segment {
 export function TicketsMobil() {
   const supabase = createClient();
   const { can, meId } = usePermissions();
-  const canCreate = can("tickets:create");
   const canManage = can("tickets:manage");
 
   const [segment, setSegment] = useState<Segment>(lsSegment);
@@ -222,26 +217,6 @@ export function TicketsMobil() {
     };
   }, [laden]);
 
-  /* --- Neu --------------------------------------------------------------- */
-
-  const [wahlOffen, setWahlOffen] = useState(false);
-  // Zwei Schritte: erst mit open=false mounten (NewTicketModal setzt Typ +
-  // Default-Titel nur im !open-Effekt), im naechsten Tick oeffnen. Nicht
-  // gemountet, solange niemand «Neu» tippt — keine Formular-Queries umsonst.
-  const [neuTyp, setNeuTyp] = useState<NeuTyp | null>(null);
-  const [neuOffen, setNeuOffen] = useState(false);
-
-  function waehle(typ: NeuTyp) {
-    setWahlOffen(false);
-    setNeuTyp(typ);
-    setTimeout(() => setNeuOffen(true), 0);
-  }
-
-  function neuSchliessen() {
-    setNeuOffen(false);
-    setNeuTyp(null);
-  }
-
   /* --- Rendering -------------------------------------------------------- */
 
   const zeigeQueue = canManage && segment === "offen";
@@ -249,17 +224,6 @@ export function TicketsMobil() {
 
   return (
     <div className="page-enter space-y-4">
-      {canCreate && (
-        <button
-          type="button"
-          onClick={() => setWahlOffen(true)}
-          className="flex h-[40px] w-full items-center gap-3 rounded-xl border border-border bg-card px-4 text-left text-base text-muted-foreground active:bg-foreground/10"
-        >
-          <Plus className="h-5 w-5 shrink-0" />
-          Beleg oder Stempel-Änderung melden …
-        </button>
-      )}
-
       {/* Segmente */}
       <div className="grid grid-cols-2 gap-2">
         <button
@@ -299,7 +263,7 @@ export function TicketsMobil() {
           title={segment === "offen" ? "Keine offenen Tickets" : "Keine erledigten Tickets"}
           description={
             segment === "offen"
-              ? (canCreate ? "Beleg oder Stempel-Änderung über die Zeile oben melden." : undefined)
+              ? "Neues meldest du unter Mein Konto › Melden."
               : "Sobald Tickets abgeschlossen sind, stehen sie hier."
           }
         />
@@ -324,37 +288,6 @@ export function TicketsMobil() {
         </div>
       )}
 
-      {/* Schritt 1: Was melden? */}
-      <Modal open={wahlOffen} onClose={() => setWahlOffen(false)} title="Was möchtest du melden?" sheet size="md" bodyClassName="p-[10px]">
-        <div className="grid grid-cols-2 gap-3">
-          <Kachel
-            icon={Camera}
-            titel="Beleg"
-            text="Quittung fotografieren"
-            farbe={TYP.beleg.farbe}
-            onClick={() => waehle("beleg")}
-          />
-          <Kachel
-            icon={Clock}
-            titel="Stempel-Änderung"
-            text="Zeit falsch oder vergessen"
-            farbe={TYP.stempel_aenderung.farbe}
-            onClick={() => waehle("stempel_aenderung")}
-          />
-        </div>
-      </Modal>
-
-      {/* Schritt 2: bestehendes Formular als Sheet. */}
-      {neuTyp && (
-        <NewTicketModal
-          key={neuTyp}
-          open={neuOffen}
-          sheet
-          initialType={neuTyp}
-          onClose={neuSchliessen}
-          onCreated={() => { void laden(); }}
-        />
-      )}
     </div>
   );
 }
@@ -415,29 +348,5 @@ function Zeile({ ticket: t }: { ticket: TicketZeile }) {
         {status.wort}
       </span>
     </Link>
-  );
-}
-
-function Kachel({
-  icon: Icon, titel, text, farbe, onClick,
-}: {
-  icon: React.ComponentType<{ className?: string }>; titel: string; text: string; farbe: string; onClick: () => void;
-}) {
-  // min-h statt h: bricht der Titel bei 390 px am Bindestrich um
-  // («Stempel-Änderung»), waechst die Kachel mit statt zu ueberlaufen.
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="flex min-h-[92px] flex-col items-start justify-between gap-2 rounded-xl border border-border bg-background p-3 text-left active:bg-foreground/10"
-    >
-      <span className={`flex h-[32px] w-[32px] items-center justify-center rounded-xl ${farbe}`}>
-        <Icon className="h-5 w-5" />
-      </span>
-      <span>
-        <span className="block text-base font-semibold leading-tight">{titel}</span>
-        <span className="block text-[13px] text-muted-foreground">{text}</span>
-      </span>
-    </button>
   );
 }

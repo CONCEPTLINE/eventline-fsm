@@ -53,11 +53,11 @@ function SucheMock() {
           </span>
           <span className="min-w-0">
             <span className="flex items-center gap-1 text-[11px] font-semibold leading-tight">
-              Abwesenheit melden
+              Abwesenheit eintragen
               <Zap className="h-2.5 w-2.5 text-muted-foreground/50" />
             </span>
             <span className="block text-[9.5px] text-muted-foreground leading-tight">
-              Krankheit, Ferien, Militär — Abwesenheit beantragen
+              Ferien, frei, Kompensation, Militär — Formular öffnen
             </span>
           </span>
         </div>

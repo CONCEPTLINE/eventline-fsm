@@ -12,7 +12,6 @@
  * Counts («me» = effektiver User aus /api/me, bei «Ansicht als» der
  * simulierte — gleiche Definition wie /todos und Dashboard-Karte):
  *   - todos        — eigene offene Todos (assigned_to = me, status=offen)
- *   - tickets_own  — eigene offene Tickets (created_by = me, status=offen)
  *   - tickets_open — alle offenen Tickets ausser Belege (admin-action queue)
  *   - abrechnung   — abgeschlossene Auftraege ohne Rechnung + offene Belege
  *   - auftraege_action — Partner-Anfragen warten auf Freigabe
@@ -33,10 +32,8 @@
  *
  * Aggregation per Nav-Item siehe getBadgeForHref unten —
  *   /todos      → todos
- *   /tickets    → max(tickets_own, tickets_open) ist falsch, beide haben
- *                 unterschiedliche Bedeutung → wir nehmen tickets_open fuer
- *                 tickets:manage (Admin passt via hasPermission durch),
- *                 sonst tickets_own
+ *   /tickets    → tickets_open (die Seite sehen nur tickets:manage; eigene
+ *                 Meldungen stehen unter Meine Anfragen)
  *   /antraege   → antraege
  *   /abrechnung → abrechnung
  *   /auftraege  → auftraege_action
@@ -58,7 +55,6 @@ async function ladeRechteAntraege(): Promise<number> {
 
 export interface NavCounts {
   todos: number;
-  tickets_own: number;
   tickets_open: number;
   abrechnung: number;
   auftraege_action: number;
@@ -67,7 +63,6 @@ export interface NavCounts {
 
 const EMPTY: NavCounts = {
   todos: 0,
-  tickets_own: 0,
   tickets_open: 0,
   abrechnung: 0,
   auftraege_action: 0,
@@ -131,11 +126,6 @@ export function NavCountsProvider({ children, userId, isAdmin, canManageTickets,
         .eq("assigned_to", userId)
         .eq("status", "offen")
         .is("deleted_at", null),
-      supabase
-        .from("tickets")
-        .select("id", { count: "exact", head: true })
-        .eq("created_by", userId)
-        .eq("status", "offen"),
       // Abrechnung = unbilledJobs + unfiledBelege (admin-only Queue).
       // Filter MUSS identisch zur /abrechnung-Page sein — sonst zeigt
       // der Nav-Badge eine Zahl die nicht zur Liste passt. Inkl.
@@ -199,11 +189,10 @@ export function NavCountsProvider({ children, userId, isAdmin, canManageTickets,
 
     setCounts({
       todos: results[0]?.count ?? 0,
-      tickets_own: results[1]?.count ?? 0,
-      tickets_open: results[5]?.count ?? 0,
-      abrechnung: (results[2]?.count ?? 0) + (results[3]?.count ?? 0),
-      auftraege_action: results[4]?.count ?? 0,
-      antraege: (results[6]?.count ?? 0) + (results[7]?.count ?? 0) + rechte,
+      tickets_open: results[4]?.count ?? 0,
+      abrechnung: (results[1]?.count ?? 0) + (results[2]?.count ?? 0),
+      auftraege_action: results[3]?.count ?? 0,
+      antraege: (results[5]?.count ?? 0) + (results[6]?.count ?? 0) + rechte,
     });
   }, [supabase, userId, isAdmin, canManageTickets, canApproveFerien]);
 
@@ -287,6 +276,6 @@ export function getBadgeForHref(href: string, counts: NavCounts, canManageTicket
   if (href.startsWith("/abrechnung")) return counts.abrechnung;
   if (href.startsWith("/auftraege")) return counts.auftraege_action;
   if (href.startsWith("/antraege")) return counts.antraege;
-  if (href.startsWith("/tickets")) return canManageTickets ? counts.tickets_open : counts.tickets_own;
+  if (href.startsWith("/tickets")) return canManageTickets ? counts.tickets_open : 0;
   return 0;
 }

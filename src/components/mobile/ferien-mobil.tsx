@@ -55,7 +55,7 @@ const TYP_LABEL: Record<TimeOffType, string> = {
 };
 
 const STATUS_WORT: Record<TimeOffStatus, { text: string; klasse: string }> = {
-  beantragt: { text: "Beantragt", klasse: "text-amber-700 dark:text-amber-300" },
+  beantragt: { text: "Wartet auf OK", klasse: "text-amber-700 dark:text-amber-300" },
   genehmigt: { text: "Genehmigt", klasse: "text-green-700 dark:text-green-300" },
   abgelehnt: { text: "Abgelehnt", klasse: "text-red-600 dark:text-red-400" },
 };
@@ -181,7 +181,7 @@ export function FerienMobil() {
     } catch (e) {
       if (aktuellRef.current !== key || nr !== ladeNr.current) return;
       const text = e instanceof Error ? e.message : "Netzwerk-Fehler";
-      toast.error(`Anträge konnten nicht geladen werden: ${text}`);
+      toast.error(`Abwesenheiten konnten nicht geladen werden: ${text}`);
       setFehler({ schluessel: key, text });
       setMehrLaedt(false);
     }
@@ -233,7 +233,7 @@ export function FerienMobil() {
   async function zurueckziehen(a: Antrag) {
     if (!meId) return;
     const ok = await confirm({
-      title: "Antrag zurückziehen?",
+      title: "Abwesenheit zurückziehen?",
       message: `${TYP_LABEL[a.type]} vom ${zeitraum(a.start_date, a.end_date)} wird gelöscht.`,
       confirmLabel: "Zurückziehen",
       variant: "red",
@@ -252,10 +252,10 @@ export function FerienMobil() {
       return;
     }
     if (!count) {
-      TOAST.error("Antrag konnte nicht zurückgezogen werden");
+      TOAST.error("Konnte nicht zurückgezogen werden — schon entschieden?");
       return;
     }
-    toast.success("Antrag zurückgezogen");
+    toast.success("Zurückgezogen");
     setOffen(null);
     window.dispatchEvent(new Event("time_off:invalidate"));
     void load();
@@ -330,7 +330,7 @@ export function FerienMobil() {
         <EmptyState icon={Palmtree} title="Profil konnte nicht geladen werden" />
       ) : fehlerAktiv ? (
         <LadeFehler
-          titel="Anträge konnten nicht geladen werden"
+          titel="Abwesenheiten konnten nicht geladen werden"
           fehler={fehlerAktiv.text}
           laedt={neuLaedt}
           onRetry={() => { void erneutLaden(); }}
@@ -338,8 +338,8 @@ export function FerienMobil() {
       ) : leer ? (
         <EmptyState
           icon={Palmtree}
-          title={istTeam ? "Keine Anträge im Team" : "Noch keine Anträge"}
-          description={istTeam ? undefined : "Nutze die Zeile oben, um Ferien, Krankheit, Kompensation oder Frei-Tage zu beantragen."}
+          title={istTeam ? "Keine Abwesenheiten im Team" : "Noch keine Abwesenheiten"}
+          description={istTeam ? undefined : "Nutze die Zeile oben für Ferien, Frei, Kompensation oder Militär. Krank meldest du unter Mein Konto › Krank."}
         />
       ) : daten && (
         <div className="space-y-5">
@@ -349,7 +349,7 @@ export function FerienMobil() {
             </Abschnitt>
           )}
           {daten.liste.length > 0 && (
-            <Abschnitt titel={istTeam ? "Entschieden" : "Meine Anträge"}>
+            <Abschnitt titel={istTeam ? "Entschieden" : "Meine Abwesenheiten"}>
               {daten.liste.map((a) => <AntragZeile key={a.id} a={a} zeigePerson={istTeam} onTap={() => detailAufmachen(a)} />)}
             </Abschnitt>
           )}

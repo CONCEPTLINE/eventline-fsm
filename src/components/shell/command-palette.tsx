@@ -61,7 +61,7 @@ const TYPE_META: Record<
   // die Unterzeile nennt den Typ, das Icon unterscheidet sie.
   standort:       { label: "Locations",        icon: MapPin,        order: 5 },
   raum:           { label: "Locations",        icon: Home,          order: 5 },
-  ticket:         { label: "Tickets & Belege", icon: TicketCheck,   order: 7 },
+  ticket:         { label: "Tickets & Meldungen", icon: TicketCheck,   order: 7 },
   todo:           { label: "Todos",            icon: CheckSquare,   order: 8 },
   mitarbeiter:    { label: "Mitarbeiter",      icon: User,          order: 9 },
 };
@@ -288,7 +288,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
               value={q}
               onChange={(e) => setQ(e.target.value)}
               onKeyDown={handleKey}
-              placeholder={isMobile ? "Suchen …" : "Suchen — Aufträge, Kunden, Leads, Locations, Tickets & Belege…"}
+              placeholder={isMobile ? "Suchen …" : "Suchen — Aufträge, Kunden, Leads, Locations, Tickets…"}
               // max-md:dark:bg-transparent! — `.dark input` (globals.css) setzt
               // den Hintergrund per !important; am Handy sonst grauer Kasten.
               className="flex-1 bg-transparent max-md:dark:bg-transparent! border-0 outline-none h-[36px] md:h-auto text-base md:text-sm placeholder:text-muted-foreground/60"

@@ -308,7 +308,7 @@ const SEITEN_INFO: Record<string, { sublabel: string; keywords: string[] }> = {
  *  gleichem Ziel existiert (Vertrieb → «Akquise», Stempelzeiten …),
  *  erscheinen nicht doppelt — die Aktion uebernimmt dann Seiten-Name,
  *  Bereich und Suchbegriffe, damit die Seite unter ihrem Sidebar-Namen
- *  auffindbar bleibt (z. B. «Belege» → Ticket erstellen → /tickets). */
+ *  auffindbar bleibt (z. B. «Belege» → Beleg erfassen → /anfragen). */
 export function paletteEintraege(permissions: string[], role: string): PaletteAction[] {
   const isAdmin = role === "admin";
   const gruppen = sichtbareNavGruppen(permissions, role);

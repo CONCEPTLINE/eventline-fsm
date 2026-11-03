@@ -160,7 +160,7 @@ export function FerienView() {
             .lt("end_date", pastCutoffISO()),
     ]);
     if (error) {
-      TOAST.supabaseError(error, "Anträge konnten nicht geladen werden");
+      TOAST.supabaseError(error, "Abwesenheiten konnten nicht geladen werden");
       setLoading(false);
       return;
     }
@@ -219,7 +219,7 @@ export function FerienView() {
         .lt("end_date", pastCutoffISO())
         .order("start_date", { ascending: true });
       if (error) {
-        TOAST.supabaseError(error, "Vergangene Anträge konnten nicht geladen werden");
+        TOAST.supabaseError(error, "Vergangene Abwesenheiten konnten nicht geladen werden");
         setPastLoading(false);
         return;
       }
@@ -276,7 +276,7 @@ export function FerienView() {
 
   async function deleteEntry(entry: TimeOffWithUser) {
     const ok = await confirm({
-      title: "Antrag zurückziehen?",
+      title: "Abwesenheit zurückziehen?",
       message: `${TYPE_META[entry.type].label} vom ${formatDateRange(entry.start_date, entry.end_date)} wird gelöscht.`,
       confirmLabel: "Zurückziehen",
       variant: "red",
@@ -298,10 +298,10 @@ export function FerienView() {
       return;
     }
     if (!count) {
-      TOAST.error("Antrag konnte nicht zurückgezogen werden");
+      TOAST.error("Konnte nicht zurückgezogen werden — schon entschieden?");
       return;
     }
-    toast.success("Antrag zurückgezogen");
+    toast.success("Zurückgezogen");
     window.dispatchEvent(new Event("time_off:invalidate"));
     load();
     loadStats();
@@ -354,8 +354,8 @@ export function FerienView() {
             <h1 className="text-2xl font-bold tracking-tight">Abwesenheit</h1>
             <p className="text-sm text-muted-foreground mt-1">
               {canApprove
-                ? "Eigene Anträge einreichen, Team-Anträge genehmigen oder ablehnen."
-                : "Ferien, Krankheit, Kompensation oder Frei-Tage beantragen."}
+                ? "Eigene Abwesenheiten melden, die des Teams freigeben oder ablehnen."
+                : "Ferien, Frei, Kompensation oder Militär melden. Krank meldest du unter Mein Konto › Krank."}
             </p>
           </div>
         </div>
@@ -420,11 +420,11 @@ export function FerienView() {
         <div className="rounded-xl border border-dashed border-border bg-card">
           <EmptyState
             icon={Calendar}
-            title={effectiveView === "meine" ? "Noch keine Anträge" : "Keine Anträge gefunden"}
+            title={effectiveView === "meine" ? "Noch keine Abwesenheiten" : "Keine Abwesenheiten gefunden"}
             description={
               effectiveView === "meine"
-                ? "Leg deinen ersten Antrag an — Ferien, Krankheit, Kompensation oder Frei-Tag."
-                : "In der Team-Ansicht sind aktuell keine Anträge sichtbar."
+                ? "Melde Ferien, Frei, Kompensation oder Militär über «Abwesenheit melden»."
+                : "In der Team-Ansicht sind aktuell keine Abwesenheiten sichtbar."
             }
           />
         </div>

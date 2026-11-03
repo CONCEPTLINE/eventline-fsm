@@ -32,6 +32,22 @@ export interface AppUpdate {
 
 export const APP_UPDATES: AppUpdate[] = [
   {
+    id: "mein-konto-startpunkt-krank-melden",
+    date: "2026-11-03",
+    audience: "alle",
+    title: "Mein Konto ist neu dein Startpunkt: melden, Anfragen, Stunden, Lohn",
+    summary:
+      "In Mein Konto meldest du mit einem Tipp Beleg, Krank, Abwesenheit oder «Stempel korrigieren», siehst deine Anfragen mit Stand, deine Stunden des Monats und neue Lohnabrechnungen. Krank melden geht ohne Antrag.",
+    anleitung: [
+      "Am Handy ist der fünfte Knopf unten jetzt «Mein Konto» (statt «Mehr»). Dort stehen oben vier Kacheln: Beleg, Krank, Abwesenheit und Stempel korrigieren, darunter «Anderes melden (IT, Material)». Am Computer findest du dieselben unter «+ Melden» in der Seitenleiste unter dem Stempel-Knopf.",
+      "Beleg: am Handy öffnet sich direkt die Kamera («Aus Galerie/PDF» geht auch). Betrag, Datum und Geschäft werden gelesen — kurz prüfen. Der Auftrag deines heutigen bzw. letzten Einsatzes ist vorgewählt; wähle bei «Abgesprochen mit», mit wem du den Kauf abgesprochen hast (ohne Auftrag ist das Pflicht).",
+      "Krank melden: «Ab» (heute oder ein Datum) und «Voraussichtlich bis» (weiss nicht, morgen oder ein Datum) wählen, senden — fertig, ohne Antrag. Die Projektleitung deiner betroffenen Einsätze wird informiert. Ruf bitte zusätzlich sofort deine vorgesetzte Person an. Ab dem 3. Tag brauchst du ein Arztzeugnis: unter «Meine Anfragen» bei der Krankmeldung «Arztzeugnis nachreichen» (Foto oder PDF). Bist du wieder gesund, tippe dort «Wieder gesund».",
+      "«Meine Anfragen» zeigt alles, was du gemeldet hast — Belege, Stempel-Korrekturen, Abwesenheiten, Krankmeldungen — mit Stand (wird geprüft, wartet auf OK, bewilligt, erledigt). Offene Abwesenheiten kannst du dort zurückziehen.",
+      "Stempelzeiten korrigierst du wie bisher auch direkt in der Zeile («Korrigieren»). Die Seite «Anträge» für Vorgesetzte heisst neu «Freigaben».",
+    ],
+    keywords: ["mein konto", "melden", "beleg", "krank", "krankmeldung", "arztzeugnis", "abwesenheit", "stempel korrigieren", "meine anfragen", "anfragen", "freigaben", "mehr"],
+  },
+  {
     id: "lohn-neu-eine-seite",
     date: "2026-11-03",
     audience: "alle",

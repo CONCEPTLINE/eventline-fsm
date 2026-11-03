@@ -11,16 +11,15 @@
  * einer bestimmten Seite. Der User soll's spaetestens nach 2 Sekunden
  * sehen egal wo er nach dem Login landet.
  *
- * FEATURES-Liste ist im Sync mit den echten Tabs unter /mein-konto:
- * Profil / Sicherheit / Benachrichtigungen / Kalender. "Dokumente" ist
- * unter HR › Lohn (/lohn) umgezogen (2026-09) und "Admin-Space" wurde entfernt
- * — beide sind bewusst NICHT mehr in dieser Liste.
+ * FEATURES-Liste ist im Sync mit /mein-konto: oben der Startpunkt (Melden,
+ * Meine Anfragen, Stunden, Lohn), darunter die Tabs Profil / Sicherheit /
+ * Benachrichtigungen / Kalender.
  */
 
 import Link from "next/link";
 import { Modal } from "@/components/ui/modal";
 import { useMeinKontoOnboarding } from "@/lib/use-mein-konto-onboarding";
-import { User, Bell, Fingerprint, Calendar, ArrowRight, Check } from "lucide-react";
+import { User, Bell, Fingerprint, Calendar, ArrowRight, Check, Send } from "lucide-react";
 
 interface Feature {
   icon: React.ReactNode;
@@ -29,6 +28,7 @@ interface Feature {
 }
 
 const FEATURES: Feature[] = [
+  { icon: <Send className="h-4 w-4" />,        label: "Melden & Anfragen",  desc: "Beleg, Krank, Abwesenheit, Stempel korrigieren — mit Stand" },
   { icon: <User className="h-4 w-4" />,        label: "Profil",             desc: "Name, Email, Datenexport (DSG)" },
   { icon: <Fingerprint className="h-4 w-4" />, label: "Sicherheit",         desc: "Passkeys / Face-ID / Passwort" },
   { icon: <Bell className="h-4 w-4" />,        label: "Benachrichtigungen", desc: "Push, Sound, Ruhezeiten" },

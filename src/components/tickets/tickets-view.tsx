@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * HR › Tickets & Belege (Liste, drastisch vereinfacht 2026-09-06).
+ * HR › Tickets (Bearbeitungs-Liste fuer tickets:manage, vereinfacht 2026-09-06).
  *
  * Eine einzige Liste — RLS regelt was wer sieht (Mitarbeiter: eigene,
  * Manager: eigene + zu genehmigen + Rest via Rolle). Belege anderer Leute
@@ -119,7 +119,7 @@ type StempelData = {
 };
 
 /**
- * Tickets-View — die Desktop-Seite /tickets (HR › Tickets & Belege) samt
+ * Tickets-View — die Desktop-Seite  /tickets (HR › Tickets) samt
  * Kopf (h1). Am Handy rendert die Seite stattdessen tickets-mobil.
  */
 export function TicketsView() {
@@ -178,10 +178,9 @@ export function TicketsView() {
 
     // Belege bearbeitet die Buchhaltung auf /abrechnung — fremde Belege
     // bleiben aus dieser Liste raus, damit IT/Material/Stempel-Tickets nicht
-    // mit Buchhaltungs-Krempel gemischt sind. Die EIGENEN Belege sieht der
-    // Einreicher hier (Status/Ablage nachverfolgen; passt so auch zum
-    // tickets_own-Zaehler, der eigene offene Belege mitzaehlt). Solange die
-    // User-ID noch laedt: ohne Belege — die Query feuert danach neu.
+    // mit Buchhaltungs-Krempel gemischt sind. Die EIGENEN Belege bleiben
+    // drin (Status/Ablage nachverfolgen). Solange die User-ID noch laedt:
+    // ohne Belege — die Query feuert danach neu.
     q = currentUserId
       ? q.or(`type.neq.beleg,created_by.eq.${currentUserId}`)
       : q.neq("type", "beleg");
@@ -326,7 +325,7 @@ export function TicketsView() {
         <div className="flex items-center gap-3 min-w-0">
           {showBackButton && <BackButton fallbackHref="/dashboard" />}
           <div className="min-w-0">
-            <h1 className="text-2xl font-bold tracking-tight">Tickets & Belege</h1>
+            <h1 className="text-2xl font-bold tracking-tight">Tickets</h1>
             <p className="text-sm text-muted-foreground mt-1">
               IT-Probleme · Stempel-Änderungen · Material · eigene Belege
             </p>

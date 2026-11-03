@@ -96,9 +96,12 @@ export default function TicketDetailPage() {
   // Ticket-Titel. Am Desktop bleibt es wie bisher beim BackButton (keine
   // zusaetzliche Pfadzeile ueber dem Inhalt).
   const isMobile = useIsMobile();
+  // Zurueck zur Liste, aus der man kommt: Bearbeitende → Tickets,
+  // meldende Person → Meine Anfragen.
+  const listeHref = can("tickets:manage") ? "/tickets" : "/anfragen";
   useBreadcrumbs(
     isMobile
-      ? [{ label: "Tickets & Belege", href: "/tickets" }, { label: ticket?.title ?? "Ticket" }]
+      ? [{ label: can("tickets:manage") ? "Tickets" : "Meine Anfragen", href: listeHref }, { label: ticket?.title ?? "Meldung" }]
       : [],
   );
 
@@ -433,7 +436,7 @@ export default function TicketDetailPage() {
   return (
     <div className="space-y-6 max-w-5xl mx-auto">
       <div className="flex items-center gap-4">
-        <BackButton fallbackHref="/tickets" />
+        <BackButton fallbackHref={listeHref} />
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="font-mono text-xs font-semibold text-muted-foreground">{formatTicketNumber(ticket.ticket_number)}</span>
