@@ -422,7 +422,7 @@ function buildDayBuckets(entries: NormalizedEntry[]): Map<string, DayBucket> {
  * Stempelzeiten-View — die Desktop-Seite /stempelzeiten (HR › Stempelzeiten)
  * samt Kopf (h1). Am Handy rendert die Seite stattdessen stempelzeiten-mobil.
  */
-export function StempelzeitenView() {
+export function StempelzeitenView({ tabs }: { tabs?: React.ReactNode } = {}) {
   const supabase = createClient();
   const { active } = useStempel();
   const searchParams = useSearchParams();
@@ -1247,6 +1247,9 @@ export function StempelzeitenView() {
           )}
         </div>
       </div>
+
+      {/* Reiter «Meine | Prüfen» (nur mit Lohnrecht, von der Seite gesetzt) */}
+      {tabs}
 
       {/* Aktiver Eintrag-Banner */}
       {active && (

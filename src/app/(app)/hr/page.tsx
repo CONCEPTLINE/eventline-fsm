@@ -10,8 +10,9 @@
  *   ?tab=stempelzeiten                    → /stempelzeiten
  *   ?tab=tickets                          → /tickets
  *   ?tab=ferien | abwesenheit             → /ferien
- *   ?tab=loehne | lohn                    → /lohn  (lohn=… → ansicht=…,
- *                                                   subtab=… → tab=…)
+ *   ?tab=loehne | lohn                    → /lohn  (lohn=team → Stempelzeiten
+ *                                                   › Prüfen, die Team-Ansicht
+ *                                                   gibt es nicht mehr)
  *   ?tab=mitarbeiter                      → /einstellungen?tab=mitarbeiter
  *                                            (nur Admins)
  *   ohne/unbekannt oder Ziel nicht erlaubt → erste erlaubte Seite in der
@@ -26,12 +27,7 @@
 import { useEffect, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { usePermissions } from "@/lib/use-permissions";
-import {
-  LOHN_PARAM_ANSICHT,
-  LOHN_PARAM_BEREICH,
-  resolveLohnAnsicht,
-  resolveLohnBereich,
-} from "@/components/hr/lohn-bereiche";
+import { resolveLohnAnsicht, teamLinkZiel } from "@/components/hr/lohn-bereiche";
 import Loading from "./loading";
 
 type Ziel = "/antraege" | "/stempelzeiten" | "/tickets" | "/ferien" | "/lohn" | "/einstellungen";
@@ -79,7 +75,14 @@ export default function HrWeiterleitung() {
       "/einstellungen": role === "admin",
     };
 
-    const gewuenscht = TAB_ZIEL[searchParams.get("tab") ?? ""];
+    // Alte Links auf Lohn › Team → Stempelzeiten › Prüfen (wer die Seite sehen darf).
+    const tab = searchParams.get("tab");
+    if ((tab === "loehne" || tab === "lohn") && resolveLohnAnsicht(searchParams.get("lohn")) === "team" && can("lohn:manage") && erlaubt["/stempelzeiten"]) {
+      router.replace(teamLinkZiel(searchParams.get("monat")));
+      return;
+    }
+
+    const gewuenscht = TAB_ZIEL[tab ?? ""];
     const ziel: Ziel =
       gewuenscht && erlaubt[gewuenscht]
         ? gewuenscht
@@ -87,12 +90,6 @@ export default function HrWeiterleitung() {
 
     const params = new URLSearchParams(searchParams.toString());
     for (const p of HUB_PARAMS) params.delete(p);
-    if (ziel === "/lohn") {
-      const ansicht = resolveLohnAnsicht(searchParams.get("lohn"));
-      const bereich = resolveLohnBereich(searchParams.get("subtab"));
-      if (ansicht) params.set(LOHN_PARAM_ANSICHT, ansicht);
-      if (bereich) params.set(LOHN_PARAM_BEREICH, bereich);
-    }
     if (ziel === "/einstellungen") params.set("tab", "mitarbeiter");
     const qs = params.toString();
     router.replace(qs ? `${ziel}?${qs}` : ziel);

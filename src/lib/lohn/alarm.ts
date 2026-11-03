@@ -48,9 +48,9 @@ export interface LaufAlarm {
 
 export const ALARM_MAX_ZEILEN = 20;
 
-/** Link auf Lohn › Monatsstunden (optional mit Monat YYYY-MM). */
+/** Link auf Stempelzeiten › Prüfen (früher Lohn › Monatsstunden; optional mit Monat YYYY-MM). */
 export function monatsstundenLink(monat?: string | null): string {
-  return `/lohn?ansicht=team&tab=monatsstunden${monat && /^\d{4}-\d{2}$/.test(monat) ? `&monat=${monat}` : ""}`;
+  return `/stempelzeiten?ansicht=pruefen${monat && /^\d{4}-\d{2}$/.test(monat) ? `&monat=${monat}` : ""}`;
 }
 
 /** Beträge aus Freitexten entfernen («CHF 1'234.50» → «CHF …»). Fehlertexte
@@ -114,7 +114,7 @@ export function alarmMailHtml(a: LaufAlarm, zeitpunkt: Date = new Date()): strin
         ${zeilen.map((z) => `<p style="margin:0 0 6px">${escapeHtml(z)}</p>`).join("")}
       </div>
       <p style="margin:0 0 16px;color:#374151">Blockiert heisst: offener oder ungeprüfter sehr langer Stempel — erst prüfen bzw. Ende setzen, dann wird die Abrechnung erstellt.</p>
-      ${link ? `<p style="margin:0 0 16px"><a href="${link}" style="display:inline-block;padding:10px 18px;background:#111827;color:#ffffff;text-decoration:none;border-radius:8px;font-weight:600">Lohn › Monatsstunden öffnen</a></p>` : ""}
+      ${link ? `<p style="margin:0 0 16px"><a href="${link}" style="display:inline-block;padding:10px 18px;background:#111827;color:#ffffff;text-decoration:none;border-radius:8px;font-weight:600">Stempelzeiten › Prüfen öffnen</a></p>` : ""}
       <p style="margin:0;color:#9ca3af;font-size:12px">Diese Mail kommt bei jedem Lohnlauf mit Fehlern oder blockierten Monaten. Beträge stehen nur in der App.</p>
     `,
   });

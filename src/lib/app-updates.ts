@@ -32,6 +32,20 @@ export interface AppUpdate {
 
 export const APP_UPDATES: AppUpdate[] = [
   {
+    id: "lohn-neu-eine-seite",
+    date: "2026-11-03",
+    audience: "alle",
+    title: "Lohn neu: Abrechnungen, Lohnausweis und Stunden auf einer Seite",
+    summary:
+      "Unter HR › Lohn siehst du je Monat deine gestempelten Stunden und deine Lohnabrechnung als PDF, darunter den Lohnausweis des Jahres und wie du die Lohndokumente erhältst (digital oder auf Papier).",
+    anleitung: [
+      "Die Liste zeigt je Monat des gewählten Jahres die gestempelten Stunden (ein Klick führt zu den Stempelzeiten) und die Lohnabrechnung: «PDF öffnen», sobald sie da ist. «NEU» steht bei Abrechnungen, die du noch nicht geöffnet hast; der laufende Monat «läuft noch».",
+      "Oben rechts wählst du das Jahr. Unter der Liste steht der Lohnausweis des Jahres für die Steuererklärung — er kommt jeweils bis Ende Januar.",
+      "Ganz unten steht, wie du deine Lohndokumente erhältst (digital oder auf Papier). Mit «ändern» wechselst du jederzeit.",
+    ],
+    keywords: ["lohn", "lohnabrechnung", "lohnausweis", "pdf", "stunden", "zustellung", "papier", "digital", "steuererklärung"],
+  },
+  {
     id: "auftrag-technik-positionen-3d",
     date: "2026-10-25",
     audience: "alle",

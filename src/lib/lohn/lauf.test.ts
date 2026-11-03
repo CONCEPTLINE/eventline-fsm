@@ -249,10 +249,10 @@ describe("Phase 4: Alarm-Mail ohne Beträge", () => {
     const html = alarmMailHtml(alarm, new Date("2026-11-05T07:00:00Z"));
     expect(html).not.toMatch(/\d'\d{3}\.\d{2}|CHF\s*-?\d/);
     expect(html).toContain("Ben &lt;b&gt;Wyss&lt;/b&gt;");
-    expect(html).toContain("tab=monatsstunden&amp;monat=2026-06");
+    expect(html).toContain("ansicht=pruefen&amp;monat=2026-06");
     expect(alarmBetreff(alarm)).toBe("EVENTLINE Lohnlauf: 1 Fehler, 1 blockiert (Stempel prüfen)");
     expect(alarmBetreff({ laufId: null, art: "start", text: "x" })).toBe("EVENTLINE Lohnlauf: konnte nicht starten");
-    expect(monatsstundenLink()).toBe("/lohn?ansicht=team&tab=monatsstunden");
+    expect(monatsstundenLink()).toBe("/stempelzeiten?ansicht=pruefen");
   });
 });
 
