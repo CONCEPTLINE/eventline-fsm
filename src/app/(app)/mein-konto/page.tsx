@@ -27,20 +27,21 @@
 
 import { useState, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { User, Bell, Calendar, Fingerprint } from "lucide-react";
+import { User, Bell, Calendar, Fingerprint, MessageCircleQuestion } from "lucide-react";
 import { useMeinKontoOnboarding } from "@/lib/use-mein-konto-onboarding";
 import { MeinKontoCard } from "@/components/einstellungen/mein-konto-card";
 import { BenachrichtigungenTab } from "@/components/einstellungen/benachrichtigungen-tab";
 import { IcalFeedBlock } from "@/components/kalender/ical-feed-block";
 import { PasskeysCard } from "@/components/einstellungen/passkeys-card";
+import { MeineAntworten } from "@/components/fragen/meine-antworten";
 import { TabsNav } from "@/components/ui/tabs-nav";
 import { MeinKontoMobil } from "@/components/mobile/mein-konto-mobil";
 import { useIsMobile } from "@/lib/use-is-mobile";
 import { KontoHub } from "@/components/mein-konto/konto-hub";
 import Loading from "./loading";
 
-type Tab = "profil" | "sicherheit" | "benachrichtigungen" | "kalender";
-const ALL_TABS: Tab[] = ["profil", "sicherheit", "benachrichtigungen", "kalender"];
+type Tab = "profil" | "sicherheit" | "benachrichtigungen" | "kalender" | "antworten";
+const ALL_TABS: Tab[] = ["profil", "sicherheit", "benachrichtigungen", "kalender", "antworten"];
 
 export default function MeinKontoPage() {
   const router = useRouter();
@@ -90,6 +91,7 @@ export default function MeinKontoPage() {
     { key: "sicherheit",         label: "Sicherheit",         icon: <Fingerprint className="h-4 w-4" /> },
     { key: "benachrichtigungen", label: "Benachrichtigungen", icon: <Bell className="h-4 w-4" /> },
     { key: "kalender",           label: "Kalender",           icon: <Calendar className="h-4 w-4" /> },
+    { key: "antworten",          label: "Meine Antworten",    icon: <MessageCircleQuestion className="h-4 w-4" /> },
   ];
 
   // Waehrend der Legacy-Redirect laeuft (?tab=dokumente → /lohn)
@@ -137,6 +139,12 @@ export default function MeinKontoPage() {
       {tab === "benachrichtigungen" && (
         <div className="max-w-3xl mx-auto">
           <BenachrichtigungenTab />
+        </div>
+      )}
+
+      {tab === "antworten" && (
+        <div className="max-w-3xl mx-auto">
+          <MeineAntworten />
         </div>
       )}
 

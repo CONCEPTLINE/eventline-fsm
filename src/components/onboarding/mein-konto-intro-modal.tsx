@@ -19,6 +19,7 @@
 import Link from "next/link";
 import { Modal } from "@/components/ui/modal";
 import { useMeinKontoOnboarding } from "@/lib/use-mein-konto-onboarding";
+import { useFragen } from "@/lib/fragen/use-fragen";
 import { User, Bell, Fingerprint, Calendar, ArrowRight, Check, Send } from "lucide-react";
 
 interface Feature {
@@ -37,7 +38,11 @@ const FEATURES: Feature[] = [
 
 export function MeinKontoIntroModal() {
   const { introDismissedAt, ready, dismissIntro } = useMeinKontoOnboarding();
-  const open = ready && !introDismissedAt;
+  // Pflicht-Fragen («Fragen an dich») haben Vorrang: erst wenn deren Stand
+  // feststeht und nichts offen ist, kommt diese Vorstellung.
+  const fragen = useFragen();
+  const fragenErledigt = (fragen.status === "bereit" && (fragen.ansichtAls || fragen.offen.length === 0)) || fragen.status === "fehler";
+  const open = ready && !introDismissedAt && fragenErledigt;
 
   function close() { void dismissIntro(); }
 

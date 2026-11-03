@@ -11,7 +11,8 @@
 // firma "eventline", aal "aal2", geraet true; je Route weitere (src/lib/flow/regeln.ts):
 // jahr/monat/von/bis und profile (Stempel/Vergleich) bzw. erp_profil_id, art, jahr/monat,
 // fassung, sha256 (Ablage: Lohnabrechnung oder Lohnausweis) bzw. saetze (Personal-Sätze, 377)
-// bzw. jahr/monat/profile (Abwesenheiten, 380) bzw. time_off_id (Arztzeugnis, 380).
+// bzw. jahr/monat/profile (Abwesenheiten, 380) bzw. time_off_id (Arztzeugnis, 380)
+// bzw. profil_ids, fragen (Antworten, Migration 381).
 //
 // Rein (kein Next.js, keine Datenbank) — Unit-Tests: ausweis.test.ts.
 
@@ -27,6 +28,7 @@ export const FLOW_AUDS = [
   "erp-saetze",
   "erp-abwesenheiten",
   "erp-arztzeugnis",
+  "erp-antworten",
 ] as const;
 export type FlowAud = (typeof FLOW_AUDS)[number];
 
@@ -36,6 +38,12 @@ export const AUSWEIS_GUELTIG_S = 60;
 export const UHR_SPIEL_S = 5;
 /** Grösster akzeptierter Ausweis (50 Profil-IDs ≈ 2 KB). */
 export const AUSWEIS_MAX_ZEICHEN = 16_000;
+/** Antworten (erp-antworten): bis 500 Profil-IDs ≈ 27 KB als JWS. */
+export const ANTWORTEN_AUSWEIS_MAX_ZEICHEN = 40_000;
+
+/** Grösster akzeptierter Ausweis je Empfänger (aud). */
+export const ausweisMaxZeichen = (aud: FlowAud): number =>
+  aud === "erp-antworten" ? ANTWORTEN_AUSWEIS_MAX_ZEICHEN : AUSWEIS_MAX_ZEICHEN;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const B64URL = /^[A-Za-z0-9_-]+$/;
@@ -104,7 +112,7 @@ export function pruefeFlowAusweis(
   schluessel: KeyObject,
   jetztSek: number = Math.floor(Date.now() / 1000),
 ): AusweisErgebnis {
-  if (typeof token !== "string" || token.length === 0 || token.length > AUSWEIS_MAX_ZEICHEN) return { ok: false, grund: "format" };
+  if (typeof token !== "string" || token.length === 0 || token.length > ausweisMaxZeichen(erwartet)) return { ok: false, grund: "format" };
   const teile = token.split(".");
   if (teile.length !== 3 || !teile.every((t) => B64URL.test(t))) return { ok: false, grund: "format" };
   const [h, p, s] = teile;

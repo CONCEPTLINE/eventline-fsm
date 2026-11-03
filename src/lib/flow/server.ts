@@ -5,7 +5,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { ladeWartung } from "@/lib/wartung-server";
 import { logError } from "@/lib/log";
 import { bearbeiteFlowAufruf, type Ausgefuehrt, type FlowAntwort, type FlowLog, type FlowSpeicher } from "./aufruf";
-import { AUSWEIS_MAX_ZEICHEN, ladeFlowSchluessel, type FlowAud, type FlowAusweis } from "./ausweis";
+import { ausweisMaxZeichen, ladeFlowSchluessel, type FlowAud, type FlowAusweis } from "./ausweis";
 import type { RegelFehler } from "./regeln";
 
 // Server-Teil der Trust-flow-Schnittstelle: Datenbank (flow_abrufe, Migration
@@ -118,7 +118,7 @@ export async function flowAbruf<T>(
 ): Promise<NextResponse> {
   const aus = flowNichtEingerichtet();
   if (aus) return aus;
-  const text = await leseKoerper(request, AUSWEIS_MAX_ZEICHEN);
+  const text = await leseKoerper(request, ausweisMaxZeichen(aud));
   if (text === null) return zuGross();
   return flowAufruf({ aud, token: text.trim(), pruefe, ausfuehren });
 }

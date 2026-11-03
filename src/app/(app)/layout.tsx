@@ -34,6 +34,7 @@ import { NavCountsProvider } from "@/lib/use-nav-counts";
 import { MeinKontoOnboardingProvider } from "@/lib/use-mein-konto-onboarding";
 import { MeinKontoIntroModal } from "@/components/onboarding/mein-konto-intro-modal";
 import { MeldenHost } from "@/components/melden/melden-host";
+import { FragenPflichtModal } from "@/components/fragen/fragen-pflicht-modal";
 import { CommandPalette, CMDK_OPEN_EVENT } from "@/components/shell/command-palette";
 import { BreadcrumbsProvider, Breadcrumbs } from "@/components/shell/breadcrumbs";
 import { readImpersonationCookie } from "@/lib/impersonation";
@@ -564,6 +565,9 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
       {/* «Melden»-Formulare (Beleg, Abwesenheit, Stempel, Anderes) — oeffnen
           auf oeffneMelden() von jeder Stelle (lib/melden.ts). */}
       <MeldenHost />
+      {/* «Fragen an dich»: Pflicht-Fragen (nicht schliessbar), solange eine
+          geltende Frage offen ist — src/lib/fragen/katalog.ts. */}
+      <FragenPflichtModal profileId={ready && profile ? profile.id : null} />
       <CommandPalette open={cmdkOpen} onClose={() => setCmdkOpen(false)} />
       {/* sonner nutzt unter 600 px nur mobileOffset (offset greift dort
           nicht): Toast unter den mobilen Kopf (46 px + Safe-Area + 8 px Luft).

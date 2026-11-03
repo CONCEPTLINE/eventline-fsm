@@ -24,7 +24,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useTheme } from "next-themes";
 import {
-  Bell, BookOpen, Calendar, ChevronRight, ClipboardList, Download, Fingerprint, Loader2, LogOut, MapPin, Moon,
+  Bell, BookOpen, Calendar, ChevronRight, ClipboardList, Download, Fingerprint, Loader2, LogOut, MapPin, MessageCircleQuestion, Moon,
   Search, Sun, Ticket, User, type LucideIcon,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
@@ -43,14 +43,16 @@ import { hasPermission, isPathAllowed } from "@/lib/permissions";
 import { useNavCounts } from "@/lib/use-nav-counts";
 import { useStempel } from "@/lib/use-stempel";
 import { useWartendeRapporte } from "@/components/mobile/uebertragungen-sheet";
+import { MeineAntworten } from "@/components/fragen/meine-antworten";
 
-type Tab = "profil" | "sicherheit" | "benachrichtigungen" | "kalender";
+type Tab = "profil" | "sicherheit" | "benachrichtigungen" | "kalender" | "antworten";
 
 const TABS: Record<Tab, { label: string; icon: LucideIcon }> = {
   profil: { label: "Meine Daten", icon: User },
   sicherheit: { label: "Anmeldung & Face ID", icon: Fingerprint },
   benachrichtigungen: { label: "Benachrichtigungen", icon: Bell },
   kalender: { label: "Kalender-Abo", icon: Calendar },
+  antworten: { label: "Meine Antworten", icon: MessageCircleQuestion },
 };
 const TAB_KEYS = Object.keys(TABS) as Tab[];
 
@@ -109,6 +111,7 @@ export function MeinKontoMobil() {
         {tab === "profil" && <MeinKontoCard />}
         {tab === "sicherheit" && <PasskeysCard />}
         {tab === "benachrichtigungen" && <BenachrichtigungenTab />}
+        {tab === "antworten" && <MeineAntworten />}
         {tab === "kalender" && (
           <IcalFeedBlock
             title="Mein iCal-Feed"

@@ -16,6 +16,7 @@ import {
   ARZTZEUGNIS_LINK_S,
   ARZTZEUGNIS_MAX_BYTES,
   arztzeugnisPfadPasst,
+  antwortenAusZeilen,
   interneProfile,
   mimeAusEndung,
   monatText,
@@ -27,6 +28,7 @@ import {
   type AbwesenheitZeile,
   type ArztzeugnisDaten,
   type AblageAnfrage,
+  type AntwortenAnfrage,
   type MomentaufnahmeRoh,
   type MonatsAnfrage,
   type Satz,
@@ -413,4 +415,28 @@ export async function arztzeugnisAntwort(admin: SupabaseClient, a: { timeOffId: 
       gueltig_bis: gueltigBis,
     },
   };
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/flow/antworten («Fragen an dich», Migration 376)
+// ---------------------------------------------------------------------------
+type AntwortZeileDb = { id: string; profile_id: string; frage_schluessel: string; antwort: string; text_version: string; beantwortet_at: string };
+
+/** Je angefragter Person und Frage die neueste gültige Antwort (Vertrag: regeln.ts antwortenAusZeilen). */
+export async function antwortenAntwort(admin: SupabaseClient, a: AntwortenAnfrage): Promise<Ausgefuehrt> {
+  const zeilen: AntwortZeileDb[] = [];
+  for (const teil of inStuecken(a.profilIds)) {
+    zeilen.push(...(await ladeAlleSeiten<AntwortZeileDb>(
+      (von, bis) => admin
+        .from("mitarbeiter_antworten")
+        .select("id, profile_id, frage_schluessel, antwort, text_version, beantwortet_at")
+        .in("profile_id", teil)
+        .in("frage_schluessel", a.fragen)
+        .order("id")
+        .range(von, bis),
+      "Antworten",
+    )));
+  }
+  const body = antwortenAusZeilen(a, zeilen);
+  return { ok: true, body, geliefert: new Set(body.antworten.map((x) => x.profil_id)).size };
 }

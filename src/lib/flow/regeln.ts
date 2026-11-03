@@ -7,6 +7,7 @@
 //   pruefeAbwesenheitenClaims  Abwesenheiten (380): jahr, monat, profile (≤ 50)
 //   pruefeArztzeugnisClaims    Arztzeugnis (380): time_off_id
 //   abwesenheitFuerFlow, arztzeugnisPfadPasst
+//   pruefeAntwortenClaims  Antworten («Fragen an dich», 381): profil_ids (1–500), fragen (Katalog)
 //   lokalerMonat, monateDesStempels, zaehleUeberlappungen, nachtraeglichGeaendert
 //   vergleichAusMomentaufnahme
 //   pruefeAblageKoerper, dekodierePdf
@@ -17,10 +18,15 @@
 import { createHash } from "node:crypto";
 import { lokalesDatum, stempelBereich } from "@/lib/lohn/kern";
 import { istIntern } from "@/lib/roles";
+import { FRAGEN, istFrageSchluessel, neuesteAntworten, type Frage } from "@/lib/fragen/katalog";
 import { istUuid } from "./ausweis";
 
 /** Höchstens so viele ERP-Profil-IDs je Ausweis. */
 export const PROFILE_MAX = 50;
+/** Antworten: höchstens so viele ERP-Profil-IDs je Ausweis. */
+export const ANTWORTEN_PROFILE_MAX = 500;
+/** Antworten: höchstens so viele Fragen je Ausweis. */
+export const ANTWORTEN_FRAGEN_MAX = 20;
 /** Vergleich (Parallelmonat) nur bis und mit diesem Lohnmonat — danach rechnet das ERP nicht mehr. */
 export const VERGLEICH_BIS = { jahr: 2026, monat: 11 } as const;
 /** Lohnabrechnungen aus Bexio ab diesem Lohnmonat (und nur nach lohn_einstellungen.lauf_bis). */
@@ -58,6 +64,7 @@ export function protokollKennzahlen(c: Record<string, unknown>): { jahr: number 
     ? (c.jahr as number) : null;
   const angefragt = Array.isArray(c.profile) ? c.profile.length
     : Array.isArray(c.saetze) ? c.saetze.length
+    : Array.isArray(c.profil_ids) ? c.profil_ids.length
     : istUuid(c.erp_profil_id) || istUuid(c.time_off_id) ? 1 : null;
   return { jahr: jm?.jahr ?? nurJahr, monat: jm?.monat ?? null, angefragt };
 }
@@ -158,6 +165,84 @@ export function pruefeAblageClaims(c: Record<string, unknown>): { ok: true; anfr
     ok: true,
     anfrage: { profileId: (c.erp_profil_id as string).toLowerCase(), art, jahr, monat, fassung: c.fassung as number, sha256: c.sha256 },
   };
+}
+
+export interface AntwortenAnfrage {
+  /** ERP-Profil-IDs (klein geschrieben, eindeutig, in Anfrage-Reihenfolge). */
+  profilIds: string[];
+  /** Frage-Schlüssel aus dem Katalog (eindeutig, in Anfrage-Reihenfolge). */
+  fragen: string[];
+}
+
+/**
+ * Claims der Antworten-Route (POST /api/flow/antworten, aud «erp-antworten»):
+ * `profil_ids` 1–500 UUIDs ohne Doppel, `fragen` 1–20 Schlüssel aus dem
+ * Katalog (src/lib/fragen/katalog.ts) ohne Doppel. Unbekannte Frage = 400 —
+ * laut statt still (Trust flow fragt sonst ewig nach etwas, das es nicht gibt).
+ */
+export function pruefeAntwortenClaims(
+  c: Record<string, unknown>,
+  katalog: readonly { schluessel: string }[] = FRAGEN,
+): { ok: true; anfrage: AntwortenAnfrage } | RegelFehler {
+  const ids = c.profil_ids;
+  if (!Array.isArray(ids) || ids.length === 0) return fehler("profile_fehlen", "profil_ids (ERP-Profil-IDs) fehlt oder ist leer.");
+  if (ids.length > ANTWORTEN_PROFILE_MAX) return fehler("profile_zu_viele", `Höchstens ${ANTWORTEN_PROFILE_MAX} Profil-IDs je Abruf.`);
+  if (!ids.every(istUuid)) return fehler("profile_ungueltig", "profil_ids enthält eine ungültige ID.");
+  const profilIds = (ids as string[]).map((x) => x.toLowerCase());
+  if (new Set(profilIds).size !== profilIds.length) return fehler("profile_doppelt", "profil_ids enthält eine ID doppelt.");
+
+  const fr = c.fragen;
+  if (!Array.isArray(fr) || fr.length === 0) return fehler("fragen_fehlen", "fragen fehlt oder ist leer.");
+  if (fr.length > ANTWORTEN_FRAGEN_MAX) return fehler("fragen_zu_viele", `Höchstens ${ANTWORTEN_FRAGEN_MAX} Fragen je Abruf.`);
+  if (!fr.every(istFrageSchluessel)) return fehler("frage_ungueltig", "fragen enthält einen ungültigen Schlüssel.");
+  const fragen = fr as string[];
+  if (new Set(fragen).size !== fragen.length) return fehler("fragen_doppelt", "fragen enthält einen Schlüssel doppelt.");
+  const unbekannt = fragen.find((f) => !katalog.some((k) => k.schluessel === f));
+  if (unbekannt) return fehler("frage_unbekannt", `Frage «${unbekannt}» gibt es im ERP nicht.`);
+
+  return { ok: true, anfrage: { profilIds, fragen } };
+}
+
+export interface AntwortAusgabe {
+  profil_id: string;
+  frage: string;
+  antwort: string;
+  text_version: string;
+  /** ISO-UTC. */
+  beantwortet_am: string;
+}
+
+/**
+ * Vertrag der Antwort: je angefragter Person und Frage nur die NEUESTE gültige
+ * Antwort (Option des Katalogs); fehlende fallen weg. Reihenfolge: Personen wie
+ * angefragt, je Person Fragen wie angefragt. Keine Namen, keine anderen Felder.
+ */
+export function antwortenAusZeilen(
+  anfrage: AntwortenAnfrage,
+  zeilen: { profile_id: string; frage_schluessel: string; antwort: string; text_version: string; beantwortet_at: string }[],
+  katalog: readonly Frage[] = FRAGEN,
+): { v: 1; antworten: AntwortAusgabe[] } {
+  const ids = new Set(anfrage.profilIds);
+  const fr = new Set(anfrage.fragen);
+  const neueste = neuesteAntworten(
+    zeilen.filter((z) => ids.has(z.profile_id.toLowerCase()) && fr.has(z.frage_schluessel)),
+    katalog,
+  );
+  const antworten: AntwortAusgabe[] = [];
+  for (const id of anfrage.profilIds) {
+    for (const f of anfrage.fragen) {
+      const z = neueste.get(`${id}|${f}`);
+      if (!z) continue;
+      antworten.push({
+        profil_id: id,
+        frage: f,
+        antwort: z.antwort,
+        text_version: z.text_version,
+        beantwortet_am: new Date(z.beantwortet_at).toISOString(),
+      });
+    }
+  }
+  return { v: 1, antworten };
 }
 
 // ---------------------------------------------------------------------------

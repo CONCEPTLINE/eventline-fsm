@@ -89,3 +89,13 @@ describe("Ausweis prüfen", () => {
     expect(pruefe("x".repeat(20_000))).toEqual({ ok: false, grund: "format" });
   });
 });
+
+describe("Grösse je Empfänger", () => {
+  it("grosser Ausweis (500 Profil-IDs) nur für erp-antworten, nicht für Stempel", () => {
+    const ids = Array.from({ length: 500 }, (_, i) => `b0000000-0000-4000-8000-${String(i).padStart(12, "0")}`);
+    const gross = (aud: "erp-antworten" | "erp-stempel") => signiere(k.privat, claims(aud, JETZT, { profile: undefined, profil_ids: ids }));
+    expect(gross("erp-antworten").length).toBeGreaterThan(16_000);
+    expect(pruefe(gross("erp-antworten"), "erp-antworten").ok).toBe(true);
+    expect(pruefe(gross("erp-stempel"), "erp-stempel")).toEqual({ ok: false, grund: "format" });
+  });
+});
