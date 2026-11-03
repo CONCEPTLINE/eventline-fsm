@@ -23,13 +23,16 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import Link from "next/link";
 import { toast } from "sonner";
 import {
   Palmtree, TicketCheck, Clock, Wrench, Receipt, Package,
   Check, X, Loader2, Inbox, Users, ChevronRight, CircleDot,
 } from "lucide-react";
 import { EmptyState } from "@/components/ui/empty-state";
+import { Modal } from "@/components/ui/modal";
+import { Skeleton } from "@/components/ui/skeleton";
+import { TextLink } from "@/components/ui/text-knopf";
+import { PersonAvatar } from "@/components/ui/person-avatar";
 import { PrefetchLink } from "@/components/shell/prefetch-link";
 import { usePermissions } from "@/lib/use-permissions";
 import { ZRH_TZ } from "@/lib/swiss-time";
@@ -90,10 +93,22 @@ const TIME_OFF_LABEL: Record<string, string> = {
 };
 
 const TICKET_TYPE_META: Record<string, { label: string; icon: React.ComponentType<{ className?: string }>; className: string }> = {
-  it:       { label: "IT",       icon: Wrench,  className: "text-purple-700 dark:text-purple-300 bg-purple-100 dark:bg-purple-500/20" },
-  beleg:    { label: "Beleg",    icon: Receipt, className: "text-amber-700  dark:text-amber-300  bg-amber-100  dark:bg-amber-500/20" },
-  material: { label: "Material", icon: Package, className: "text-red-700    dark:text-red-300    bg-red-100    dark:bg-red-500/20" },
+  it:       { label: "IT",       icon: Wrench,  className: "text-purple-600 dark:text-purple-400 bg-purple-50 dark:bg-purple-500/15" },
+  beleg:    { label: "Beleg",    icon: Receipt, className: "text-amber-600  dark:text-amber-400  bg-amber-50  dark:bg-amber-500/15" },
+  material: { label: "Material", icon: Package, className: "text-red-600    dark:text-red-400    bg-red-50    dark:bg-red-500/15" },
 };
+
+/** Farbe der Abwesenheits-Kachel je Art — wie die Typen auf /ferien. */
+const TIME_OFF_FARBE: Record<string, string> = {
+  ferien: "bg-blue-100 text-blue-700 dark:bg-blue-500/25 dark:text-blue-200",
+  krank: "bg-red-100 text-red-700 dark:bg-red-500/25 dark:text-red-200",
+  kompensation: "bg-amber-100 text-amber-700 dark:bg-amber-500/25 dark:text-amber-200",
+  frei: "bg-gray-100 text-gray-700 dark:bg-gray-500/25 dark:text-gray-200",
+  militaer: "bg-green-100 text-green-700 dark:bg-green-500/25 dark:text-green-200",
+};
+
+/** Kleine Pille in der Zeile — Form wie die Status-Pillen auf /tickets. */
+const PILLE = "inline-flex shrink-0 items-center gap-1 rounded-full px-1.5 py-0 text-[10px] font-medium";
 
 function fmtDate(iso: string): string {
   const [y, m, d] = iso.split("-").map(Number);
@@ -144,6 +159,9 @@ export function AntraegeView() {
   const [data, setData] = useState<AnfragenPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [decidingId, setDecidingId] = useState<string | null>(null);
+  // Ablehnen fragt die Begruendung im Modal ab (wie /ferien), nicht per Browser-Dialog.
+  const [ablehnen, setAblehnen] = useState<FerienAntrag | null>(null);
+  const [begruendung, setBegruendung] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -164,18 +182,29 @@ export function AntraegeView() {
 
   useEffect(() => { load(); }, [load]);
 
-  async function decideFerien(id: string, decision: "genehmigen" | "ablehnen") {
+  function onDecide(f: FerienAntrag, decision: "genehmigen" | "ablehnen") {
+    if (decision === "genehmigen") {
+      void decideFerien(f.id, "genehmigen");
+      return;
+    }
+    setBegruendung("");
+    setAblehnen(f);
+  }
+
+  async function ablehnenSenden() {
+    if (!ablehnen) return;
+    const note = begruendung.trim();
+    if (!note) {
+      toast.error("Ablehnung ohne Begründung nicht möglich");
+      return;
+    }
+    const ok = await decideFerien(ablehnen.id, "ablehnen", note);
+    if (ok) setAblehnen(null);
+  }
+
+  async function decideFerien(id: string, decision: "genehmigen" | "ablehnen", note = ""): Promise<boolean> {
     setDecidingId(id + ":" + decision);
     try {
-      let note = "";
-      if (decision === "ablehnen") {
-        const input = typeof window !== "undefined" ? window.prompt("Begründung für Ablehnung (Pflicht):", "") : "";
-        if (!input || !input.trim()) {
-          toast.error("Ablehnung ohne Begründung nicht möglich");
-          return;
-        }
-        note = input.trim();
-      }
       const res = await fetch(`/api/time-off/${id}/decide`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -184,15 +213,17 @@ export function AntraegeView() {
       const j = (await res.json()) as { success: boolean; error?: string };
       if (!j.success) {
         toast.error(j.error || "Entscheidung konnte nicht gespeichert werden");
-        return;
+        return false;
       }
       toast.success(decision === "genehmigen" ? "Antrag genehmigt" : "Antrag abgelehnt");
       // Roter Punkt bei «Anträge» (use-nav-counts) im eigenen Tab sofort
       // nachziehen, ohne auf das Realtime-Event (Migration 316) zu warten.
       window.dispatchEvent(new Event("time_off:invalidate"));
       await load();
+      return true;
     } catch {
       toast.error("Netzwerkfehler");
+      return false;
     } finally {
       setDecidingId(null);
     }
@@ -200,9 +231,15 @@ export function AntraegeView() {
 
   if (loading && !data) {
     return (
-      <div className="flex items-center justify-center py-16 text-muted-foreground text-sm">
-        <Loader2 className="h-4 w-4 animate-spin mr-2" />
-        Anträge werden geladen…
+      <div className="space-y-6">
+        {[3, 5].map((n, b) => (
+          <div key={b} className="space-y-2">
+            <Skeleton className="h-4 w-32" />
+            <div className="space-y-px overflow-hidden rounded-xl border border-border bg-card">
+              {Array.from({ length: n }).map((_, i) => <Skeleton key={i} className="h-[52px] rounded-none" />)}
+            </div>
+          </div>
+        ))}
       </div>
     );
   }
@@ -236,21 +273,17 @@ export function AntraegeView() {
   return (
     <div className="space-y-6">
       {/* ----------------- Aktions-Liste ----------------- */}
-      <div className="rounded-xl border border-border bg-card overflow-hidden">
-        <div className="flex items-center justify-between px-4 pt-3 pb-2">
-          <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">
-            Zu bearbeiten {totalActions > 0 && <span className="ml-1 opacity-70">({totalActions})</span>}
-          </p>
-        </div>
-
+      <Abschnitt titel="Zu bearbeiten" anzahl={totalActions} amber>
         {totalActions === 0 ? (
-          <EmptyState
-            icon={Inbox}
-            title="Keine offenen Anträge"
-            description="Alle Abwesenheiten und Tickets sind bearbeitet."
-          />
+          <div className="rounded-xl border border-dashed border-border bg-card">
+            <EmptyState
+              icon={Inbox}
+              title="Keine offenen Anträge"
+              description="Alle Abwesenheiten und Tickets sind bearbeitet."
+            />
+          </div>
         ) : (
-          <div className="divide-y divide-border/60">
+          <div className="rounded-xl border border-border bg-card overflow-hidden divide-y divide-border/60">
             {shownActions.map((a) => {
               if (a.kind === "ferien") {
                 const f = ferienById.get(a.id)!;
@@ -259,7 +292,7 @@ export function AntraegeView() {
                     key={"f-" + f.id}
                     f={f}
                     decidingId={decidingId}
-                    onDecide={decideFerien}
+                    onDecide={(d) => onDecide(f, d)}
                   />
                 );
               }
@@ -270,55 +303,119 @@ export function AntraegeView() {
               const t = ticketById.get(a.id)!;
               return <TicketZeile key={"t-" + t.id} t={t} />;
             })}
-          </div>
-        )}
-
-        {(zeigeAlleFerien || zeigeAlleTickets) && (
-          <div className="border-t border-border/60 px-4 py-2 flex flex-wrap items-center gap-3">
-            {zeigeAlleFerien && (
-              <PrefetchLink
-                href="/ferien"
-                className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
-              >
-                Alle {data.ferienAntraege.length} Abwesenheits-Anträge
-              </PrefetchLink>
-            )}
-            {zeigeAlleTickets && ticketsHref && (
-              <PrefetchLink
-                href={ticketsHref}
-                className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
-              >
-                Alle Tickets ({ticketAnzahl})
-              </PrefetchLink>
+            {(zeigeAlleFerien || zeigeAlleTickets) && (
+              <div className="px-4 py-2 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+                {zeigeAlleFerien && (
+                  <TextLink href="/ferien">Alle {data.ferienAntraege.length} Abwesenheits-Anträge</TextLink>
+                )}
+                {zeigeAlleTickets && ticketsHref && (
+                  <TextLink href={ticketsHref}>Alle Tickets ({ticketAnzahl})</TextLink>
+                )}
+              </div>
             )}
           </div>
         )}
-      </div>
+      </Abschnitt>
 
       {/* ----------------- Mitarbeiter-Ampel ----------------- */}
-      <div className="rounded-xl border border-border bg-card overflow-hidden">
-        <div className="flex items-center justify-between px-4 pt-3 pb-2">
-          <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold flex items-center gap-1.5">
-            <Users className="h-3 w-3" />
-            Mitarbeiter {data.mitarbeiter.length > 0 && <span className="opacity-70">({data.mitarbeiter.length})</span>}
-          </p>
-        </div>
-
+      <Abschnitt titel="Mitarbeiter" anzahl={data.mitarbeiter.length}>
         {data.mitarbeiter.length === 0 ? (
-          <EmptyState
-            icon={Users}
-            title="Keine aktiven Techniker"
-            description="Sobald Techniker aktiviert sind, erscheinen sie hier."
-          />
+          <div className="rounded-xl border border-dashed border-border bg-card">
+            <EmptyState
+              icon={Users}
+              title="Keine aktiven Techniker"
+              description="Sobald Techniker aktiviert sind, erscheinen sie hier."
+            />
+          </div>
         ) : (
-          <div className="divide-y divide-border/60">
+          <div className="rounded-xl border border-border bg-card overflow-hidden divide-y divide-border/60">
             {data.mitarbeiter.map((m) => (
               <MitarbeiterZeile key={m.id} m={m} href={stempelzeitenHref} />
             ))}
           </div>
         )}
-      </div>
+      </Abschnitt>
+
+      {/* Ablehnen — Begruendung ist Pflicht (Modal wie auf /ferien). */}
+      <Modal
+        open={ablehnen !== null}
+        onClose={() => setAblehnen(null)}
+        title="Antrag ablehnen"
+        icon={<X className="h-5 w-5 text-red-500" />}
+        size="md"
+      >
+        {ablehnen && (
+          <div className="space-y-3">
+            <div className="text-sm rounded-lg bg-muted/40 px-3 py-2">
+              <p className="font-medium">{ablehnen.user_name}</p>
+              <p className="text-muted-foreground text-xs mt-0.5">
+                {TIME_OFF_LABEL[ablehnen.type] ?? ablehnen.type} · {fmtDurRange(ablehnen.start_date, ablehnen.end_date)}
+              </p>
+              {ablehnen.note && <p className="text-xs mt-1 italic">&bdquo;{ablehnen.note}&ldquo;</p>}
+            </div>
+            <div>
+              <label htmlFor="freigaben-begruendung" className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                Begründung (Pflicht)
+              </label>
+              <textarea
+                id="freigaben-begruendung"
+                value={begruendung}
+                onChange={(e) => setBegruendung(e.target.value.slice(0, 500))}
+                placeholder="Warum wird abgelehnt?"
+                rows={3}
+                maxLength={500}
+                autoFocus
+                className="mt-1.5 w-full px-3 py-2 text-sm rounded-lg border border-input bg-background resize-none focus:outline-none focus:ring-2 focus:ring-ring/40"
+              />
+            </div>
+            <div className="flex gap-2 pt-2">
+              <button type="button" onClick={() => setAblehnen(null)} className="kasten kasten-muted flex-1">
+                Abbrechen
+              </button>
+              <button
+                type="button"
+                onClick={() => void ablehnenSenden()}
+                disabled={decidingId !== null || !begruendung.trim()}
+                className="kasten kasten-red flex-1"
+              >
+                {decidingId === ablehnen.id + ":ablehnen"
+                  ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  : <X className="h-3.5 w-3.5" />}
+                Ablehnen
+              </button>
+            </div>
+          </div>
+        )}
+      </Modal>
     </div>
+  );
+}
+
+/** Abschnitt-Kopf ausserhalb der Karte — gleiche Form wie die Sektionen auf /ferien. */
+function Abschnitt({ titel, anzahl, amber = false, children }: {
+  titel: string;
+  anzahl: number;
+  amber?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="space-y-2">
+      <div className="flex items-baseline gap-2 px-1">
+        <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{titel}</h2>
+        {anzahl > 0 && (
+          <span
+            className={`text-[10px] font-semibold tabular-nums px-1.5 py-0.5 rounded-full ${
+              amber
+                ? "bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-200"
+                : "text-muted-foreground/70 bg-muted/60"
+            }`}
+          >
+            {anzahl}
+          </span>
+        )}
+      </div>
+      {children}
+    </section>
   );
 }
 
@@ -331,7 +428,7 @@ function FerienZeile({
 }: {
   f: FerienAntrag;
   decidingId: string | null;
-  onDecide: (id: string, decision: "genehmigen" | "ablehnen") => void;
+  onDecide: (decision: "genehmigen" | "ablehnen") => void;
 }) {
   const genPending = decidingId === f.id + ":genehmigen";
   const abPending = decidingId === f.id + ":ablehnen";
@@ -339,7 +436,7 @@ function FerienZeile({
 
   return (
     <div className="row-hover [--row-hover-x:0.5rem] flex flex-wrap items-center gap-3 px-4 py-2.5">
-      <span className="shrink-0 h-6 w-6 rounded-md bg-emerald-100 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 inline-flex items-center justify-center">
+      <span className={`shrink-0 h-7 w-7 rounded-md inline-flex items-center justify-center ${TIME_OFF_FARBE[f.type] ?? TIME_OFF_FARBE.frei}`}>
         <Palmtree className="h-3.5 w-3.5" />
       </span>
       <div className="min-w-0 flex-1">
@@ -348,28 +445,28 @@ function FerienZeile({
           <span className="text-muted-foreground"> · {TIME_OFF_LABEL[f.type] ?? f.type} · {fmtDurRange(f.start_date, f.end_date)}</span>
         </div>
         {f.note && (
-          <div className="text-xs text-muted-foreground truncate mt-0.5">„{f.note}"</div>
+          <div className="text-[11px] italic text-muted-foreground truncate mt-0.5">„{f.note}"</div>
         )}
       </div>
       <div className="flex items-center gap-1.5 shrink-0">
         <button
           type="button"
-          onClick={() => onDecide(f.id, "genehmigen")}
+          onClick={() => onDecide("genehmigen")}
           disabled={anyPending}
-          className="kasten kasten-green text-xs px-2 py-1 inline-flex items-center gap-1 disabled:opacity-60"
+          className="kasten kasten-green"
           data-tooltip="Antrag genehmigen"
         >
-          {genPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
+          {genPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
           Genehmigen
         </button>
         <button
           type="button"
-          onClick={() => onDecide(f.id, "ablehnen")}
+          onClick={() => onDecide("ablehnen")}
           disabled={anyPending}
-          className="kasten kasten-red text-xs px-2 py-1 inline-flex items-center gap-1 disabled:opacity-60"
+          className="kasten kasten-red"
           data-tooltip="Antrag ablehnen (Begründung Pflicht)"
         >
-          {abPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <X className="h-3 w-3" />}
+          {abPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
           Ablehnen
         </button>
       </div>
@@ -379,22 +476,22 @@ function FerienZeile({
 
 function StempelZeile({ s }: { s: StempelAntrag }) {
   return (
-    <Link href={`/tickets/${s.id}`} className="row-hover [--row-hover-x:0.5rem] flex items-center gap-3 px-4 py-2.5">
-      <span className="shrink-0 h-6 w-6 rounded-md bg-green-100 dark:bg-green-500/20 text-green-700 dark:text-green-300 inline-flex items-center justify-center">
+    <PrefetchLink href={`/tickets/${s.id}`} className="row-hover [--row-hover-x:0.5rem] flex items-center gap-3 px-4 py-2.5">
+      <span className="shrink-0 h-7 w-7 rounded-md text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-500/15 inline-flex items-center justify-center">
         <Clock className="h-3.5 w-3.5" />
       </span>
       <div className="min-w-0 flex-1">
         <div className="text-sm truncate">
-          <span className="font-medium">#{s.ticket_number}</span>
+          <span className="font-mono text-[11px] font-semibold text-muted-foreground">#{s.ticket_number}</span>
           <span className="text-muted-foreground"> · {s.user_name} · </span>
-          <span>{s.title}</span>
+          <span className="font-medium">{s.title}</span>
         </div>
-        <div className="text-xs text-muted-foreground mt-0.5">
+        <div className="text-[11px] text-muted-foreground mt-0.5">
           Stempel-Änderung · {fmtDateTime(s.created_at)}
         </div>
       </div>
       <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />
-    </Link>
+    </PrefetchLink>
   );
 }
 
@@ -402,22 +499,22 @@ function TicketZeile({ t }: { t: AndererTicket }) {
   const meta = TICKET_TYPE_META[t.type] ?? { label: t.type, icon: TicketCheck, className: "text-muted-foreground bg-muted" };
   const Icon = meta.icon;
   return (
-    <Link href={`/tickets/${t.id}`} className="row-hover [--row-hover-x:0.5rem] flex items-center gap-3 px-4 py-2.5">
-      <span className={`shrink-0 h-6 w-6 rounded-md inline-flex items-center justify-center ${meta.className}`}>
+    <PrefetchLink href={`/tickets/${t.id}`} className="row-hover [--row-hover-x:0.5rem] flex items-center gap-3 px-4 py-2.5">
+      <span className={`shrink-0 h-7 w-7 rounded-md inline-flex items-center justify-center ${meta.className}`}>
         <Icon className="h-3.5 w-3.5" />
       </span>
       <div className="min-w-0 flex-1">
         <div className="text-sm truncate">
-          <span className="font-medium">#{t.ticket_number}</span>
+          <span className="font-mono text-[11px] font-semibold text-muted-foreground">#{t.ticket_number}</span>
           <span className="text-muted-foreground"> · {t.user_name} · </span>
-          <span>{t.title}</span>
+          <span className="font-medium">{t.title}</span>
         </div>
-        <div className="text-xs text-muted-foreground mt-0.5">
+        <div className="text-[11px] text-muted-foreground mt-0.5">
           {meta.label} · {fmtDateTime(t.created_at)}
         </div>
       </div>
       <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />
-    </Link>
+    </PrefetchLink>
   );
 }
 
@@ -429,24 +526,15 @@ function MitarbeiterZeile({
   m: MitarbeiterAmpel;
   href: string | null;
 }) {
-  const initials = m.full_name
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((s) => s[0]?.toUpperCase() ?? "")
-    .join("");
-
   const inhalt = (
     <>
-      <span className="shrink-0 h-8 w-8 rounded-full bg-muted text-foreground/70 inline-flex items-center justify-center text-xs font-semibold">
-        {initials || "?"}
-      </span>
+      <PersonAvatar name={m.full_name} size="md" tooltip="" />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2 text-sm">
           <span className="font-medium truncate">{m.full_name}</span>
           {m.is_active_stamped && m.active_since_iso && (
             <span
-              className="inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded-md bg-green-100 dark:bg-green-500/25 text-green-700 dark:text-green-300"
+              className={`${PILLE} bg-green-100 text-green-700 dark:bg-green-500/20 dark:text-green-300`}
               data-tooltip={`Eingestempelt seit ${new Date(m.active_since_iso).toLocaleTimeString("de-CH", { timeZone: ZRH_TZ, hour: "2-digit", minute: "2-digit" })}`}
             >
               <CircleDot className="h-2.5 w-2.5" />
@@ -454,12 +542,12 @@ function MitarbeiterZeile({
             </span>
           )}
           {m.current_absence && (
-            <span className="inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded-md bg-amber-100 dark:bg-amber-500/25 text-amber-700 dark:text-amber-300">
+            <span className={`${PILLE} bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300`}>
               {TIME_OFF_LABEL[m.current_absence.type] ?? m.current_absence.type} bis {fmtDateShort(m.current_absence.end_date)}
             </span>
           )}
         </div>
-        <div className="text-xs text-muted-foreground truncate mt-0.5">
+        <div className="text-[11px] text-muted-foreground truncate mt-0.5">
           {m.next_shift ? (
             <>
               Nächst: {fmtDateTime(m.next_shift.start_time)}

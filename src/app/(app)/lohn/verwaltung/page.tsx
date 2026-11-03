@@ -70,7 +70,9 @@ export default function LohnVerwaltungPage() {
       </div>
 
       {!can("lohn:manage") ? (
-        <EmptyState icon={Wallet} title="Kein Zugriff" description="Die Lohnverwaltung ist nur mit dem Lohnrecht sichtbar." />
+        <div className="rounded-xl border border-dashed border-border bg-card">
+          <EmptyState icon={Wallet} title="Kein Zugriff" description="Die Lohnverwaltung ist nur mit dem Lohnrecht sichtbar." />
+        </div>
       ) : (
         <TrustedDeviceGate>
           <div className="space-y-4">

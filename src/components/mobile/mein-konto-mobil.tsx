@@ -6,7 +6,7 @@
  *
  * Ohne ?tab: Hub (KontoHub: Melden, Meine Anfragen, Stempelzeiten,
  * Abwesenheit, Lohn), «Arbeit» (Suchen, Aufträge, Locations, Tickets fuer
- * tickets:manage — frueher im Mehr-Sheet), «Konto» (Avatar 40 px, Name,
+ * tickets:manage — frueher im Mehr-Sheet), «Konto» (Kopfzeile Avatar, Name,
  * Rolle; Zeilen 40 px Meine Daten · Anmeldung & Face ID · Benachrichtigungen
  * · Kalender-Abo · Darstellung · App installieren · Anleitung), «Abmelden»
  * 40 px (mit Hinweis, wenn noch Aktionen auf Netz warten), Fuss
@@ -141,37 +141,39 @@ export function MeinKontoMobil() {
         </div>
       </section>
 
-      {/* Konto */}
-      <h2 className="-mb-2 px-1 text-[12px] font-bold uppercase tracking-wider text-muted-foreground">Konto</h2>
-      <div className="flex items-center gap-4 px-1">
-        <span className="inline-flex h-[40px] w-[40px] shrink-0 items-center justify-center rounded-full bg-muted text-[17px] font-bold text-muted-foreground">
-          {initialen(name)}
-        </span>
-        <div className="min-w-0">
-          <p className="truncate text-[16px] font-semibold leading-tight">{name}</p>
-          <p className="truncate text-[12px] text-muted-foreground">{rolleLabel ?? role}</p>
+      {/* Konto — gleicher Aufbau wie «Arbeit»: Mini-Label, dann die
+          gruppierte Liste; die Person steht als Kopfzeile in der Liste. */}
+      <section className="space-y-2">
+        <h2 className="px-1 text-[12px] font-bold uppercase tracking-wider text-muted-foreground">Konto</h2>
+        <div className="overflow-hidden rounded-xl border border-border bg-card">
+          <div className="flex min-h-[52px] items-center gap-3 px-4 py-2">
+            <span className="inline-flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-full bg-foreground/10 text-[13px] font-bold text-foreground/80 dark:bg-foreground/15">
+              {initialen(name)}
+            </span>
+            <div className="min-w-0">
+              <p className="truncate text-[15px] font-semibold leading-tight">{name}</p>
+              <p className="truncate text-[12px] text-muted-foreground">{rolleLabel ?? role}</p>
+            </div>
+          </div>
+          {/* Zeilen */}
+          {TAB_KEYS.map((k) => (
+            <Zeile key={k} href={`/mein-konto?tab=${k}`} icon={TABS[k].icon} label={TABS[k].label} />
+          ))}
+          <Zeile
+            icon={dunkel ? Moon : Sun}
+            label="Darstellung"
+            wert={dunkel ? "Dunkel" : "Hell"}
+            onClick={() => setTheme(dunkel ? "light" : "dark")}
+          />
+          {installierbar && (
+            <Zeile icon={Download} label="App installieren" onClick={() => setInstallOffen(true)} />
+          )}
+          <Zeile href="/anleitung" icon={BookOpen} label="Anleitung" />
         </div>
-      </div>
-
-      {/* Zeilen */}
-      <div className="overflow-hidden rounded-xl border border-border bg-card">
-        {TAB_KEYS.map((k) => (
-          <Zeile key={k} href={`/mein-konto?tab=${k}`} icon={TABS[k].icon} label={TABS[k].label} />
-        ))}
-        <Zeile
-          icon={dunkel ? Moon : Sun}
-          label="Darstellung"
-          wert={dunkel ? "Dunkel" : "Hell"}
-          onClick={() => setTheme(dunkel ? "light" : "dark")}
-        />
-        {installierbar && (
-          <Zeile icon={Download} label="App installieren" onClick={() => setInstallOffen(true)} />
-        )}
-        <Zeile href="/anleitung" icon={BookOpen} label="Anleitung" />
-      </div>
+      </section>
 
       {wartet > 0 && (
-        <p className="-mb-2 rounded-xl bg-amber-50 px-3 py-2 text-[13px] font-medium text-amber-800 dark:bg-amber-500/15 dark:text-amber-200">
+        <p className="-mb-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[13px] font-medium text-amber-800 dark:bg-amber-500/15 dark:text-amber-200">
           {wartet === 1
             ? "1 Aktion wartet noch auf Netz. Nach dem Abmelden wird sie"
             : `${wartet} Aktionen warten noch auf Netz. Nach dem Abmelden werden sie`} beim nächsten Login von dir gesendet.

@@ -22,6 +22,7 @@ import { Input } from "@/components/ui/input";
 import { ZeitFeld } from "@/components/ui/zeit-feld";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
+import { PersonAvatar } from "@/components/ui/person-avatar";
 import { PrefetchLink } from "@/components/shell/prefetch-link";
 import { formatDate, toLocalIsoString } from "@/lib/format";
 import { localDateIso, localTimeHM } from "@/lib/swiss-time";
@@ -53,8 +54,10 @@ interface Stand {
 }
 
 const MONATE = ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"];
-const GRID = "minmax(0, 1fr) 110px 170px 170px 120px";
+const GRID = "minmax(0, 1fr) 110px 190px 170px 120px";
 const BEGRUENDUNG_MIN = 10;
+/** Pillen wie in Stempelzeiten/Tickets (rounded-full, 10 px). */
+const PILLE = "inline-flex items-center gap-1 px-1.5 py-0 text-[10px] font-semibold rounded-full shrink-0";
 
 type Periode = { jahr: number; monat: number };
 
@@ -124,22 +127,24 @@ export function StempelPruefen() {
   const person = aktuell?.personen.find((p) => p.profile_id === offenFuer) ?? null;
 
   return (
-    <div className="space-y-4">
-      <p className="text-sm text-muted-foreground">Stunden des Teams vor der Lohnabrechnung in Trust flow.</p>
-      <div className="flex flex-wrap items-center gap-3">
-        <PfeilKnopf onClick={() => setPeriode(verschiebe(periode, -1))} label="Vorheriger Monat"><ChevronLeft className="h-4 w-4" /></PfeilKnopf>
-        <strong className="min-w-[130px] text-center text-sm tabular-nums">{MONATE[periode.monat - 1]} {periode.jahr}</strong>
-        <PfeilKnopf onClick={() => setPeriode(verschiebe(periode, 1))} label="Nächster Monat"><ChevronRight className="h-4 w-4" /></PfeilKnopf>
+    <div className="space-y-4 pt-1">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        <div className="flex items-center gap-1.5">
+          <PfeilKnopf onClick={() => setPeriode(verschiebe(periode, -1))} label="Vorheriger Monat"><ChevronLeft className="h-4 w-4" /></PfeilKnopf>
+          <span className="min-w-[130px] text-center text-sm font-semibold tabular-nums">{MONATE[periode.monat - 1]} {periode.jahr}</span>
+          <PfeilKnopf onClick={() => setPeriode(verschiebe(periode, 1))} label="Nächster Monat"><ChevronRight className="h-4 w-4" /></PfeilKnopf>
+        </div>
         {aktuell?.gesperrt && (
-          <span className="inline-flex items-center gap-1.5 px-2 py-1 text-[13px] bg-foreground/[0.06] dark:bg-foreground/[0.12] text-foreground/80">
-            <Lock className="h-3.5 w-3.5" />
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-medium rounded-full bg-muted text-foreground/80 ring-1 ring-border">
+            <Lock className="h-3 w-3" />
             gesperrt seit {tagMonat(aktuell.sperrt_ab)} – Änderungen nur per Antrag
           </span>
         )}
+        <p className="text-sm text-muted-foreground md:ml-auto">Stunden des Teams vor der Lohnabrechnung in Trust flow.</p>
       </div>
 
-      <div className="border border-border bg-card">
-        <div className="grid px-5 py-2.5 text-[11px] uppercase tracking-wider text-muted-foreground border-b border-border" style={{ gridTemplateColumns: GRID }}>
+      <div className="overflow-hidden rounded-xl border border-border bg-card">
+        <div className="grid px-4 py-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground border-b border-border" style={{ gridTemplateColumns: GRID }}>
           <div>Person</div>
           <div>Stunden</div>
           <div>Zu prüfen</div>
@@ -148,8 +153,8 @@ export function StempelPruefen() {
         </div>
         {!aktuell ? (
           Array.from({ length: 5 }).map((_, i) => (
-            <div key={i} className="px-5 py-3.5 border-b border-border last:border-b-0 flex gap-6">
-              <Skeleton className="h-4 w-40" /><Skeleton className="h-4 w-14" /><Skeleton className="h-4 w-24" />
+            <div key={i} className="px-4 py-3 border-b border-border last:border-b-0 flex items-center gap-6">
+              <Skeleton className="h-7 w-7 rounded-full" /><Skeleton className="h-4 w-40" /><Skeleton className="h-4 w-14" /><Skeleton className="h-4 w-24" />
             </div>
           ))
         ) : aktuell.personen.length === 0 ? (
@@ -158,7 +163,7 @@ export function StempelPruefen() {
           aktuell.personen.map((p) => <PersonZeile key={p.profile_id} p={p} onPruefen={() => setOffenFuer(p.profile_id)} />)
         )}
       </div>
-      <p className="text-[13px] text-muted-foreground">Trust flow holt diese Stunden über die Schnittstelle.</p>
+      <p className="px-1 text-xs text-muted-foreground">Trust flow holt diese Stunden über die Schnittstelle.</p>
 
       <PruefDialog
         person={person}
@@ -185,17 +190,34 @@ function langeText(l: Person["lange"]): string {
   return `${l.anzahl} · ohne Begründung`;
 }
 
+/** «ohne Begründung» in Amber (wie der «Lang»-Chip in Stempelzeiten), sonst neutral. */
+function langeOffen(l: Person["lange"]): boolean {
+  return l.anzahl > 0 && l.geprueft < l.anzahl && l.mit_begruendung < l.anzahl;
+}
+
 function PersonZeile({ p, onPruefen }: { p: Person; onPruefen: () => void }) {
   const z = zuPruefenText(p);
   return (
-    <div className={`row-hover grid items-center px-5 py-3 text-sm border-b border-border last:border-b-0 ${p.is_active ? "" : "opacity-60"}`} style={{ gridTemplateColumns: GRID }}>
-      <div className="min-w-0 truncate font-medium">{p.name}</div>
-      <div className="tabular-nums">{p.minuten > 0 ? stunden(p.minuten) : <span className="text-muted-foreground">–</span>}</div>
-      <div className={z.warn ? "font-semibold text-red-700 dark:text-red-300" : "text-muted-foreground inline-flex items-center gap-1"}>
-        {!z.warn && <CheckCircle2 className="h-3.5 w-3.5" />}
-        {z.text}
+    <div className={`row-hover [--row-hover-x:0.5rem] grid items-center px-4 py-2.5 min-h-[54px] text-sm border-b border-border last:border-b-0 ${p.is_active ? "" : "opacity-60"}`} style={{ gridTemplateColumns: GRID }}>
+      <div className="min-w-0 flex items-center gap-2.5">
+        <PersonAvatar name={p.name} size="md" tooltip="" />
+        <span className="min-w-0 truncate font-medium">{p.name}</span>
       </div>
-      <div className={p.lange.anzahl === 0 ? "text-muted-foreground" : ""}>{langeText(p.lange)}</div>
+      <div className="tabular-nums">{p.minuten > 0 ? stunden(p.minuten) : <span className="text-muted-foreground">–</span>}</div>
+      <div className="min-w-0">
+        {z.warn ? (
+          <span className={`${PILLE} bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300`}>
+            <AlertTriangle className="h-2.5 w-2.5" />
+            {z.text}
+          </span>
+        ) : (
+          <span className="text-muted-foreground inline-flex items-center gap-1">
+            <CheckCircle2 className="h-3.5 w-3.5" />
+            {z.text}
+          </span>
+        )}
+      </div>
+      <div className={p.lange.anzahl === 0 ? "text-muted-foreground" : langeOffen(p.lange) ? "text-amber-700 dark:text-amber-300" : ""}>{langeText(p.lange)}</div>
       <div className="flex justify-end">
         {p.probleme.length > 0 ? (
           <button type="button" onClick={onPruefen} className="kasten kasten-blue">Prüfen</button>

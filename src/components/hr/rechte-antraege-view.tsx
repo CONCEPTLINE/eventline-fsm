@@ -263,7 +263,7 @@ export function RechteAntraegeView({ onGeaendert }: { onGeaendert?: () => void }
   return (
     <div className="space-y-6 max-w-3xl">
       <section className="space-y-2">
-        <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Offen</p>
+        <h2 className="px-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Offen</h2>
         {offen.length === 0 ? (
           <EmptyState icon={ShieldCheck} title="Keine offenen Anträge" />
         ) : (
@@ -308,7 +308,7 @@ export function RechteAntraegeView({ onGeaendert }: { onGeaendert?: () => void }
 
       {entschieden.length > 0 && (
         <section className="space-y-2">
-          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Zuletzt entschieden</p>
+          <h2 className="px-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Zuletzt entschieden</h2>
           <Card>
             <CardContent className="p-0 divide-y">
               {entschieden.map((a) => (
@@ -351,7 +351,7 @@ export function RechteAntraegeView({ onGeaendert }: { onGeaendert?: () => void }
           </div>
 
           <section className="space-y-2">
-            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Offen</p>
+            <h2 className="px-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Offen</h2>
             {lohn.offen.length === 0 ? (
               <EmptyState icon={Wallet} title="Keine offenen Lohndaten-Anträge" />
             ) : (
@@ -401,7 +401,7 @@ export function RechteAntraegeView({ onGeaendert }: { onGeaendert?: () => void }
 
           {lohn.entschieden.length > 0 && (
             <section className="space-y-2">
-              <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Zuletzt entschieden</p>
+              <h2 className="px-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Zuletzt entschieden</h2>
               <Card>
                 <CardContent className="p-0 divide-y">
                   {lohn.entschieden.map((a) => (

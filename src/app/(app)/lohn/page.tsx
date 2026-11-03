@@ -15,6 +15,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { ChevronRight, Settings } from "lucide-react";
 import { BackButton } from "@/components/ui/back-button";
 import { MeinLohn } from "@/components/lohn/mein-lohn";
 import { PrefetchLink } from "@/components/shell/prefetch-link";
@@ -40,15 +41,17 @@ export default function LohnPage() {
   const fromDashboard = searchParams.get("from") === "dashboard";
 
   return (
-    <div className="space-y-6 page-enter">
-      <div className="flex items-center gap-3 min-w-0">
-        {fromDashboard && <BackButton fallbackHref="/dashboard" />}
-        <div className="min-w-0">
-          <h1 className="text-2xl font-bold tracking-tight">Lohn</h1>
-          <p className="text-sm text-muted-foreground mt-1">Deine Lohnabrechnungen, Lohnausweise und Stunden.</p>
+    <div className="space-y-5 page-enter">
+      <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1 max-w-[880px]">
+        <div className="flex items-start gap-3 min-w-0">
+          {fromDashboard && <BackButton fallbackHref="/dashboard" />}
+          <div className="min-w-0">
+            <h1 className="text-2xl font-bold tracking-tight">Lohn</h1>
+            <p className="text-sm text-muted-foreground mt-1">Deine Lohnabrechnungen, Lohnausweise und Stunden.</p>
+          </div>
         </div>
+        {ready && can("lohn:manage") && <VerwaltungLink />}
       </div>
-      {ready && can("lohn:manage") && <VerwaltungLink />}
       <MeinLohn />
     </div>
   );
@@ -58,14 +61,16 @@ export default function LohnPage() {
 function VerwaltungLink() {
   const [hover, setHover] = useState(false);
   return (
-    <p className="-mt-3 text-xs text-muted-foreground" onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}>
+    <span className="mt-1.5 shrink-0" onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}>
       <PrefetchLink
         href={verwaltungLink()}
-        className="underline underline-offset-2"
+        className="inline-flex items-center gap-1.5 text-xs text-muted-foreground"
         style={{ color: hover ? "var(--accent)" : undefined }}
       >
-        Lohnverwaltung (bis Lohnlauf November 2026)
+        <Settings className="h-3.5 w-3.5" />
+        <span><span className="font-medium">Lohnverwaltung</span> (bis Lohnlauf November 2026)</span>
+        <ChevronRight className="h-3.5 w-3.5" />
       </PrefetchLink>
-    </p>
+    </span>
   );
 }

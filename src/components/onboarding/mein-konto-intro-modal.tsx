@@ -18,6 +18,7 @@
 
 import Link from "next/link";
 import { Modal } from "@/components/ui/modal";
+import { FLAECHE } from "@/components/dashboard/karte";
 import { useMeinKontoOnboarding } from "@/lib/use-mein-konto-onboarding";
 import { useFragen } from "@/lib/fragen/use-fragen";
 import { User, Bell, Fingerprint, Calendar, ArrowRight, Check, Send } from "lucide-react";
@@ -47,28 +48,28 @@ export function MeinKontoIntroModal() {
   function close() { void dismissIntro(); }
 
   return (
-    <Modal open={open} onClose={close} title="Willkommen in „Mein Konto“" size="md" sheet>
+    <Modal open={open} onClose={close} title="Willkommen in «Mein Konto»" size="md" sheet>
       <div className="space-y-4">
         <p className="text-sm text-muted-foreground">
           Alles Persönliche liegt jetzt an einem Ort. Hier eine kurze Übersicht
           was du dort findest:
         </p>
 
-        <div className="space-y-1.5">
+        <div className="space-y-2">
           {FEATURES.map((f) => (
-            <div key={f.label} className="flex items-start gap-2.5 p-2.5 rounded-lg bg-foreground/[0.03] dark:bg-foreground/[0.05]">
-              <div className="w-8 h-8 rounded-lg bg-card border border-border flex items-center justify-center text-foreground/70 shrink-0">
+            <div key={f.label} className={`flex items-center gap-3 rounded-xl px-3 py-2.5 ${FLAECHE}`}>
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-card text-foreground/70">
                 {f.icon}
               </div>
-              <div className="flex-1 min-w-0 pt-0.5">
+              <div className="min-w-0 flex-1">
                 <p className="text-sm font-medium leading-tight">{f.label}</p>
-                <p className="text-[11px] text-muted-foreground leading-tight mt-0.5">{f.desc}</p>
+                <p className="mt-0.5 text-xs leading-tight text-muted-foreground">{f.desc}</p>
               </div>
             </div>
           ))}
         </div>
 
-        <div className="flex flex-col-reverse sm:flex-row gap-2 pt-1">
+        <div className="flex flex-col-reverse gap-2 pt-2 sm:flex-row">
           <button type="button" onClick={close} className="kasten kasten-muted sm:flex-1 justify-center">
             <Check className="h-3.5 w-3.5" /> Verstanden
           </button>

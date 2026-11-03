@@ -20,7 +20,6 @@ import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Download, FileText, Loader2, Printer, ShieldCheck, Wallet } from "lucide-react";
 import { toast } from "sonner";
-import { Card } from "@/components/ui/card";
 import { Modal } from "@/components/ui/modal";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -68,13 +67,25 @@ const tagMonat = (iso: string) => formatDateFull(iso).slice(0, 6);
 const stunden = (min: number) => `${(Math.round(min / 6) / 10).toFixed(1)} h`;
 const monatParam = (jahr: number, monat: number) => `${jahr}-${String(monat).padStart(2, "0")}`;
 
+/** Pillen wie in Stempelzeiten/Tickets (rounded-full, 10 px). */
+const PILLE = "inline-flex items-center gap-1 px-1.5 py-0 text-[10px] font-semibold rounded-full shrink-0";
+
 function NeuMarke() {
+  return <span className={`${PILLE} bg-red-100 text-red-700 dark:bg-red-500/20 dark:text-red-300`}>Neu</span>;
+}
+
+function LaeuftMarke() {
   return (
-    <span className="inline-flex items-center px-1.5 py-px text-[10px] font-bold tracking-wide bg-red-100 text-red-700 dark:bg-red-500/25 dark:text-red-200">
-      NEU
+    <span className={`${PILLE} bg-green-100 text-green-700 dark:bg-green-500/20 dark:text-green-300`}>
+      <span className="h-1.5 w-1.5 rounded-full bg-green-500" />läuft noch
     </span>
   );
 }
+
+/** Karte wie die Listen in Stempelzeiten/Anfragen. */
+const KARTE = "overflow-hidden rounded-xl border border-border bg-card";
+/** Abschnitts-Titel wie in Abwesenheit (Section). */
+const ABSCHNITT = "text-xs font-semibold uppercase tracking-wider text-muted-foreground";
 
 function jahrAusUrl(roh: string | null): number | null {
   return roh && /^\d{4}$/.test(roh) ? Number(roh) : null;
@@ -83,19 +94,28 @@ function jahrAusUrl(roh: string | null): number | null {
 /** Skelett im Layout der Seite (auch loading.tsx). */
 export function MeinLohnSkelett() {
   return (
-    <div className="space-y-4 max-w-[880px]">
-      <div className="border border-border bg-card">
-        <div className="px-5 py-2.5 border-b border-border"><Skeleton className="h-3 w-48" /></div>
-        {Array.from({ length: 5 }).map((_, i) => (
-          <div key={i} className="px-5 py-3.5 border-b border-border last:border-b-0 flex items-center gap-6">
-            <Skeleton className="h-4 w-24" />
-            <Skeleton className="h-4 w-16" />
-            <Skeleton className="h-4 w-40 max-w-full" />
-          </div>
-        ))}
+    <div className="space-y-5 max-w-[880px]">
+      <div className="space-y-2">
+        <div className="flex items-center justify-between gap-3 px-1">
+          <Skeleton className="h-3 w-40" />
+          <Skeleton className="h-9 w-[104px] rounded-lg" />
+        </div>
+        <div className={KARTE}>
+          <div className="px-4 py-2.5 border-b border-border"><Skeleton className="h-3 w-56" /></div>
+          {Array.from({ length: 5 }).map((_, i) => (
+            <div key={i} className="px-4 py-[18px] border-b border-border last:border-b-0 flex items-center gap-6">
+              <Skeleton className="h-4 w-24" />
+              <Skeleton className="h-4 w-16" />
+              <Skeleton className="h-4 w-40 max-w-full" />
+            </div>
+          ))}
+        </div>
       </div>
-      <Skeleton className="h-14 w-full" />
-      <Skeleton className="h-4 w-56" />
+      <div className="space-y-2">
+        <Skeleton className="h-3 w-24 ml-1" />
+        <Skeleton className="h-[58px] w-full rounded-xl" />
+      </div>
+      <Skeleton className="h-4 w-56 ml-1" />
     </div>
   );
 }
@@ -201,21 +221,21 @@ export function MeinLohn() {
 
   if (ansichtAls) {
     return (
-      <Card className="max-w-[880px] border-dashed">
+      <div className="max-w-[880px] rounded-xl border border-dashed border-border bg-card">
         <EmptyState icon={Wallet} title="Keine Lohndaten in «Ansicht als»" description="In «Ansicht als» werden keine Lohndaten der angesehenen Person angezeigt." />
-      </Card>
+      </div>
     );
   }
   if (!stand || isMobile === null || (gewaehlt !== null && stand.jahr !== gewaehlt)) {
     if (ladeFehler) {
       return (
-        <Card className="max-w-[880px]">
+        <div className="max-w-[880px] rounded-xl border border-dashed border-border bg-card">
           <EmptyState
             icon={Wallet}
             title="Lohn konnte nicht geladen werden"
-            action={<button type="button" className="kasten" onClick={() => setVersion((v) => v + 1)}>Erneut laden</button>}
+            action={<button type="button" className="kasten kasten-muted" onClick={() => setVersion((v) => v + 1)}>Erneut laden</button>}
           />
-        </Card>
+        </div>
       );
     }
     return <MeinLohnSkelett />;
@@ -240,7 +260,7 @@ export function MeinLohn() {
   );
 
   const zustellZeile = !wahlNoetig && wahl && (
-    <p className="text-[13px] text-muted-foreground flex flex-wrap items-center gap-x-2 gap-y-1">
+    <p className="px-1 text-[13px] text-muted-foreground flex flex-wrap items-center gap-x-2 gap-y-1">
       <span>
         Zustellung: <strong className="font-semibold text-foreground">{wahl.wahl === "digital" ? "digital" : "auf Papier"}</strong>
         {" "}seit {formatDateFull(wahl.gewaehlt_at)}
@@ -255,56 +275,65 @@ export function MeinLohn() {
   );
 
   return (
-    <div className="space-y-4 max-w-[880px]">
+    <div className="space-y-5 max-w-[880px]">
       {ConfirmModalElement}
-      <div className="flex items-center justify-between gap-3">
-        <p className="text-xs uppercase tracking-wider text-muted-foreground">Lohnabrechnungen {stand.jahr}</p>
-        {jahrAuswahl}
-      </div>
-
-      {stand.monate.length === 0 ? (
-        <Card>
-          <EmptyState icon={FileText} title={`Keine Einsätze ${stand.jahr}`} description="Für dieses Jahr gibt es weder Stunden noch Lohnabrechnungen." />
-        </Card>
-      ) : isMobile ? (
-        <div className="border border-border bg-card">
-          {stand.monate.map((m) => (
-            <MonatKarte key={m.monat} jahr={stand.jahr} m={m} oeffnet={oeffnet} onOeffne={oeffne} />
-          ))}
+      <section className="space-y-2">
+        <div className="flex items-center justify-between gap-3 px-1">
+          <h2 className={ABSCHNITT}>Lohnabrechnungen {stand.jahr}</h2>
+          {jahrAuswahl}
         </div>
-      ) : (
-        <div className="border border-border bg-card">
-          <div className="grid px-5 py-2.5 text-[11px] uppercase tracking-wider text-muted-foreground border-b border-border" style={{ gridTemplateColumns: GRID }}>
-            <div>Monat</div>
-            <div>Stunden</div>
-            <div>Lohnabrechnung</div>
-            <div />
+
+        {stand.monate.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-border bg-card">
+            <EmptyState icon={FileText} title={`Keine Einsätze ${stand.jahr}`} description="Für dieses Jahr gibt es weder Stunden noch Lohnabrechnungen." />
           </div>
-          {stand.monate.map((m) => (
-            <MonatZeileDesktop key={m.monat} jahr={stand.jahr} m={m} oeffnet={oeffnet} onOeffne={oeffne} />
-          ))}
-        </div>
-      )}
-
-      <div className="border border-border bg-card">
-        {!isMobile && (
-          <div className="px-5 py-2.5 text-[11px] uppercase tracking-wider text-muted-foreground border-b border-border">Lohnausweis</div>
+        ) : isMobile ? (
+          <div className={KARTE}>
+            {stand.monate.map((m) => (
+              <MonatKarte key={m.monat} jahr={stand.jahr} m={m} oeffnet={oeffnet} onOeffne={oeffne} />
+            ))}
+          </div>
+        ) : (
+          <div className={KARTE}>
+            <div className="grid px-4 py-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground border-b border-border" style={{ gridTemplateColumns: GRID }}>
+              <div>Monat</div>
+              <div>Stunden</div>
+              <div>Lohnabrechnung</div>
+              <div />
+            </div>
+            {stand.monate.map((m) => (
+              <MonatZeileDesktop key={m.monat} jahr={stand.jahr} m={m} oeffnet={oeffnet} onOeffne={oeffne} />
+            ))}
+          </div>
         )}
-        <div className={`flex items-center justify-between gap-3 ${isMobile ? "px-[14px] py-3 min-h-[48px]" : "px-5 py-3.5"} text-sm`}>
-          <div className="min-w-0 flex items-center gap-2">
-            <span className="font-semibold">{isMobile ? `Lohnausweis ${stand.jahr}` : stand.jahr}</span>
-            {!isMobile && <span className="text-muted-foreground">für die Steuererklärung</span>}
-            {stand.lohnausweis?.neu && <NeuMarke />}
+      </section>
+
+      <section className="space-y-2">
+        {!isMobile && <h2 className={`${ABSCHNITT} px-1`}>Lohnausweis</h2>}
+        <div className={KARTE}>
+          <div className={`flex items-center justify-between gap-3 ${isMobile ? "px-3 py-[7px] min-h-[48px]" : "px-4 py-3"} text-sm`}>
+            <div className="min-w-0 flex items-center gap-3">
+              {!isMobile && (
+                <span className="inline-flex items-center justify-center w-8 h-8 rounded-lg bg-muted text-muted-foreground shrink-0">
+                  <FileText className="h-4 w-4" />
+                </span>
+              )}
+              <div className="min-w-0 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                <span className="font-semibold">{isMobile ? `Lohnausweis ${stand.jahr}` : stand.jahr}</span>
+                {!isMobile && <span className="text-muted-foreground">für die Steuererklärung</span>}
+                {stand.lohnausweis?.neu && <NeuMarke />}
+              </div>
+            </div>
+            {stand.lohnausweis ? (
+              <PdfKnopf id={stand.lohnausweis.id} oeffnet={oeffnet} onOeffne={oeffne} />
+            ) : (
+              <span className="text-[13px] text-muted-foreground text-right">
+                {ausweisKommtNoch ? (isMobile ? `bis ${ausweisFrist}` : `kommt bis ${ausweisFrist}`) : stand.jahr < heuteJahr ? "nicht vorhanden" : "–"}
+              </span>
+            )}
           </div>
-          {stand.lohnausweis ? (
-            <PdfKnopf id={stand.lohnausweis.id} oeffnet={oeffnet} onOeffne={oeffne} />
-          ) : (
-            <span className="text-[13px] text-muted-foreground text-right">
-              {ausweisKommtNoch ? (isMobile ? `bis ${ausweisFrist}` : `kommt bis ${ausweisFrist}`) : stand.jahr < heuteJahr ? "nicht vorhanden" : "–"}
-            </span>
-          )}
         </div>
-      </div>
+      </section>
 
       {zustellZeile}
 
@@ -354,19 +383,19 @@ function PdfKnopf({ id, oeffnet, onOeffne, klein }: { id: string; oeffnet: strin
   );
 }
 
-function statusText(m: MonatZeile): string {
-  if (m.laufend) return "läuft noch";
-  return m.minuten > 0 ? "–" : "kein Einsatz";
+function StatusZelle({ m }: { m: MonatZeile }) {
+  if (m.laufend) return <LaeuftMarke />;
+  return <span className="text-muted-foreground">{m.minuten > 0 ? "–" : "kein Einsatz"}</span>;
 }
 
 function MonatZeileDesktop({ jahr, m, oeffnet, onOeffne }: { jahr: number; m: MonatZeile; oeffnet: string | null; onOeffne: (id: string) => void }) {
   const leer = !m.laufend && !m.abrechnung && m.minuten === 0;
   return (
     <div
-      className={`row-hover grid items-center px-5 py-3 text-sm border-b border-border last:border-b-0 ${m.laufend ? "bg-foreground/[0.02] dark:bg-foreground/[0.05]" : ""}`}
+      className="row-hover [--row-hover-x:0.5rem] grid items-center px-4 py-2.5 min-h-[54px] text-sm border-b border-border last:border-b-0"
       style={{ gridTemplateColumns: GRID }}
     >
-      <div className={`font-semibold ${leer ? "text-muted-foreground" : ""}`}>{MONATE[m.monat - 1]}</div>
+      <div className={leer ? "text-muted-foreground" : "font-medium"}>{MONATE[m.monat - 1]}</div>
       <div><StundenLink jahr={jahr} m={m} /></div>
       <div className="min-w-0 flex items-center gap-2">
         {m.abrechnung ? (
@@ -375,7 +404,7 @@ function MonatZeileDesktop({ jahr, m, oeffnet, onOeffne }: { jahr: number; m: Mo
             <span className="text-muted-foreground">erhalten {tagMonat(m.abrechnung.erhalten_at)}</span>
           </>
         ) : (
-          <span className="text-muted-foreground">{statusText(m)}</span>
+          <StatusZelle m={m} />
         )}
       </div>
       <div className="flex justify-end">
@@ -388,12 +417,12 @@ function MonatZeileDesktop({ jahr, m, oeffnet, onOeffne }: { jahr: number; m: Mo
 function MonatKarte({ jahr, m, oeffnet, onOeffne }: { jahr: number; m: MonatZeile; oeffnet: string | null; onOeffne: (id: string) => void }) {
   const leer = !m.laufend && !m.abrechnung && m.minuten === 0;
   return (
-    <div className={`px-[14px] py-[10px] min-h-[52px] border-b border-border last:border-b-0 ${m.laufend ? "bg-foreground/[0.02] dark:bg-foreground/[0.05]" : ""}`}>
-      <div className="flex items-baseline justify-between gap-3 text-[15px]">
-        <span className={leer ? "text-muted-foreground" : "font-semibold"}>{MONATE[m.monat - 1]}</span>
+    <div className="px-3 py-[7px] border-t border-border first:border-t-0">
+      <div className="flex min-h-[34px] items-center justify-between gap-3 text-[14px]">
+        <span className={leer ? "text-muted-foreground" : "font-medium"}>{MONATE[m.monat - 1]}</span>
         <StundenLink jahr={jahr} m={m} mobil />
       </div>
-      <div className="mt-1 flex items-center justify-between gap-3 text-[13px] min-h-[34px]">
+      <div className="flex items-center justify-between gap-3 text-[12px] min-h-[34px]">
         {m.abrechnung ? (
           <>
             <span className="flex items-center gap-1.5 min-w-0">
@@ -403,7 +432,7 @@ function MonatKarte({ jahr, m, oeffnet, onOeffne }: { jahr: number; m: MonatZeil
             <PdfKnopf id={m.abrechnung.id} oeffnet={oeffnet} onOeffne={onOeffne} klein />
           </>
         ) : (
-          <span className="text-muted-foreground">{statusText(m)}</span>
+          <StatusZelle m={m} />
         )}
       </div>
     </div>

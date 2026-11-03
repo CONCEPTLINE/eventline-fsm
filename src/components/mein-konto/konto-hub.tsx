@@ -13,9 +13,10 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { ChevronRight, Clock, Inbox, Palmtree, Wallet, type LucideIcon } from "lucide-react";
+import { ChevronRight, Clock, Inbox, Palmtree, Plus, Wallet, type LucideIcon } from "lucide-react";
 import { PrefetchLink } from "@/components/shell/prefetch-link";
-import { MeldenKacheln } from "@/components/melden/melden-kacheln";
+import { AnderesMeldenKnopf, MeldenKacheln } from "@/components/melden/melden-kacheln";
+import { FLAECHE, Karte } from "@/components/dashboard/karte";
 import { ANFRAGEN_GEAENDERT_EVENT } from "@/lib/melden";
 import { ART_LABEL, type Anfrage, type AnfrageTon } from "@/lib/anfragen";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -101,12 +102,33 @@ function Abschnitt({ titel, rechts, children }: { titel: string; rechts?: React.
   );
 }
 
-function AnfragenKurz({ daten, fehler }: { daten: Uebersicht | null; fehler: string | null }) {
+/** Zeilen-Rahmen: am Handy die gruppierte Liste (Rand, Hintergrund — wie
+ *  ferien-mobil), am Laptop liegen die Zeilen direkt in der Karte. */
+function ZeilenRahmen({ breit, children }: { breit: boolean; children: React.ReactNode }) {
+  if (breit) return <div className="flex flex-col">{children}</div>;
+  return <div className="overflow-hidden rounded-xl border border-border bg-card">{children}</div>;
+}
+
+/** Zeilen-Klassen: Handy randbuendig (Flaeche nach innen), Laptop wie die
+ *  Dashboard-Zeilen (Flaeche ragt seitlich 0.5rem hinaus). */
+function zeileKlasse(breit: boolean): string {
+  return breit
+    ? "row-hover flex min-h-[42px] items-center gap-3 border-t border-border text-sm first:border-t-0"
+    : "row-hover [--row-hover-x:0.5rem] flex min-h-[42px] items-center gap-3 border-t border-border px-4 first:border-t-0";
+}
+
+function AnfragenKurz({ daten, fehler, breit }: { daten: Uebersicht | null; fehler: string | null; breit: boolean }) {
   if (fehler && !daten) {
-    return <p className="rounded-xl border border-border bg-card px-4 py-3 text-[13px] text-red-600 dark:text-red-400">{fehler}</p>;
+    return breit
+      ? <p className="text-sm text-red-600 dark:text-red-400">{fehler}</p>
+      : <p className="rounded-xl border border-border bg-card px-4 py-3 text-[13px] text-red-600 dark:text-red-400">{fehler}</p>;
   }
   if (!daten) {
-    return (
+    return breit ? (
+      <div className="space-y-2">
+        {[0, 1, 2].map((i) => <Skeleton key={i} className="h-[34px]" />)}
+      </div>
+    ) : (
       <div className="space-y-px overflow-hidden rounded-xl border border-border bg-card">
         {[0, 1, 2].map((i) => <Skeleton key={i} className="h-[42px] rounded-none" />)}
       </div>
@@ -114,107 +136,108 @@ function AnfragenKurz({ daten, fehler }: { daten: Uebersicht | null; fehler: str
   }
   if (daten.anfragen.length === 0) {
     return (
-      <div className="flex items-center gap-3 rounded-xl border border-border bg-card px-4 py-3 text-[13px] text-muted-foreground">
+      <div className={breit
+        ? `flex items-center gap-3 rounded-xl px-4 py-3 text-sm text-muted-foreground ${FLAECHE}`
+        : "flex items-center gap-3 rounded-xl border border-border bg-card px-4 py-3 text-[13px] text-muted-foreground"}
+      >
         <Inbox className="h-4 w-4 shrink-0" />
         Noch nichts gemeldet.
       </div>
     );
   }
   return (
-    <div className="overflow-hidden rounded-xl border border-border bg-card">
-      {daten.anfragen.map((a) => {
-        const inhalt = (
-          <>
-            <span className="min-w-0 flex-1 truncate">
-              <span className="font-medium">{ART_LABEL[a.art]}</span>
-              <span className="text-muted-foreground"> · {a.was}</span>
-            </span>
-            <StandPille ton={a.ton}>{a.stand}</StandPille>
-          </>
-        );
-        const klasse = "flex min-h-[42px] items-center gap-3 border-t border-border px-4 text-[14px] first:border-t-0";
+    <ZeilenRahmen breit={breit}>
+      {daten.anfragen.map((a) => (
         // Tickets oeffnen ihre Detailseite, Abwesenheiten/Krank die Liste
         // (dort: Wieder gesund, Arztzeugnis, Zurückziehen).
-        return (
-          <PrefetchLink key={a.key} href={a.link ?? ALLE_ANFRAGEN_HREF} className={`${klasse} row-hover [--row-hover-x:0.5rem]`}>
-            {inhalt}
-          </PrefetchLink>
-        );
-      })}
-    </div>
+        <PrefetchLink key={a.key} href={a.link ?? ALLE_ANFRAGEN_HREF} className={`${zeileKlasse(breit)} ${breit ? "" : "text-[14px]"}`}>
+          <span className="min-w-0 flex-1 truncate">
+            <span className="font-medium">{ART_LABEL[a.art]}</span>
+            <span className="text-muted-foreground"> · {a.was}</span>
+          </span>
+          <StandPille ton={a.ton}>{a.stand}</StandPille>
+        </PrefetchLink>
+      ))}
+    </ZeilenRahmen>
   );
 }
 
-function LinkZeile({ href, icon: Icon, label, wert, wertRot }: {
-  href: string; icon: LucideIcon; label: string; wert?: string | null; wertRot?: boolean;
+function LinkZeile({ href, icon: Icon, label, wert, wertRot, breit }: {
+  href: string; icon: LucideIcon; label: string; wert?: string | null; wertRot?: boolean; breit: boolean;
 }) {
   return (
-    <PrefetchLink
-      href={href}
-      className="row-hover [--row-hover-x:0.5rem] flex min-h-[42px] items-center gap-3 border-t border-border px-4 text-[15px] first:border-t-0"
-    >
-      <Icon className="h-5 w-5 shrink-0 text-muted-foreground" />
+    <PrefetchLink href={href} className={`${zeileKlasse(breit)} ${breit ? "" : "text-[15px]"}`}>
+      <Icon className={`${breit ? "h-4 w-4" : "h-5 w-5"} shrink-0 text-muted-foreground`} />
       <span className="min-w-0 flex-1 truncate">{label}</span>
       {wert && (
-        <span className={`shrink-0 text-[13px] ${wertRot ? "font-semibold text-red-600 dark:text-red-400" : "text-muted-foreground"}`}>
+        <span className={`shrink-0 ${breit ? "text-xs" : "text-[13px]"} ${wertRot ? "font-semibold text-red-600 dark:text-red-400" : "text-muted-foreground"}`}>
           {wert}
         </span>
       )}
-      <ChevronRight className="h-5 w-5 shrink-0 text-muted-foreground/60" />
+      <ChevronRight className={`${breit ? "h-4 w-4" : "h-5 w-5"} shrink-0 text-muted-foreground/60`} />
     </PrefetchLink>
   );
 }
 
-/** Melden + Meine Anfragen + Links. `breit`: Laptop-Anordnung (Anfragen und
- *  Links nebeneinander). */
+function ZeitUndLohn({ daten, breit }: { daten: Uebersicht | null; breit: boolean }) {
+  return (
+    <ZeilenRahmen breit={breit}>
+      <LinkZeile breit={breit} href="/stempelzeiten" icon={Clock} label="Stempelzeiten" wert={daten ? `${stunden(daten.minuten_monat)} diesen Monat` : null} />
+      <LinkZeile breit={breit} href="/ferien" icon={Palmtree} label="Abwesenheit" />
+      <LinkZeile
+        breit={breit}
+        href="/lohn"
+        icon={Wallet}
+        label="Lohn"
+        wert={daten && daten.lohn_neu > 0 ? `${daten.lohn_neu} neu` : null}
+        wertRot
+      />
+    </ZeilenRahmen>
+  );
+}
+
+/** Melden + Meine Anfragen + Links. `breit` (Laptop): Karten wie im
+ *  Dashboard (Karte: Titel mit Icon, rechts der Text-Link), Anfragen und
+ *  Links nebeneinander. Sonst (Handy): Mini-Label + gruppierte Liste wie
+ *  die anderen Handy-Seiten (ferien-mobil). */
 export function KontoHub({ breit = false }: { breit?: boolean }) {
   const { daten, fehler } = useKontoUebersicht();
 
-  const anfragen = (
-    <Abschnitt
-      titel="Meine Anfragen"
-      rechts={
-        <TextLink href={ALLE_ANFRAGEN_HREF} className="text-[13px] text-muted-foreground">
-          Alle Anfragen ›
-        </TextLink>
-      }
-    >
-      <AnfragenKurz daten={daten} fehler={fehler} />
-    </Abschnitt>
+  const alleAnfragen = (
+    <TextLink href={ALLE_ANFRAGEN_HREF} className={breit ? "text-xs font-medium text-muted-foreground" : "text-[13px] text-muted-foreground"}>
+      Alle Anfragen ›
+    </TextLink>
   );
 
-  const links = (
-    <Abschnitt titel="Meine Zeit & Lohn">
-      <div className="overflow-hidden rounded-xl border border-border bg-card">
-        <LinkZeile href="/stempelzeiten" icon={Clock} label="Stempelzeiten" wert={daten ? `${stunden(daten.minuten_monat)} diesen Monat` : null} />
-        <LinkZeile href="/ferien" icon={Palmtree} label="Abwesenheit" />
-        <LinkZeile
-          href="/lohn"
-          icon={Wallet}
-          label="Lohn"
-          wert={daten && daten.lohn_neu > 0 ? `${daten.lohn_neu} neu` : null}
-          wertRot
-        />
+  if (breit) {
+    return (
+      <div className="space-y-5">
+        <Karte titel="Melden" icon={Plus} rechts={<AnderesMeldenKnopf className="text-xs font-medium text-muted-foreground" />}>
+          <MeldenKacheln flaeche />
+        </Karte>
+        <div className="grid gap-5 lg:grid-cols-2 lg:items-start">
+          <Karte titel="Meine Anfragen" icon={Inbox} rechts={alleAnfragen}>
+            <AnfragenKurz daten={daten} fehler={fehler} breit />
+          </Karte>
+          <Karte titel="Meine Zeit & Lohn" icon={Wallet}>
+            <ZeitUndLohn daten={daten} breit />
+          </Karte>
+        </div>
       </div>
-    </Abschnitt>
-  );
+    );
+  }
 
   return (
     <div className="space-y-5">
       <Abschnitt titel="Melden">
         <MeldenKacheln />
       </Abschnitt>
-      {breit ? (
-        <div className="grid gap-5 lg:grid-cols-2">
-          {anfragen}
-          {links}
-        </div>
-      ) : (
-        <>
-          {anfragen}
-          {links}
-        </>
-      )}
+      <Abschnitt titel="Meine Anfragen" rechts={alleAnfragen}>
+        <AnfragenKurz daten={daten} fehler={fehler} breit={false} />
+      </Abschnitt>
+      <Abschnitt titel="Meine Zeit & Lohn">
+        <ZeitUndLohn daten={daten} breit={false} />
+      </Abschnitt>
     </div>
   );
 }

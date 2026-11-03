@@ -111,11 +111,13 @@ export default function MeinKontoPage() {
         </p>
       </div>
 
-      <div className="mb-10">
+      <div className="mb-8">
         <KontoHub breit />
       </div>
 
-      <h2 className="mb-2 px-1 text-[12px] font-bold uppercase tracking-wider text-muted-foreground">Einstellungen</h2>
+      {/* Persoenliche Einstellungen: Titel wie die Kartentitel oben
+          (font-heading), darunter die Tabs wie auf /einstellungen. */}
+      <h2 className="mb-1 font-heading text-lg font-bold">Einstellungen</h2>
       <TabsNav
         tabs={tabs}
         active={tab}
@@ -125,19 +127,19 @@ export default function MeinKontoPage() {
       />
 
       {tab === "profil" && (
-        <div className="max-w-3xl mx-auto">
+        <div className="max-w-3xl">
           <MeinKontoCard />
         </div>
       )}
 
       {tab === "sicherheit" && (
-        <div className="max-w-3xl mx-auto">
+        <div className="max-w-3xl">
           <PasskeysCard />
         </div>
       )}
 
       {tab === "benachrichtigungen" && (
-        <div className="max-w-3xl mx-auto">
+        <div className="max-w-3xl">
           <BenachrichtigungenTab />
         </div>
       )}
@@ -149,7 +151,7 @@ export default function MeinKontoPage() {
       )}
 
       {tab === "kalender" && (
-        <div className="max-w-3xl mx-auto">
+        <div className="max-w-3xl">
           <IcalFeedBlock
             title="Mein iCal-Feed"
             description="Abonniere deinen persönlichen Kalender mit Aufträgen, Terminen und Schichten in Google Calendar / Apple Calendar / Outlook."

@@ -2,7 +2,7 @@
 
 /**
  * «Krank melden» — ohne Freigabe (POST /api/krank). Laptop + Handy (Modal,
- * am Handy Bottom-Sheet; Masse «Dicht»).
+ * am Handy Bottom-Sheet). Optik wie NewTicketModal (Beleg, Stempel).
  *
  *   Ab                   Heute | Anderes Datum
  *   Voraussichtlich bis  Weiss nicht | Morgen | Datum
@@ -19,6 +19,7 @@ import { useEffect, useState } from "react";
 import { AlertTriangle, Loader2, Phone, ThermometerSun } from "lucide-react";
 import { toast } from "sonner";
 import { Modal } from "@/components/ui/modal";
+import { Input } from "@/components/ui/input";
 import { TOAST } from "@/lib/messages";
 import { anfragenGeaendert } from "@/lib/melden";
 import { ARZTZEUGNIS_AB_TAG } from "@/lib/krank";
@@ -100,9 +101,11 @@ function KrankFormular({ onClose }: { onClose: () => void }) {
     }
   }
 
-  const label = "px-1 text-[12px] font-bold uppercase tracking-wider text-muted-foreground";
-  const feld = "h-[36px] w-full rounded-xl border border-border bg-background px-3 text-base focus:outline-none focus:ring-2 focus:ring-ring/40";
-  const wahl = (aktiv: boolean) => `${aktiv ? "kasten-active" : "kasten-toggle-off"} h-[34px] justify-center px-2 text-[13px]`;
+  // Optik wie das Geschwister-Formular NewTicketModal (Beleg, Stempel
+  // korrigieren): kleine Feld-Labels, Input-Komponente, Kasten-Toggles,
+  // Fusszeile Abbrechen | Senden. Am Handy Bottom-Sheet (Modal `sheet`).
+  const label = "ml-1 text-[10px] text-muted-foreground/70";
+  const wahl = (aktiv: boolean) => `${aktiv ? "kasten-active" : "kasten-toggle-off"} flex-1 justify-center`;
 
   return (
     <Modal
@@ -113,76 +116,75 @@ function KrankFormular({ onClose }: { onClose: () => void }) {
       sheet
       size="md"
       closable={!sendet}
-      bodyClassName="p-[10px] md:p-6 space-y-4"
     >
-      <p className="px-1 text-[14px]">Gute Besserung. Wir informieren die Projektleitung deiner Einsätze.</p>
+      <p className="text-sm text-muted-foreground">Gute Besserung. Wir informieren die Projektleitung deiner Einsätze.</p>
 
-      <div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 p-2.5 text-[13px] text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100">
+      <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-800 dark:bg-amber-500/15 dark:text-amber-200">
         <Phone className="mt-0.5 h-4 w-4 shrink-0" />
         <span>Bitte ruf zusätzlich sofort deine vorgesetzte Person an.</span>
       </div>
 
-      <div className="space-y-2">
+      <div className="space-y-1">
         <p className={label}>Ab</p>
-        <div className="grid grid-cols-2 gap-2">
+        <div className="flex gap-2">
           <button type="button" onClick={() => setAbWahl("heute")} aria-pressed={abWahl === "heute"} disabled={sendet} className={wahl(abWahl === "heute")}>Heute</button>
           <button type="button" onClick={() => setAbWahl("datum")} aria-pressed={abWahl === "datum"} disabled={sendet} className={wahl(abWahl === "datum")}>Anderes Datum</button>
         </div>
         {abWahl === "datum" && (
-          <input type="date" value={abDatum} max={plusTage(heute, 7)} min={plusTage(heute, -14)} onChange={(e) => setAbDatum(e.target.value)} disabled={sendet} className={feld} aria-label="Krank ab" />
+          <Input type="date" value={abDatum} max={plusTage(heute, 7)} min={plusTage(heute, -14)} onChange={(e) => setAbDatum(e.target.value)} disabled={sendet} aria-label="Krank ab" className="mt-1" />
         )}
       </div>
 
-      <div className="space-y-2">
+      <div className="space-y-1">
         <p className={label}>Voraussichtlich bis</p>
-        <div className="grid grid-cols-3 gap-2">
+        <div className="flex gap-2">
           <button type="button" onClick={() => setBisWahl("offen")} aria-pressed={bisWahl === "offen"} disabled={sendet} className={wahl(bisWahl === "offen")}>Weiss nicht</button>
           <button type="button" onClick={() => setBisWahl("morgen")} aria-pressed={bisWahl === "morgen"} disabled={sendet || ab > morgen} className={wahl(bisWahl === "morgen")}>Morgen</button>
           <button type="button" onClick={() => setBisWahl("datum")} aria-pressed={bisWahl === "datum"} disabled={sendet} className={wahl(bisWahl === "datum")}>Datum</button>
         </div>
         {bisWahl === "datum" && (
-          <input type="date" value={bisDatum} min={ab} onChange={(e) => setBisDatum(e.target.value)} disabled={sendet} className={feld} aria-label="Voraussichtlich bis" />
+          <Input type="date" value={bisDatum} min={ab} onChange={(e) => setBisDatum(e.target.value)} disabled={sendet} aria-label="Voraussichtlich bis" className="mt-1" />
         )}
-        {!gueltig && <p className="px-1 text-[12px] text-red-600 dark:text-red-400">«Bis» liegt vor «Ab».</p>}
+        {!gueltig && <p className="ml-1 text-xs text-red-600 dark:text-red-400">«Bis» liegt vor «Ab».</p>}
       </div>
 
-      <div className="space-y-2">
+      <div className="space-y-1">
         <p className={label}>Betroffene Einsätze</p>
         {einsaetze === null ? (
-          <div className="flex h-[42px] items-center gap-2 px-1 text-[13px] text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" /> Wird geladen…
+          <div className="flex items-center gap-2 rounded-lg bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" /> Wird geladen…
           </div>
         ) : einsaetze.length === 0 ? (
-          <p className="px-1 text-[13px] text-muted-foreground">Keine Einsätze in diesem Zeitraum.</p>
+          <p className="rounded-lg bg-muted/40 px-3 py-2 text-sm text-muted-foreground">Keine Einsätze in diesem Zeitraum.</p>
         ) : (
           <>
-            <div className="overflow-hidden rounded-xl border border-border bg-card">
+            <div className="divide-y divide-border overflow-hidden rounded-xl border border-border">
               {einsaetze.map((e) => (
-                <div key={e.id} className="flex min-h-[42px] items-center gap-2 border-t border-border px-3 text-[13px] first:border-t-0">
+                <div key={e.id} className="flex min-h-[38px] items-center gap-2 px-3 py-1.5 text-sm">
                   <span className="shrink-0 tabular-nums text-muted-foreground">
                     {formatDate(e.start)}
                   </span>
                   <span className="min-w-0 flex-1 truncate">INT-{e.job_number} · {e.titel}</span>
-                  <span className="shrink-0 tabular-nums text-muted-foreground">
+                  <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
                     {formatTime(e.start)}{e.ende ? `–${formatTime(e.ende)}` : ""}
                   </span>
                 </div>
               ))}
             </div>
-            <p className="px-1 text-[12px] text-muted-foreground">Die Projektleitung bekommt eine Nachricht.</p>
+            <p className="ml-1 text-[10px] text-muted-foreground/70">Die Projektleitung bekommt eine Nachricht.</p>
           </>
         )}
       </div>
 
-      <div className="flex items-start gap-2 px-1 text-[12px] text-muted-foreground">
+      <div className="flex items-start gap-2 text-xs text-muted-foreground">
         <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
         <span>Arztzeugnis ab dem {ARZTZEUGNIS_AB_TAG}. Tag – du kannst es später unter «Meine Anfragen» nachreichen.</span>
       </div>
 
-      <div className="flex gap-2">
-        <button type="button" onClick={onClose} disabled={sendet} className="kasten kasten-muted h-[40px] flex-1 justify-center">Abbrechen</button>
-        <button type="button" onClick={() => void senden()} disabled={sendet || !gueltig} className="kasten kasten-red h-[40px] flex-1 justify-center">
-          {sendet && <Loader2 className="h-4 w-4 animate-spin" />}
+      <div className="flex gap-2 pt-2">
+        <button type="button" onClick={onClose} disabled={sendet} className="kasten kasten-muted flex-1">Abbrechen</button>
+        <button type="button" onClick={() => void senden()} disabled={sendet || !gueltig} className="kasten kasten-red flex-1">
+          {sendet && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
           {sendet ? "Wird gesendet…" : "Krankmeldung senden"}
         </button>
       </div>

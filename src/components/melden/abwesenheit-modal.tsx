@@ -6,14 +6,15 @@
  * Abwesenheit (Desktop) und ferien-mobil. POST /api/time-off → Status
  * «beantragt», die Freigabe passiert unter Freigaben (/antraege).
  *
- * Masse «Dicht» (docs/mobile/HANDY-WISSEN.md): Knoepfe 34 px, gross 40 px,
- * Eingabefelder 16 px Schrift.
+ * Optik wie NewTicketModal (Beleg, Stempel korrigieren); Eingabefelder am
+ * Handy 16 px Schrift (Input-Komponente, docs/mobile/HANDY-WISSEN.md).
  */
 
 import { useState } from "react";
 import { Loader2, Palmtree } from "lucide-react";
 import { toast } from "sonner";
 import { Modal } from "@/components/ui/modal";
+import { Input } from "@/components/ui/input";
 import { TOAST } from "@/lib/messages";
 import { anfragenGeaendert } from "@/lib/melden";
 import { todayLocalIso } from "@/lib/swiss-time";
@@ -83,8 +84,10 @@ function AbwesenheitFormular({ onClose, onGesendet }: Props) {
     }
   }
 
-  const label = "px-1 text-[12px] font-bold uppercase tracking-wider text-muted-foreground";
-  const feld = "h-[36px] w-full rounded-xl border border-border bg-background px-3 text-base focus:outline-none focus:ring-2 focus:ring-ring/40";
+  // Optik wie das Geschwister-Formular NewTicketModal (Beleg, Stempel
+  // korrigieren): kleine Feld-Labels, Input-Komponente, Kasten-Toggles,
+  // Fusszeile Abbrechen | Senden. Am Handy Bottom-Sheet (Modal `sheet`).
+  const label = "ml-1 text-[10px] text-muted-foreground/70";
 
   return (
     <Modal
@@ -95,9 +98,8 @@ function AbwesenheitFormular({ onClose, onGesendet }: Props) {
       sheet
       size="md"
       closable={!sendet}
-      bodyClassName="p-[10px] md:p-6 space-y-4"
     >
-      <div className="space-y-2">
+      <div className="space-y-1">
         <p className={label}>Art</p>
         <div className="grid grid-cols-2 gap-2">
           {ABWESENHEIT_ARTEN.map((a) => (
@@ -107,7 +109,7 @@ function AbwesenheitFormular({ onClose, onGesendet }: Props) {
               onClick={() => setTyp(a.typ)}
               aria-pressed={typ === a.typ}
               disabled={sendet}
-              className={`${typ === a.typ ? "kasten-active" : "kasten-toggle-off"} h-[34px] justify-center px-2 text-[12px]`}
+              className={`${typ === a.typ ? "kasten-active" : "kasten-toggle-off"} justify-center`}
             >
               {a.label}
             </button>
@@ -115,36 +117,41 @@ function AbwesenheitFormular({ onClose, onGesendet }: Props) {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-2">
-        <label className="space-y-1">
-          <span className={label}>Von</span>
-          <input type="date" value={start} onChange={(e) => setStart(e.target.value)} disabled={sendet} className={feld} />
-        </label>
-        <label className="space-y-1">
-          <span className={label}>Bis</span>
-          <input type="date" value={ende} min={start || undefined} onChange={(e) => setEnde(e.target.value)} disabled={sendet} className={feld} />
-        </label>
+      <div className="space-y-1">
+        <div className="grid grid-cols-2 gap-2">
+          <label className="space-y-1">
+            <span className={`block ${label}`}>Von</span>
+            <Input type="date" value={start} onChange={(e) => setStart(e.target.value)} disabled={sendet} />
+          </label>
+          <label className="space-y-1">
+            <span className={`block ${label}`}>Bis</span>
+            <Input type="date" value={ende} min={start || undefined} onChange={(e) => setEnde(e.target.value)} disabled={sendet} />
+          </label>
+        </div>
+        <p className={`ml-1 text-xs ${gueltig ? "text-muted-foreground" : "text-red-600 dark:text-red-400"}`}>
+          {gueltig ? (tage(start, ende) === 1 ? "1 Tag" : `${tage(start, ende)} Tage`) : "Start muss vor dem Ende liegen"}
+        </p>
       </div>
-      <p className={`px-1 text-[12px] ${gueltig ? "text-muted-foreground" : "text-red-600 dark:text-red-400"}`}>
-        {gueltig ? (tage(start, ende) === 1 ? "1 Tag" : `${tage(start, ende)} Tage`) : "Start muss vor dem Ende liegen"}
-      </p>
 
-      <textarea
-        value={notiz}
-        onChange={(e) => setNotiz(e.target.value.slice(0, 500))}
-        placeholder="Notiz (optional), z. B. Reise, Hochzeit"
-        rows={2}
-        maxLength={500}
-        disabled={sendet}
-        className="w-full resize-none rounded-xl border border-border bg-background px-3 py-[7px] text-base placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40"
-      />
+      <div className="space-y-1">
+        <p className={label}>Notiz (optional)</p>
+        <textarea
+          value={notiz}
+          onChange={(e) => setNotiz(e.target.value.slice(0, 500))}
+          placeholder="z. B. Reise, Hochzeit"
+          rows={2}
+          maxLength={500}
+          disabled={sendet}
+          className="w-full resize-none rounded-xl border border-border bg-card px-3 py-2 text-base placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40 md:text-sm"
+        />
+      </div>
 
-      <div className="flex gap-2">
-        <button type="button" onClick={onClose} disabled={sendet} className="kasten kasten-muted h-[40px] flex-1 justify-center">
+      <div className="flex gap-2 pt-2">
+        <button type="button" onClick={onClose} disabled={sendet} className="kasten kasten-muted flex-1">
           Abbrechen
         </button>
-        <button type="button" onClick={() => void senden()} disabled={sendet || !gueltig} className="kasten kasten-red h-[40px] flex-1 justify-center">
-          {sendet && <Loader2 className="h-4 w-4 animate-spin" />}
+        <button type="button" onClick={() => void senden()} disabled={sendet || !gueltig} className="kasten kasten-red flex-1">
+          {sendet && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
           {sendet ? "Wird gesendet…" : "Abwesenheit senden"}
         </button>
       </div>

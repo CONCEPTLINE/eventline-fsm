@@ -3,7 +3,7 @@
 /**
  * «Meine Anfragen» (/anfragen) — alles, was die Person gemeldet hat, an EINEM
  * Ort: Belege, Stempel-Korrekturen, IT, Material (Tickets) und Abwesenheiten
- * inkl. Krankmeldungen. Laptop: Kopf mit Melden-Knoepfen + Tabelle; Handy:
+ * inkl. Krankmeldungen. Laptop: Kopf mit Melden-Knoepfen + Karten-Liste; Handy:
  * Liste (Melden-Kacheln liegen am Handy in Mein Konto).
  *
  *   Offen (n) | Erledigt   Filter derselben Liste (?stand=erledigt, Reload-sicher)
@@ -23,7 +23,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
-import { FileText, Inbox, Loader2, Plus, Trash2, Upload, HeartPulse } from "lucide-react";
+import { FileText, Inbox, Loader2, Package, Plus, Trash2, Upload, HeartPulse, Wrench, type LucideIcon } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -178,13 +178,14 @@ export function MeineAnfragen() {
 
   return (
     <div className="page-enter space-y-4 md:space-y-5">
+      {/* Kopf wie /tickets und /ferien: Titel links, Melden-Knoepfe rechts. */}
       {isMobile === false && (
-        <div className="space-y-4">
-          <div>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
             <h1 className="text-2xl font-bold tracking-tight">Meine Anfragen</h1>
             <p className="mt-1 text-sm text-muted-foreground">Alles, was du gemeldet hast, an einem Ort.</p>
           </div>
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {meldenArten.map((k) => {
               const Icon = MELDEN_ICONS[k.art];
               return (
@@ -204,14 +205,15 @@ export function MeineAnfragen() {
         </div>
       )}
 
-      <div className="grid h-[34px] max-w-xs grid-cols-2 gap-2">
+      {/* Offen | Erledigt = Filter derselben Liste (wie /tickets). */}
+      <div className="flex items-center gap-1">
         {(["offen", "erledigt"] as const).map((s) => (
           <button
             key={s}
             type="button"
             onClick={() => setzeStand(s)}
             aria-pressed={stand === s}
-            className={`${stand === s ? "kasten-active" : "kasten-toggle-off"} h-[34px] justify-center text-[13px]`}
+            className={`${stand === s ? "kasten-active" : "kasten-toggle-off"} max-md:h-[34px]`}
           >
             {s === "offen" ? `Offen${offenAnzahl !== null ? ` (${offenAnzahl})` : ""}` : "Erledigt"}
           </button>
@@ -219,53 +221,27 @@ export function MeineAnfragen() {
       </div>
 
       {fehler && !liste ? (
-        <EmptyState icon={Inbox} title="Anfragen konnten nicht geladen werden" description={fehler}
-          action={<button type="button" className="kasten" onClick={() => void laden()}>Erneut laden</button>} />
+        <div className="rounded-xl border border-dashed border-border bg-card">
+          <EmptyState icon={Inbox} title="Anfragen konnten nicht geladen werden" description={fehler}
+            action={<button type="button" className="kasten" onClick={() => void laden()}>Erneut laden</button>} />
+        </div>
       ) : liste === null ? (
-        <div className="space-y-px overflow-hidden rounded-xl border border-border bg-card">
-          {[0, 1, 2, 3].map((i) => <Skeleton key={i} className="h-[46px] rounded-none" />)}
+        <div className="space-y-2">
+          {[0, 1, 2, 3].map((i) => <Skeleton key={i} className="h-[52px] rounded-xl" />)}
         </div>
       ) : liste.length === 0 ? (
-        <EmptyState
-          icon={Inbox}
-          title={stand === "offen" ? "Nichts offen" : "Noch nichts erledigt"}
-          description={stand === "offen" ? "Was du meldest, siehst du hier mit seinem Stand." : undefined}
-        />
-      ) : isMobile ? (
-        <div className="overflow-hidden rounded-xl border border-border bg-card">
-          {liste.map((a) => (
-            <div key={a.key} className="border-t border-border px-3 py-[7px] first:border-t-0">
-              <ZeileKopf a={a} />
-              {aktionen(a)}
-            </div>
-          ))}
+        <div className="rounded-xl border border-dashed border-border bg-card">
+          <EmptyState
+            icon={Inbox}
+            title={stand === "offen" ? "Nichts offen" : "Noch nichts erledigt"}
+            description={stand === "offen" ? "Was du meldest, siehst du hier mit seinem Stand." : undefined}
+          />
         </div>
       ) : (
-        <div className="overflow-hidden rounded-xl border border-border bg-card">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-border text-left text-[11px] uppercase tracking-wider text-muted-foreground">
-                <th className="px-4 py-2 font-medium">Art</th>
-                <th className="px-4 py-2 font-medium">Was</th>
-                <th className="px-4 py-2 font-medium">Gemeldet</th>
-                <th className="px-4 py-2 font-medium">Stand</th>
-                <th className="px-4 py-2" />
-              </tr>
-            </thead>
-            <tbody>
-              {liste.map((a) => (
-                <tr key={a.key} className="border-t border-border first:border-t-0 align-middle">
-                  <td className="px-4 py-2.5 font-medium">{ART_LABEL[a.art]}</td>
-                  <td className="px-4 py-2.5">
-                    {a.link ? <TextLink href={a.link}>{a.was}</TextLink> : a.was}
-                  </td>
-                  <td className="px-4 py-2.5 tabular-nums text-muted-foreground">{formatDate(a.gemeldet_at)}</td>
-                  <td className="px-4 py-2.5"><StandPille ton={a.ton}>{a.stand}</StandPille></td>
-                  <td className="px-4 py-2.5 text-right">{aktionen(a)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="space-y-2">
+          {liste.map((a) => (
+            <Zeile key={a.key} a={a} mobil={isMobile === true} aktionen={aktionen(a)} />
+          ))}
         </div>
       )}
       {ConfirmModalElement}
@@ -273,21 +249,56 @@ export function MeineAnfragen() {
   );
 }
 
-function ZeileKopf({ a }: { a: Anfrage }) {
-  const inhalt = (
-    <div className="flex min-h-[34px] items-center gap-2 text-[14px]">
-      <span className="min-w-0 flex-1 truncate">
-        <span className="font-medium">{ART_LABEL[a.art]}</span>
-        <span className="text-muted-foreground"> · {a.was}</span>
+/** Farbige Art-Kachel — Farben wie die Typen auf /tickets bzw. /ferien. */
+const ART_META: Record<Anfrage["art"], { icon: LucideIcon; farbe: string }> = {
+  beleg:       { icon: MELDEN_ICONS.beleg,       farbe: "text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-500/15" },
+  stempel:     { icon: MELDEN_ICONS.stempel,     farbe: "text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-500/15" },
+  it:          { icon: Wrench,                   farbe: "text-purple-600 dark:text-purple-400 bg-purple-50 dark:bg-purple-500/15" },
+  material:    { icon: Package,                  farbe: "text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-500/15" },
+  abwesenheit: { icon: MELDEN_ICONS.abwesenheit, farbe: "text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-500/15" },
+  krank:       { icon: MELDEN_ICONS.krank,       farbe: "text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-500/15" },
+};
+
+/** Eine Anfrage als Karte wie die Ticket-Zeilen auf /tickets. Mit Link (Tickets)
+ *  ist die ganze Karte klickbar; Krank/Abwesenheit tragen ihre Knoepfe —
+ *  Laptop rechts in der Zeile, Handy darunter. */
+function Zeile({ a, mobil, aktionen }: { a: Anfrage; mobil: boolean; aktionen: React.ReactNode }) {
+  const meta = ART_META[a.art];
+  const Icon = meta.icon;
+  // Knoepfe gibt es nur bei Krank und offener Abwesenheit (siehe Aktionen).
+  const hatAktionen = !!a.krank || a.zurueckziehbar;
+  const kopf = (
+    <div className="flex min-h-[34px] items-center gap-3">
+      <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md ${meta.farbe}`}>
+        <Icon className="h-3.5 w-3.5" />
       </span>
-      <StandPille ton={a.ton}>{a.stand}</StandPille>
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="truncate text-sm font-medium">
+            {a.link && hatAktionen ? <TextLink href={a.link}>{a.was}</TextLink> : a.was}
+          </span>
+          <StandPille ton={a.ton}>{a.stand}</StandPille>
+        </div>
+        <div className="text-[11px] text-muted-foreground">
+          {ART_LABEL[a.art]} · gemeldet {formatDate(a.gemeldet_at)}
+        </div>
+      </div>
+      {!mobil && aktionen}
     </div>
   );
+  const rahmen = "block rounded-xl border border-border bg-card px-3 py-[7px] md:px-4 md:py-1.5";
+  if (a.link && !hatAktionen) {
+    return (
+      <PrefetchLink href={a.link} className={`card-hover ${rahmen}`}>
+        {kopf}
+      </PrefetchLink>
+    );
+  }
   return (
-    <>
-      {a.link ? <PrefetchLink href={a.link}>{inhalt}</PrefetchLink> : inhalt}
-      <p className="text-[12px] text-muted-foreground">gemeldet {formatDate(a.gemeldet_at)}</p>
-    </>
+    <div className={rahmen}>
+      {kopf}
+      {mobil && aktionen}
+    </div>
   );
 }
 
@@ -303,21 +314,26 @@ function Aktionen({ a, busy, onGesund, onZeugnis, onAnsehen, onZurueck }: {
   const k = a.krank;
   if (!k && !a.zurueckziehbar) return null;
   return (
-    <div className="mt-1.5 flex flex-wrap items-center gap-2 md:mt-0 md:justify-end">
+    <div className="mt-1.5 flex flex-wrap items-center gap-2 md:mt-0 md:shrink-0 md:justify-end">
       {busy && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
       {k?.laeuft && (
-        <button type="button" onClick={onGesund} disabled={busy} className="kasten h-[34px] text-[13px] md:h-auto">
+        <button type="button" onClick={onGesund} disabled={busy} className="kasten h-[34px] text-[13px] md:h-auto md:text-xs">
           <HeartPulse className="h-3.5 w-3.5" />
           Wieder gesund
         </button>
       )}
-      {k && (
+      {k?.zeugnisStatus === "an_trust_flow" && (
+        // Ans Backoffice (Trust flow) uebergeben und hier geloescht — kein
+        // Ersetzen/Ansehen mehr, nur der Stand.
+        <span className="text-[11px] text-muted-foreground">Arztzeugnis abgegeben</span>
+      )}
+      {k && k.zeugnisStatus !== "an_trust_flow" && (
         <>
           <button
             type="button"
             onClick={() => dateiRef.current?.click()}
             disabled={busy}
-            className={`kasten h-[34px] text-[13px] md:h-auto ${k.zeugnisFehlt ? "kasten-red" : ""}`}
+            className={`kasten h-[34px] text-[13px] md:h-auto md:text-xs ${k.zeugnisFehlt ? "kasten-red" : ""}`}
             data-tooltip={k.hatZeugnis ? "Neues Arztzeugnis ersetzt das bisherige" : `Arztzeugnis ab dem ${ARZTZEUGNIS_AB_TAG}. Tag`}
           >
             <Upload className="h-3.5 w-3.5" />
@@ -334,8 +350,8 @@ function Aktionen({ a, busy, onGesund, onZeugnis, onAnsehen, onZurueck }: {
               if (f) onZeugnis(f);
             }}
           />
-          {k.hatZeugnis && (
-            <button type="button" onClick={onAnsehen} disabled={busy} className="kasten kasten-muted h-[34px] text-[13px] md:h-auto">
+          {k.zeugnisAnsehbar && (
+            <button type="button" onClick={onAnsehen} disabled={busy} className="kasten kasten-muted h-[34px] text-[13px] md:h-auto md:text-xs">
               <FileText className="h-3.5 w-3.5" />
               Ansehen
             </button>
@@ -343,7 +359,7 @@ function Aktionen({ a, busy, onGesund, onZeugnis, onAnsehen, onZurueck }: {
         </>
       )}
       {a.zurueckziehbar && (
-        <button type="button" onClick={onZurueck} disabled={busy} className="kasten kasten-muted h-[34px] text-[13px] md:h-auto">
+        <button type="button" onClick={onZurueck} disabled={busy} className="kasten kasten-muted h-[34px] text-[13px] md:h-auto md:text-xs">
           <Trash2 className="h-3.5 w-3.5" />
           Zurückziehen
         </button>
