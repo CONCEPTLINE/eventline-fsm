@@ -30,6 +30,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useConfirm } from "@/components/ui/use-confirm";
 import { PrefetchLink } from "@/components/shell/prefetch-link";
 import { StandPille } from "@/components/mein-konto/konto-hub";
+import { TextLink } from "@/components/ui/text-knopf";
 import { MELDEN_ICONS } from "@/components/melden/melden-kacheln";
 import { ANDERES_LABEL, ANFRAGEN_GEAENDERT_EVENT, MELDEN_KACHELN, anfragenGeaendert, darfMelden, oeffneMelden } from "@/lib/melden";
 import { ART_LABEL, type Anfrage } from "@/lib/anfragen";
@@ -256,7 +257,7 @@ export function MeineAnfragen() {
                 <tr key={a.key} className="border-t border-border first:border-t-0 align-middle">
                   <td className="px-4 py-2.5 font-medium">{ART_LABEL[a.art]}</td>
                   <td className="px-4 py-2.5">
-                    {a.link ? <PrefetchLink href={a.link} className="hover:underline">{a.was}</PrefetchLink> : a.was}
+                    {a.link ? <TextLink href={a.link}>{a.was}</TextLink> : a.was}
                   </td>
                   <td className="px-4 py-2.5 tabular-nums text-muted-foreground">{formatDate(a.gemeldet_at)}</td>
                   <td className="px-4 py-2.5"><StandPille ton={a.ton}>{a.stand}</StandPille></td>

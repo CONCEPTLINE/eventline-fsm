@@ -95,7 +95,9 @@ export async function POST(req: NextRequest) {
         type: "krank",
         status: "genehmigt",
         start_date: z.ab,
-        end_date: z.bis ?? z.ab,
+        // Offenes Ende: bis heute (rueckwirkend gemeldet) bzw. «Ab»; der
+        // Cron krank-tagesabschluss zieht es danach taeglich nach.
+        end_date: z.bis ?? (z.ab < todayLocalIso() ? todayLocalIso() : z.ab),
         ende_offen: z.bis === null,
         approved_at: new Date().toISOString(),
         approved_by_name: KRANKMELDUNG,

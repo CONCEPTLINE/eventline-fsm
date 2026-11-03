@@ -12,6 +12,7 @@
 import { Clock, Palmtree, Receipt, ThermometerSun, ChevronRight, type LucideIcon } from "lucide-react";
 import { ANDERES_LABEL, MELDEN_KACHELN, darfMelden, oeffneMelden, type MeldenArt } from "@/lib/melden";
 import { usePermissions } from "@/lib/use-permissions";
+import { TextKnopf } from "@/components/ui/text-knopf";
 
 export const MELDEN_ICONS: Record<MeldenArt, LucideIcon> = {
   beleg: Receipt,
@@ -45,13 +46,11 @@ export function MeldenKacheln({ kompakt = false }: { kompakt?: boolean }) {
           );
         })}
       </div>
-      {darfMelden("anderes", can) && <button
-        type="button"
-        onClick={() => oeffneMelden("anderes")}
-        className="inline-flex min-h-[34px] items-center px-1 text-[13px] text-muted-foreground underline-offset-2 hover:underline"
-      >
-        {ANDERES_LABEL} ›
-      </button>}
+      {darfMelden("anderes", can) && (
+        <TextKnopf onClick={() => oeffneMelden("anderes")} className="inline-flex min-h-[34px] items-center px-1 text-[13px] text-muted-foreground">
+          {ANDERES_LABEL} ›
+        </TextKnopf>
+      )}
     </div>
   );
 }

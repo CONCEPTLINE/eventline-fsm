@@ -8,7 +8,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { plusTage } from "@/lib/swiss-time";
 import { zuerichZuIso } from "@/lib/stempel-meldungen";
-import { OFFENES_ENDE_VORSCHAU_TAGE } from "@/lib/krank";
+import { arztzeugnisFehlt, KRANKMELDUNG, OFFENES_ENDE_VORSCHAU_TAGE } from "@/lib/krank";
 
 export const ARZTZEUGNIS_BUCKET = "arztzeugnisse";
 
@@ -72,4 +72,57 @@ export async function darfArztzeugnisSehen(admin: SupabaseClient, userId: string
   if (p.role === "admin") return true;
   const { data: r } = await admin.from("roles").select("permissions").eq("slug", p.role).maybeSingle();
   return Array.isArray(r?.permissions) && (r.permissions as string[]).includes("ferien:approve");
+}
+
+/** Taeglicher Abschluss (Cron /api/cron/krank-tagesabschluss, 00:05 Zuerich).
+ *  Idempotent — mehrfach am selben Tag laufen schadet nicht.
+ *   1. Offenes Ende: end_date auf heute nachziehen (Planung, Kalender und
+ *      Lohn lesen end_date — die Person gilt so nie ab Tag 2 als verfuegbar).
+ *   2. Arztzeugnis faellig (ab Tag ARZTZEUGNIS_AB_TAG) und keins da: der
+ *      Person EINMAL erinnern (arztzeugnis_erinnert_at). Nur Krankmeldungen
+ *      der letzten 30 Tage — alte Faelle loesen keine Nachricht mehr aus. */
+export async function krankTagesabschluss(
+  admin: SupabaseClient,
+  heute: string,
+  erinnere: (z: { id: string; user_id: string; start_date: string }) => Promise<void>,
+): Promise<{ verlaengert: number; erinnert: number }> {
+  const { data: verl, error: vErr } = await admin
+    .from("time_off")
+    .update({ end_date: heute })
+    .eq("type", "krank")
+    .eq("status", "genehmigt")
+    .eq("ende_offen", true)
+    .lt("end_date", heute)
+    .select("id");
+  if (vErr) throw new Error(`Verlängern fehlgeschlagen: ${vErr.message}`);
+
+  const { data: kand, error: kErr } = await admin
+    .from("time_off")
+    .select("id, user_id, start_date, end_date, ende_offen")
+    .eq("type", "krank")
+    .eq("status", "genehmigt")
+    .eq("approved_by_name", KRANKMELDUNG)
+    .is("arztzeugnis_pfad", null)
+    .is("arztzeugnis_erinnert_at", null)
+    .gte("start_date", plusTage(heute, -30))
+    .lte("start_date", heute);
+  if (kErr) throw new Error(`Erinnerungen konnten nicht geladen werden: ${kErr.message}`);
+
+  let erinnert = 0;
+  for (const z of (kand ?? []) as { id: string; user_id: string; start_date: string; end_date: string; ende_offen: boolean }[]) {
+    if (!arztzeugnisFehlt({ ab: z.start_date, bis: z.end_date, endeOffen: z.ende_offen, hatZeugnis: false }, heute)) continue;
+    // Erst markieren (nur wenn noch nicht markiert), dann senden — so geht
+    // die Erinnerung auch bei parallelen Laeufen nie doppelt raus.
+    const { data: markiert, error: mErr } = await admin
+      .from("time_off")
+      .update({ arztzeugnis_erinnert_at: new Date().toISOString() })
+      .eq("id", z.id)
+      .is("arztzeugnis_erinnert_at", null)
+      .select("id");
+    if (mErr) throw new Error(mErr.message);
+    if (!markiert || markiert.length === 0) continue;
+    await erinnere(z);
+    erinnert++;
+  }
+  return { verlaengert: verl?.length ?? 0, erinnert };
 }

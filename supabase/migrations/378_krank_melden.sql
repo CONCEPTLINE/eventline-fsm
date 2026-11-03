@@ -10,6 +10,11 @@
 --                              und ende_offen = false.
 --   arztzeugnis_pfad           Datei im privaten Bucket «arztzeugnisse» (<user_id>/<time_off_id>/…)
 --   arztzeugnis_hochgeladen_at Zeitpunkt des Uploads
+--   arztzeugnis_erinnert_at    einmalige Erinnerung «Bitte reiche dein Arztzeugnis nach»
+--                              (Cron /api/cron/krank-tagesabschluss; nie zweimal)
+--
+-- Offenes Ende: der Cron (taeglich 00:05 Zuerich) zieht end_date jeden Tag auf heute nach,
+-- damit Planung/Kalender/Lohn die Person nicht ab Tag 2 als verfuegbar sehen.
 --
 -- Bucket «arztzeugnisse» (privat, Gesundheitsdaten — DSG Art. 5): KEIN direkter Zugriff fuer
 -- anon/authenticated auf allen Verben (gemeinsame RESTRICTIVE-Sperre aus 307 um den Bucket
@@ -27,6 +32,7 @@ begin;
 alter table public.time_off add column if not exists ende_offen boolean not null default false;
 alter table public.time_off add column if not exists arztzeugnis_pfad text;
 alter table public.time_off add column if not exists arztzeugnis_hochgeladen_at timestamptz;
+alter table public.time_off add column if not exists arztzeugnis_erinnert_at timestamptz;
 
 comment on column public.time_off.ende_offen is 'Krankmeldung mit unbekanntem Ende; end_date = bisher bekannter letzter Tag (Migration 378).';
 comment on column public.time_off.arztzeugnis_pfad is 'Arztzeugnis im privaten Bucket arztzeugnisse; Zugriff nur ueber /api/krank (Migration 378).';

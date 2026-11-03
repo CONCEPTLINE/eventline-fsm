@@ -19,6 +19,7 @@ import { MeldenKacheln } from "@/components/melden/melden-kacheln";
 import { ANFRAGEN_GEAENDERT_EVENT } from "@/lib/melden";
 import { ART_LABEL, type Anfrage, type AnfrageTon } from "@/lib/anfragen";
 import { Skeleton } from "@/components/ui/skeleton";
+import { TextLink } from "@/components/ui/text-knopf";
 
 /** Ziel von «Alle Anfragen». */
 export const ALLE_ANFRAGEN_HREF = "/anfragen";
@@ -173,9 +174,9 @@ export function KontoHub({ breit = false }: { breit?: boolean }) {
     <Abschnitt
       titel="Meine Anfragen"
       rechts={
-        <PrefetchLink href={ALLE_ANFRAGEN_HREF} className="text-[13px] text-muted-foreground hover:text-foreground">
+        <TextLink href={ALLE_ANFRAGEN_HREF} className="text-[13px] text-muted-foreground">
           Alle Anfragen ›
-        </PrefetchLink>
+        </TextLink>
       }
     >
       <AnfragenKurz daten={daten} fehler={fehler} />

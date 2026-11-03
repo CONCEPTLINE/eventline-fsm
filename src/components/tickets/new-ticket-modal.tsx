@@ -34,6 +34,7 @@ import type { TicketType } from "@/types";
 import { JOB_STATUS_VORSTUFEN } from "@/lib/constants";
 import { anfragenGeaendert } from "@/lib/melden";
 import { useIsMobile } from "@/lib/use-is-mobile";
+import { TextKnopf } from "@/components/ui/text-knopf";
 
 /** Kontext-Typ fuer den gestempelten Zeitraum: externer Auftrag, internes
  *  Projekt (Zeit-Budget), oder freie "Andere Arbeit" (kein Kontext-Objekt).
@@ -1030,13 +1031,9 @@ export function NewTicketModal({ open, onClose, onCreated, initialType, initialD
                     clearable={false}
                   />
                   {erledigteMaterialTickets.length > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => setBelegApprovalSource("ticket")}
-                      className="ml-1 text-[11px] text-muted-foreground underline-offset-2 hover:underline"
-                    >
+                    <TextKnopf onClick={() => setBelegApprovalSource("ticket")} className="ml-1 text-[11px] text-muted-foreground">
                       Freigegeben über eine Material-Anfrage?
-                    </button>
+                    </TextKnopf>
                   )}
                 </div>
               ) : (
@@ -1052,13 +1049,9 @@ export function NewTicketModal({ open, onClose, onCreated, initialType, initialD
                     placeholder="Welche Material-Anfrage?"
                     clearable={false}
                   />
-                  <button
-                    type="button"
-                    onClick={() => setBelegApprovalSource("person")}
-                    className="ml-1 text-[11px] text-muted-foreground underline-offset-2 hover:underline"
-                  >
+                  <TextKnopf onClick={() => setBelegApprovalSource("person")} className="ml-1 text-[11px] text-muted-foreground">
                     Stattdessen: abgesprochen mit einer Person
-                  </button>
+                  </TextKnopf>
                 </div>
               )}
             </>

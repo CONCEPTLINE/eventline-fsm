@@ -40,6 +40,7 @@ import { logError } from "@/lib/log";
 import type { NotificationType } from "@/types";
 import { sendMailBatch, isMailConfigured, escapeHtml, mailLinkHref, mailRahmen } from "@/lib/mail";
 import { kanalAktiv } from "@/lib/notification-meta";
+import { ARZTZEUGNIS_AB_TAG } from "@/lib/krank";
 
 /** Portal-/App-Link fuer Mails (nur http/https, escaped) — null = Knopf entfaellt. */
 function mailLink(pfad: string): string | null {
@@ -408,6 +409,8 @@ export async function notifyBelegAbgesprochen(
 }
 
 // --- KRANK MELDEN (Migration 378) ----------------------------
+
+const ARZTZEUGNIS_TAG_TEXT = `${ARZTZEUGNIS_AB_TAG} Tage oder länger`;
 // Datenschutz: nur «krank gemeldet» + Zeitraum, nie Diagnose/Freitext.
 
 /** «vom 03.11. bis 05.11.» / «am 03.11.» / «ab 03.11., Ende offen.» —
@@ -445,6 +448,20 @@ export async function notifyKrankProjektleitung(
     link: `/auftraege/${args.jobId}`,
     resource_type: "job",
     resource_id: args.jobId,
+  });
+}
+
+/** An die kranke Person, einmal am Tag, ab dem das Arztzeugnis faellig ist. */
+export async function notifyArztzeugnisErinnerung(
+  client: SupabaseClient,
+  args: BaseArgs & { timeOffId: string; ab: string },
+) {
+  await deliver(client, args.recipients, "system", {
+    title: "Bitte reiche dein Arztzeugnis nach",
+    message: `Deine Krankmeldung ${krankZeitraum(args.ab, null).replace(", Ende offen.", "")} dauert jetzt ${ARZTZEUGNIS_TAG_TEXT}. Lade das Arztzeugnis unter «Meine Anfragen» hoch (Foto oder PDF).`,
+    link: "/anfragen",
+    resource_type: "time_off",
+    resource_id: args.timeOffId,
   });
 }
 
