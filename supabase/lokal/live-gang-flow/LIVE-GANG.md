@@ -49,8 +49,9 @@ Der Code darf mit dem Phase-4-Deploy mitgehen (er liegt auf demselben Branch): o
   (≤ 2026-11) filtert weiter auf eine ERP-Anstellung im Stempel-Bereich.
 - Ein Ausweis gilt 60 s und genau einmal (`jti`); Wiederholen mit demselben Ausweis → 409, ein neuer Abruf braucht einen neuen.
 - Höchstzahl: 10 Abrufe (Stempel/Vergleich/Abwesenheiten/Arztzeugnis zusammen) bzw. 30 Ablagen (Lohnabrechnungen, Sätze) je Minute → 429 mit `Retry-After`.
-- `/abwesenheiten` (380): je Person alle Abwesenheiten, die den Monat berühren, ohne Notizen; `/arztzeugnis` liefert die Datei
-  (≤ 10 MB, Base64) und vermerkt die erste Übergabe in `time_off.arztzeugnis_an_flow_at`. Gelöscht wird nichts (Regel offen).
+- `/abwesenheiten` (380): je Person alle Abwesenheiten, die den Monat berühren, ohne Notizen; `/arztzeugnis` liefert einen signierten
+  Link (60 s) auf die Datei (≤ 10 MB; nicht im Körper wegen Vercels ~4,5-MB-Grenze; Trust flow prüft die sha256) und vermerkt
+  die erste Übergabe in `time_off.arztzeugnis_an_flow_at`. Gelöscht wird nichts (Regel offen).
 - Wartung «lohn» (`node scripts/wartung.mjs an lohn`) schliesst auch die Schnittstelle (503 mit Hinweis); der Ausweis bleibt unverbraucht.
 - `/vergleich` nur bis Lohnmonat 2026-11; `/lohnabrechnung` nur ab 2026-12 und nach `lauf_bis`. Gleiche Fassung + gleiche PDF
   nochmals = «vorhanden» (Wiederholen ist sicher), gleiche Fassung mit anderer PDF bzw. ältere Fassung = 409.

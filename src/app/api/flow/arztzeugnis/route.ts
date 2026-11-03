@@ -4,9 +4,12 @@
 // aud «erp-arztzeugnis», Claim time_off_id (ID der Abwesenheit aus /api/flow/abwesenheiten).
 // Prüfung, Einmal-Schutz, Höchstzahl (Gruppe «abruf»), Protokoll: src/lib/flow/.
 //
-// Antwort: { ok: true, mime, dateiname, sha256, groesse, datei_base64 } (Datei ≤ 10 MB, Bucket
-// «arztzeugnisse»). 404 abwesenheit_unbekannt | kein_arztzeugnis.
-// Die erste erfolgreiche Übergabe steht in time_off.arztzeugnis_an_flow_at (einmal je Datei).
+// Antwort: { ok: true, mime, dateiname, sha256, groesse, url, gueltig_bis } — url = signierter Link
+// (60 s) auf die Datei im Bucket «arztzeugnisse» (≤ 10 MB). Nicht im Körper, weil Vercel nur ~4,5 MB
+// Antwort annimmt; Trust flow lädt die Datei selbst und prüft die sha256. Vor dem Ausstellen prüft das
+// ERP die Datei gegen die beim Hochladen gespeicherte sha256 (weicht sie ab → 500, kein Link).
+// 404 abwesenheit_unbekannt | kein_arztzeugnis.
+// Die erste Übergabe (Link ausgestellt) steht in time_off.arztzeugnis_an_flow_at (einmal je Datei).
 // Gelöscht wird nichts (Lösch-Regel nach Übergabe noch offen).
 
 import { flowAbruf } from "@/lib/flow/server";

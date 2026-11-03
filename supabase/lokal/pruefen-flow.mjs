@@ -20,7 +20,8 @@
 //   F11 Personal-Sätze /api/flow/saetze (aud «erp-saetze», 377): speichern, unverändert, ändern, unbekannte Person
 //   F12 Abwesenheiten /api/flow/abwesenheiten (aud «erp-abwesenheiten», 380): Monat, Felder, Arztzeugnis-Angaben
 //       (beim Hochladen gespeichert bzw. für ältere Zeugnisse nachgetragen), keine Notizen, fremder Pfad, Policy
-//   F13 Arztzeugnis /api/flow/arztzeugnis (aud «erp-arztzeugnis», 380): Datei, Übergabe einmal vermerkt, 404,
+//   F13 Arztzeugnis /api/flow/arztzeugnis (aud «erp-arztzeugnis», 380): signierter Link (60 s), Datei über den Link
+//       = Hochgeladenes, Übergabe einmal vermerkt, 404,
 //       Prüfsumme; legt Prüf-Abwesenheiten und Zeugnisse an und entfernt sie wieder (Zählprüfung)
 //
 // Aufruf: node supabase/lokal/pruefen-flow.mjs   (~2–3 min: wartet auf das Minuten-Fenster)
@@ -502,11 +503,13 @@ try {
   await platz(8);
   const zeugnisAbruf = (id) => { const a = ausweis("erp-arztzeugnis", { time_off_id: id }); return flow("arztzeugnis", a.token).then((r) => ({ ...r, jti: a.jti })); };
   const r13 = await zeugnisAbruf(K1.toUpperCase());
-  const datei13 = Buffer.from(r13.json?.datei_base64 ?? "", "base64");
+  const datei13 = r13.json?.url ? Buffer.from(await (await fetch(r13.json.url)).arrayBuffer()) : Buffer.alloc(0);
+  const bis13 = Date.parse(r13.json?.gueltig_bis) - Date.now();
+  ok(r13.status === 200 && Buffer.compare(datei13, zeugnis1) === 0 && bis13 > 0 && bis13 <= 61_000, `Link gültig ${Math.round(bis13 / 1000)} s; Datei über den Link = Hochgeladenes (Bytes gleich)`);
   ok(r13.status === 200 && r13.json?.ok === true && sha256(datei13) === sha256(zeugnis1) && r13.json?.sha256 === sha256(zeugnis1)
     && r13.json?.groesse === zeugnis1.length && r13.json?.mime === "application/pdf" && r13.json?.dateiname === "Zeugnis Dr. Test.pdf",
-    `Zeugnis Lara → ${r13.status}, Datei = Hochgeladenes (${datei13.length} B, ${r13.json?.dateiname})`);
-  ok(Object.keys(r13.json ?? {}).join(",") === "ok,mime,dateiname,sha256,groesse,datei_base64", `Antwort-Felder: ${Object.keys(r13.json ?? {}).join(",")}`);
+    `Zeugnis Lara → ${r13.status}, Angaben stimmen (${datei13.length} B, ${r13.json?.dateiname})`);
+  ok(Object.keys(r13.json ?? {}).join(",") === "ok,mime,dateiname,sha256,groesse,url,gueltig_bis" && !r13.text.includes("datei_base64"), `Antwort-Felder: ${Object.keys(r13.json ?? {}).join(",")}`);
   const uebergabe1 = sql(`select coalesce(arztzeugnis_an_flow_at::text, '') from time_off where id = '${K1}'`);
   ok(uebergabe1 !== "", `erste Übergabe vermerkt (arztzeugnis_an_flow_at ${uebergabe1})`);
   ok(sql(`select status || '|' || gruppe || '|' || geliefert || '|' || angefragt || '|' || (jahr is null) from flow_abrufe where jti = '${r13.jti}'`) === "ok|abruf|1|1|true", "Protokoll: ok, Gruppe «abruf», 1 geliefert");
@@ -514,10 +517,11 @@ try {
   ok(r13b.status === 200 && sql(`select arztzeugnis_an_flow_at::text from time_off where id = '${K1}'`) === uebergabe1, "zweiter Abruf → 200, Übergabe-Zeitpunkt bleibt (einmal gesetzt)");
   ok(sql(`select count(*) from storage.objects where bucket_id = 'arztzeugnisse' and name = '${laraPfad}'`) === "1", "nichts gelöscht (Datei bleibt im Bucket)");
   const r13c = await zeugnisAbruf(K2);
-  ok(r13c.status === 200 && sha256(Buffer.from(r13c.json?.datei_base64 ?? "", "base64")) === sha256(altBytes), `Altfall-Zeugnis → ${r13c.status}, Prüfsumme stimmt`);
+  const datei13c = r13c.json?.url ? Buffer.from(await (await fetch(r13c.json.url)).arrayBuffer()) : Buffer.alloc(0);
+  ok(r13c.status === 200 && Buffer.compare(datei13c, altBytes) === 0 && r13c.json?.sha256 === sha256(altBytes), `Altfall-Zeugnis → ${r13c.status}, Datei über den Link, Prüfsumme stimmt`);
   for (const [was, id, code] of [["fremder Pfad", K3, "kein_arztzeugnis"], ["ohne Zeugnis", F1, "kein_arztzeugnis"], ["unbekannte ID", randomUUID(), "abwesenheit_unbekannt"]]) {
     const r = await zeugnisAbruf(id);
-    ok(r.status === 404 && r.json?.code === code && !r.json?.datei_base64, `${was} → ${r.status} ${r.json?.code}`);
+    ok(r.status === 404 && r.json?.code === code && !r.json?.url, `${was} → ${r.status} ${r.json?.code}`);
   }
   const rUng = await flow("arztzeugnis", ausweis("erp-arztzeugnis", { time_off_id: "x" }).token);
   ok(rUng.status === 400 && rUng.json?.code === "abwesenheit_ungueltig", `time_off_id ungültig → ${rUng.status} ${rUng.json?.code}`);
@@ -525,8 +529,8 @@ try {
   ok(rAudZ.status === 401, `Abwesenheiten-Ausweis an /arztzeugnis → ${rAudZ.status}`);
   sql(`update time_off set arztzeugnis_sha256 = '${"f".repeat(64)}' where id = '${K1}'`);
   const rTamp = await zeugnisAbruf(K1);
-  ok(rTamp.status === 500 && rTamp.json?.code === "fehler" && !rTamp.json?.datei_base64 && sql(`select status from flow_abrufe where jti = '${rTamp.jti}'`) === "fehler",
-    `Datei passt nicht zur gespeicherten Prüfsumme → ${rTamp.status}, nichts geliefert, Protokoll «fehler»`);
+  ok(rTamp.status === 500 && rTamp.json?.code === "fehler" && !rTamp.json?.url && sql(`select status from flow_abrufe where jti = '${rTamp.jti}'`) === "fehler",
+    `Datei passt nicht zur gespeicherten Prüfsumme → ${rTamp.status}, kein Link, Protokoll «fehler»`);
   const zeugnis2 = testPdf(`Arztzeugnis neu ${Date.now()}`);
   const up2 = await hochladen(K1, zeugnis2, "neu.pdf");
   ok(up2.status === 200 && sql(`select (arztzeugnis_an_flow_at is null) || '|' || arztzeugnis_sha256 || '|' || arztzeugnis_dateiname from time_off where id = '${K1}'`) === `true|${sha256(zeugnis2)}|neu.pdf`,

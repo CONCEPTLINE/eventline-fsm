@@ -6,7 +6,7 @@
 -- Arztzeugnisse:
 --   - POST /api/flow/abwesenheiten (aud «erp-abwesenheiten»): je Person alle Abwesenheiten, die
 --     den Monat berühren, mit Angaben zum Arztzeugnis (ohne Notizen).
---   - POST /api/flow/arztzeugnis (aud «erp-arztzeugnis»): die Datei eines Arztzeugnisses.
+--   - POST /api/flow/arztzeugnis (aud «erp-arztzeugnis»): signierter Link (60 s) auf die Datei eines Arztzeugnisses.
 -- Beide lesen nur (Gruppe «abruf», Höchstzahl 10/min zusammen mit Stempel und Vergleich).
 --
 -- Inhalt:
@@ -48,7 +48,7 @@ comment on column public.time_off.arztzeugnis_dateiname is 'Dateiname des Arztze
 comment on column public.time_off.arztzeugnis_mime is 'MIME-Typ des Arztzeugnisses (Migration 380).';
 comment on column public.time_off.arztzeugnis_groesse is 'Grösse des Arztzeugnisses in Bytes (Migration 380).';
 comment on column public.time_off.arztzeugnis_sha256 is 'sha256 (hex) des Arztzeugnisses; für Trust flow (Migration 380).';
-comment on column public.time_off.arztzeugnis_an_flow_at is 'Erste erfolgreiche Übergabe des aktuellen Arztzeugnisses an Trust flow (POST /api/flow/arztzeugnis); ein neues Zeugnis setzt sie zurück (Migration 380).';
+comment on column public.time_off.arztzeugnis_an_flow_at is 'Erste Übergabe des aktuellen Arztzeugnisses an Trust flow (Link ausgestellt, POST /api/flow/arztzeugnis); ein neues Zeugnis setzt sie zurück (Migration 380).';
 
 -- ===========================================================================
 -- 2. Eigene Anträge ohne Arztzeugnis-Angaben (nur der Server setzt sie)

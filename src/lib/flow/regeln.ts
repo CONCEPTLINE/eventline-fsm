@@ -218,6 +218,8 @@ export function pruefeSaetzeClaims(c: Record<string, unknown>): { ok: true; anfr
 
 /** Grösstes Arztzeugnis (wie Bucket «arztzeugnisse», Migration 378). */
 export const ARZTZEUGNIS_MAX_BYTES = 10 * 1024 * 1024;
+/** So lange gilt der signierte Link auf das Arztzeugnis (/arztzeugnis). */
+export const ARZTZEUGNIS_LINK_S = 60;
 
 export interface AbwesenheitenAnfrage {
   jahr: number;

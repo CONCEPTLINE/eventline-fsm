@@ -13,6 +13,7 @@ import type { Ausgefuehrt } from "./aufruf";
 import type { FlowAusweis } from "./ausweis";
 import {
   abwesenheitFuerFlow,
+  ARZTZEUGNIS_LINK_S,
   ARZTZEUGNIS_MAX_BYTES,
   arztzeugnisPfadPasst,
   interneProfile,
@@ -387,7 +388,14 @@ export async function arztzeugnisAntwort(admin: SupabaseClient, a: { timeOffId: 
     daten = await datenNachtragen(admin, z, pfad, datei);
   }
 
-  // Erste Übergabe an Trust flow merken (einmal je Datei; ein neues Zeugnis setzt sie zurück). Gelöscht wird nichts.
+  // Datei nicht im Körper (Vercel nimmt nur ~4,5 MB Antwort an), sondern als kurzlebiger signierter Link;
+  // Trust flow lädt sie selbst und prüft die sha256.
+  const { data: link, error: lErr } = await admin.storage.from(ARZTZEUGNIS_BUCKET).createSignedUrl(pfad, ARZTZEUGNIS_LINK_S);
+  if (lErr || !link?.signedUrl) throw new Error(`Link zum Arztzeugnis fehlgeschlagen: ${lErr?.message ?? "kein Link"}`);
+  const gueltigBis = new Date(Date.now() + ARZTZEUGNIS_LINK_S * 1000).toISOString();
+
+  // Erste Übergabe an Trust flow merken (Link ausgestellt; einmal je Datei, ein neues Zeugnis setzt sie zurück).
+  // Gelöscht wird nichts.
   const { error: uErr } = await admin.from("time_off").update({ arztzeugnis_an_flow_at: new Date().toISOString() })
     .eq("id", z.id).eq("arztzeugnis_pfad", pfad).is("arztzeugnis_an_flow_at", null);
   if (uErr) throw new Error(`Übergabe konnte nicht vermerkt werden: ${uErr.message}`);
@@ -401,7 +409,8 @@ export async function arztzeugnisAntwort(admin: SupabaseClient, a: { timeOffId: 
       dateiname: daten.dateiname,
       sha256: daten.sha256,
       groesse: daten.groesse,
-      datei_base64: Buffer.from(datei.bytes).toString("base64"),
+      url: link.signedUrl,
+      gueltig_bis: gueltigBis,
     },
   };
 }
