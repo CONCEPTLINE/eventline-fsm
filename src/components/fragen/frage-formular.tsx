@@ -86,7 +86,13 @@ export function FrageFormular({ frage, aktuell, knopf = "Speichern", onGespeiche
 
 function Option({ label, gewaehlt, disabled, onWaehle }: { label: string; gewaehlt: boolean; disabled: boolean; onWaehle: () => void }) {
   const [hover, setHover] = useState(false);
-  const rand = gewaehlt ? "var(--color-red-500, #ef4444)" : hover ? "color-mix(in srgb, currentColor 35%, transparent)" : "color-mix(in srgb, currentColor 18%, transparent)";
+  // Fokus neutral (grau) statt des roten Fokus-Rings: das Modal fokussiert die
+  // erste Option von selbst — rot sähe wie eine Vorauswahl aus.
+  const [fokus, setFokus] = useState(false);
+  const rand = gewaehlt ? "#ef4444"
+    : fokus ? "color-mix(in srgb, currentColor 55%, transparent)"
+    : hover ? "color-mix(in srgb, currentColor 35%, transparent)"
+    : "color-mix(in srgb, currentColor 18%, transparent)";
   return (
     <button
       type="button"
@@ -96,8 +102,11 @@ function Option({ label, gewaehlt, disabled, onWaehle }: { label: string; gewaeh
       onClick={onWaehle}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
+      onFocus={() => setFokus(true)}
+      onBlur={() => setFokus(false)}
       className="flex items-center gap-2.5 px-3 py-2.5 rounded-lg border text-left text-sm font-medium transition-colors disabled:opacity-60"
       style={{
+        outline: "none",
         borderColor: rand,
         borderWidth: gewaehlt ? 2 : 1,
         padding: gewaehlt ? "9px 11px" : undefined,
