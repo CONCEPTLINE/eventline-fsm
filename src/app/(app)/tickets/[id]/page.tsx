@@ -548,7 +548,7 @@ export default function TicketDetailPage() {
           {ticket.type === "beleg" && belegApproval && (
             <div>
               <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                {belegApproval.kind === "person" ? "Genehmigt von" : "Genehmigt via Material-Ticket"}
+                {belegApproval.kind === "person" ? "Abgesprochen mit" : "Genehmigt via Material-Ticket"}
               </p>
               {belegApproval.href ? (
                 <Link href={belegApproval.href} className="text-sm font-medium mt-0.5 text-blue-600 hover:underline inline-block">
@@ -845,6 +845,14 @@ function TicketDataDisplay({ type, data, stempelJob }: { type: TicketType; data:
           <div>
             <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Lieferant</p>
             <p className="text-sm font-medium mt-0.5">{d.lieferant}</p>
+          </div>
+        )}
+        {d.auftrag_id && (
+          <div>
+            <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Für Auftrag</p>
+            <Link href={`/auftraege/${d.auftrag_id}`} className="text-sm font-medium mt-0.5 text-blue-600 hover:underline inline-block">
+              Auftrag öffnen
+            </Link>
           </div>
         )}
       </div>

@@ -33,6 +33,7 @@ import {
 } from "lucide-react";
 import type { SearchResult } from "@/app/api/search/route";
 import { matchActions, paletteEintraege, type PaletteAction } from "./palette-actions";
+import { oeffneMelden } from "@/lib/melden";
 import { usePermissions } from "@/lib/use-permissions";
 import { LadeFehler } from "@/components/mobile/lade-fehler";
 import { useIsMobile } from "@/lib/use-is-mobile";
@@ -197,8 +198,13 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
 
   const go = useCallback(
     (r: PaletteItem) => {
-      router.push(r.href);
       onClose();
+      // Melden-Aktionen oeffnen direkt das Formular (MeldenHost).
+      if (isAction(r) && r.melden) {
+        oeffneMelden(r.melden);
+        return;
+      }
+      router.push(r.href);
     },
     [router, onClose],
   );

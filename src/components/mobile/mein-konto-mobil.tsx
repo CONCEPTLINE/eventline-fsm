@@ -1,18 +1,22 @@
 "use client";
 
 /**
- * Mein Konto am Handy (< md).
+ * Mein Konto am Handy (< md) — 5. Platz der unteren Leiste, Startpunkt der
+ * Person.
  *
- * Ohne ?tab: Kopf (Avatar 40 px Initialen, Name, Rolle), Karte mit Zeilen
- * 40 px (Meine Daten · Anmeldung & Face ID · Benachrichtigungen · Kalender-Abo
- * · Darstellung · App installieren · Anleitung), «Abmelden» 40 px, Fuss
+ * Ohne ?tab: Hub (KontoHub: Melden, Meine Anfragen, Stempelzeiten,
+ * Abwesenheit, Lohn), «Arbeit» (Suchen, Aufträge, Locations, Tickets fuer
+ * tickets:manage — frueher im Mehr-Sheet), «Konto» (Avatar 40 px, Name,
+ * Rolle; Zeilen 40 px Meine Daten · Anmeldung & Face ID · Benachrichtigungen
+ * · Kalender-Abo · Darstellung · App installieren · Anleitung), «Abmelden»
+ * 40 px (mit Hinweis, wenn noch Aktionen auf Netz warten), Fuss
  * «Version · powered by CONCEPTLINE».
  *
  * Mit ?tab=…: Breadcrumbs [Mein Konto › Tab] (mobiler Kopf: Zurueck + Titel)
  * und derselbe Tab-Inhalt wie am Desktop — ohne Desktop-Tab-Leiste.
  *
  * Abmelden feuert das Window-Event ABMELDEN_EVENT; das (app)-Layout hoert
- * darauf und fuehrt dieselbe Abmelde-Logik wie im Mehr-Sheet aus.
+ * darauf und fuehrt dieselbe Abmelde-Logik aus.
  */
 
 import { useEffect, useState } from "react";
@@ -20,8 +24,8 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useTheme } from "next-themes";
 import {
-  Bell, BookOpen, Calendar, ChevronRight, Download, Fingerprint, Loader2, LogOut, Moon, Sun, User,
-  type LucideIcon,
+  Bell, BookOpen, Calendar, ChevronRight, ClipboardList, Download, Fingerprint, Loader2, LogOut, MapPin, Moon,
+  Search, Sun, Ticket, User, type LucideIcon,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { usePermissions } from "@/lib/use-permissions";
@@ -33,6 +37,12 @@ import { BenachrichtigungenTab } from "@/components/einstellungen/benachrichtigu
 import { IcalFeedBlock } from "@/components/kalender/ical-feed-block";
 import { AppInstallSheet, istAlsAppInstalliert } from "@/components/mobile/app-install-hinweis";
 import { ABMELDEN_EVENT } from "@/lib/mobile-seiten";
+import { KontoHub } from "@/components/mein-konto/konto-hub";
+import { CMDK_OPEN_EVENT } from "@/components/shell/command-palette";
+import { hasPermission, isPathAllowed } from "@/lib/permissions";
+import { useNavCounts } from "@/lib/use-nav-counts";
+import { useStempel } from "@/lib/use-stempel";
+import { useWartendeRapporte } from "@/components/mobile/uebertragungen-sheet";
 
 type Tab = "profil" | "sicherheit" | "benachrichtigungen" | "kalender";
 
@@ -55,8 +65,14 @@ function initialen(name: string): string {
 export function MeinKontoMobil() {
   const supabase = createClient();
   const searchParams = useSearchParams();
-  const { profile, role } = usePermissions();
+  const { profile, role, permissions, meId } = usePermissions();
   const { theme, setTheme } = useTheme();
+  const counts = useNavCounts();
+  const { ausstehend } = useStempel();
+  const rapporte = useWartendeRapporte(meId, true);
+  const wartet = ausstehend + rapporte.length;
+  const darf = (href: string) => isPathAllowed(href, permissions, role);
+  const ticketsVerwalten = hasPermission(permissions, role, "tickets:manage");
 
   const urlTab = searchParams.get("tab");
   const tab: Tab | null = urlTab && TAB_KEYS.includes(urlTab as Tab) ? (urlTab as Tab) : null;
@@ -109,7 +125,21 @@ export function MeinKontoMobil() {
 
   return (
     <div className="page-enter flex flex-col gap-5">
-      {/* Kopf */}
+      <KontoHub />
+
+      {/* Arbeit — was frueher im Mehr-Sheet stand. */}
+      <section className="space-y-2">
+        <h2 className="px-1 text-[12px] font-bold uppercase tracking-wider text-muted-foreground">Arbeit</h2>
+        <div className="overflow-hidden rounded-xl border border-border bg-card">
+          <Zeile icon={Search} label="Suchen" onClick={() => window.dispatchEvent(new Event(CMDK_OPEN_EVENT))} />
+          {darf("/auftraege") && <Zeile href="/auftraege" icon={ClipboardList} label="Aufträge" badge={counts.auftraege_action} />}
+          {darf("/locations") && <Zeile href="/locations" icon={MapPin} label="Locations" />}
+          {ticketsVerwalten && <Zeile href="/tickets" icon={Ticket} label="Tickets" badge={counts.tickets_open} />}
+        </div>
+      </section>
+
+      {/* Konto */}
+      <h2 className="-mb-2 px-1 text-[12px] font-bold uppercase tracking-wider text-muted-foreground">Konto</h2>
       <div className="flex items-center gap-4 px-1">
         <span className="inline-flex h-[40px] w-[40px] shrink-0 items-center justify-center rounded-full bg-muted text-[17px] font-bold text-muted-foreground">
           {initialen(name)}
@@ -137,6 +167,13 @@ export function MeinKontoMobil() {
         <Zeile href="/anleitung" icon={BookOpen} label="Anleitung" />
       </div>
 
+      {wartet > 0 && (
+        <p className="-mb-2 rounded-xl bg-amber-50 px-3 py-2 text-[13px] font-medium text-amber-800 dark:bg-amber-500/15 dark:text-amber-200">
+          {wartet === 1
+            ? "1 Aktion wartet noch auf Netz. Nach dem Abmelden wird sie"
+            : `${wartet} Aktionen warten noch auf Netz. Nach dem Abmelden werden sie`} beim nächsten Login von dir gesendet.
+        </p>
+      )}
       <button
         type="button"
         onClick={abmelden}
@@ -158,13 +195,14 @@ export function MeinKontoMobil() {
 
 /** Zeile 40 px: Icon, Label, optional Wert rechts, Chevron. Link oder Knopf. */
 function Zeile({
-  href, onClick, icon: Icon, label, wert,
+  href, onClick, icon: Icon, label, wert, badge = 0,
 }: {
   href?: string;
   onClick?: () => void;
   icon: LucideIcon;
   label: string;
   wert?: string;
+  badge?: number;
 }) {
   const klasse = "flex h-[40px] w-full items-center gap-3 border-t border-border px-4 text-left text-base first:border-t-0 active:bg-foreground/10";
   const inhalt = (
@@ -172,6 +210,11 @@ function Zeile({
       <Icon className="h-5 w-5 shrink-0 text-muted-foreground" />
       <span className="min-w-0 flex-1 truncate">{label}</span>
       {wert && <span className="shrink-0 text-[12px] text-muted-foreground">{wert}</span>}
+      {badge > 0 && (
+        <span className="inline-flex h-[22px] min-w-[22px] items-center justify-center rounded-full bg-red-600 px-1.5 text-[12px] font-bold text-white tabular-nums">
+          {badge > 99 ? "99+" : badge}
+        </span>
+      )}
       <ChevronRight className="h-5 w-5 shrink-0 text-muted-foreground/60" />
     </>
   );

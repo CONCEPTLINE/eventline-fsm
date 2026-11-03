@@ -8,7 +8,6 @@ import { tabelleAbonnieren } from "@/lib/realtime";
 import { Sidebar } from "@/components/layout/sidebar";
 import { MobileNav } from "@/components/layout/mobile-nav";
 import { MobileKopf } from "@/components/mobile/mobile-kopf";
-import { MehrSheet } from "@/components/mobile/mehr-sheet";
 import { StempelNavSheet, STEMPEL_OPEN_EVENT } from "@/components/mobile/stempel-sheet";
 import { OfflineStreifen } from "@/components/mobile/offline-streifen";
 import { useWartendeRapporte } from "@/components/mobile/uebertragungen-sheet";
@@ -34,6 +33,7 @@ import { PresenceProvider } from "@/lib/use-online-presence";
 import { NavCountsProvider } from "@/lib/use-nav-counts";
 import { MeinKontoOnboardingProvider } from "@/lib/use-mein-konto-onboarding";
 import { MeinKontoIntroModal } from "@/components/onboarding/mein-konto-intro-modal";
+import { MeldenHost } from "@/components/melden/melden-host";
 import { CommandPalette, CMDK_OPEN_EVENT } from "@/components/shell/command-palette";
 import { BreadcrumbsProvider, Breadcrumbs } from "@/components/shell/breadcrumbs";
 import { readImpersonationCookie } from "@/lib/impersonation";
@@ -62,17 +62,16 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
 function AppLayoutInner({ children }: { children: React.ReactNode }) {
   const { profile, permissions, ready, loadError, meId } = usePermissions();
-  // Handy-Sheets der Bottom-Nav: «Mehr» (Navigation) und «Stempeln».
-  const [mehrOpen, setMehrOpen] = useState(false);
+  // Handy-Sheet der Bottom-Nav: «Stempeln».
   const [stempelOpen, setStempelOpen] = useState(false);
   const [cmdkOpen, setCmdkOpen] = useState(false);
   const router = useRouter();
   const pathname = usePathname();
   const supabase = createClient();
-  // Wartende Offline-Aktionen (Stempeln): `ausstehend` (alle Stati) warnt im
-  // Mehr-Sheet vor dem Abmelden; `nachsendbar` (wartet/sendet/fehler) pausiert
-  // den Inaktivitaets-Logout — Konflikt/abgelehnt gehen nie von selbst raus.
-  const { ausstehend, nachsendbar } = useStempel();
+  // Wartende Offline-Aktionen (Stempeln): `nachsendbar` (wartet/sendet/
+  // fehler) pausiert den Inaktivitaets-Logout — Konflikt/abgelehnt gehen nie
+  // von selbst raus. (Den Hinweis vor dem Abmelden zeigt Mein Konto.)
+  const { nachsendbar } = useStempel();
   // Rapport-Entwuerfe, die noch raus muessen (rapport-outbox), pausieren den
   // Inaktivitaets-Logout genauso — Konflikt/Fehler brauchen den Nutzer.
   const rapporte = useWartendeRapporte(meId, true);
@@ -542,9 +541,7 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
       <MobileNav
         permissions={shellPermissions}
         role={shellProfile.role}
-        mehrOpen={mehrOpen}
         stempelOpen={stempelOpen}
-        onMehrOpen={() => setMehrOpen(true)}
         onStempelOpen={() => setStempelOpen(true)}
       />
       {/* Developer-Mode / View-As Overlay — nur sichtbar wenn der aktive
@@ -558,21 +555,15 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
           Live-Session zu diesem User startet. */}
       <LiveBroadcastReceiver userId={shellProfile.id} />
 
-      {/* Handy-Sheets der Bottom-Nav (Bottom-Sheets, nur < md relevant). */}
-      <MehrSheet
-        open={mehrOpen}
-        onClose={() => setMehrOpen(false)}
-        permissions={shellPermissions}
-        role={shellProfile.role}
-        canManageTickets={canManageTickets}
-        onSignOut={handleSignOut}
-        ausstehend={ausstehend + rapporte.length}
-      />
+      {/* Handy-Sheet der Bottom-Nav (Bottom-Sheet, nur < md relevant). */}
       <StempelNavSheet open={stempelOpen} onClose={() => setStempelOpen(false)} />
       {/* Einmaliger «EVENTLINE als App»-Hinweis (nur Handy im Browser). */}
       <AppInstallHinweis />
 
       <MeinKontoIntroModal />
+      {/* «Melden»-Formulare (Beleg, Abwesenheit, Stempel, Anderes) — oeffnen
+          auf oeffneMelden() von jeder Stelle (lib/melden.ts). */}
+      <MeldenHost />
       <CommandPalette open={cmdkOpen} onClose={() => setCmdkOpen(false)} />
       {/* sonner nutzt unter 600 px nur mobileOffset (offset greift dort
           nicht): Toast unter den mobilen Kopf (46 px + Safe-Area + 8 px Luft).

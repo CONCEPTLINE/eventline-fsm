@@ -1,5 +1,5 @@
 // Mobile-Schicht: welche Seite am Handy wie heisst und wie sie behandelt
-// wird. EINE Quelle fuer den mobilen Kopf (Titel), das Mehr-Sheet (Eintraege)
+// wird. EINE Quelle fuer den mobilen Kopf (Titel), den Konto-Bereich der Bottom-Nav
 // und den Hinweis-Balken («Am Computer besser bedienbar»).
 //
 // Entscheid (Mischa 2026-10-11): Alles, was man im Feld nicht operativ
@@ -24,6 +24,7 @@ const FELD_PREFIXES = [
   "/stempelzeiten",
   "/tickets",
   "/ferien",
+  "/lohn",
   "/mein-konto",
   "/locations",
   "/standorte",
@@ -89,24 +90,24 @@ export function bereichsWurzel(pathname: string): string | null {
   return "/" + teile[0];
 }
 
-/** Eintraege des Mehr-Sheets. Rechte werden beim Rendern per isPathAllowed
- *  geprueft (Admin sieht alles). Nur Feld-Werkzeuge — Buero bleibt Desktop. */
-export const MEHR_ICH = [
-  { href: "/stempelzeiten", label: "Stempelzeiten" },
-  { href: "/tickets", label: "Tickets & Belege" },
-  { href: "/ferien", label: "Abwesenheit" },
-  { href: "/mein-konto", label: "Mein Konto" },
-] as const;
+/** Bereiche, die am Handy unter «Mein Konto» (5. Platz der unteren Leiste)
+ *  haengen: der Hub selbst und alles, was von dort aus geoeffnet wird
+ *  (Stempelzeiten, Lohn, Abwesenheit, Tickets, Aufträge, Locations …). */
+const KONTO_BEREICH = [
+  "/mein-konto",
+  "/stempelzeiten",
+  "/lohn",
+  "/ferien",
+  "/tickets",
+  "/auftraege",
+  "/locations",
+  "/standorte",
+  "/raeume",
+  "/anleitung",
+];
 
-export const MEHR_ARBEIT = [
-  { href: "/auftraege", label: "Aufträge" },
-  { href: "/locations", label: "Locations" },
-] as const;
-
-/** Pfade, bei denen der Nav-Platz «Mehr» als aktiv gilt. */
-export function istMehrBereich(pathname: string): boolean {
+/** Pfade, bei denen der Nav-Platz «Mein Konto» als aktiv gilt. */
+export function istKontoBereich(pathname: string): boolean {
   const p = reinerPfad(pathname);
-  return [...MEHR_ICH, ...MEHR_ARBEIT].some(
-    (e) => p === e.href || p.startsWith(e.href + "/"),
-  ) || p.startsWith("/standorte") || p.startsWith("/raeume");
+  return KONTO_BEREICH.some((pre) => p === pre || p.startsWith(pre + "/"));
 }

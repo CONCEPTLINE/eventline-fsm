@@ -5,7 +5,7 @@ import { getNavIcon } from "@/lib/nav-icons";
 import { paletteEintraege } from "@/components/shell/palette-actions";
 import { FINANZEN_PERMISSION, FINANZEN_PFAD } from "@/lib/finanzen/types";
 
-// Finanzen Welle 1 (Spec C.B4 Schritt 1): admin-only. Sidebar, Mehr-Sheet,
+// Finanzen Welle 1 (Spec C.B4 Schritt 1): admin-only. Sidebar, Handy-Leiste,
 // Palette und der (app)/layout-Redirect haengen an isPathAllowed — eine Rolle
 // MIT finanzen:view sieht den Eintrag trotzdem nicht und wird umgeleitet,
 // weil die Routen (requireAdminTrustedDevice) dieselbe Grenze ziehen.

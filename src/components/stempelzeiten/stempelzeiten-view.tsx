@@ -80,7 +80,7 @@ import { isTimeEntryLocked, TIME_ENTRY_LOCK_MESSAGE } from "@/lib/time-lock";
 import { useStempel, formatStempelDuration } from "@/lib/use-stempel";
 import { useConfirm } from "@/components/ui/use-confirm";
 import { Input } from "@/components/ui/input";
-import { NewTicketModal } from "@/components/tickets/new-ticket-modal";
+import { oeffneMelden, type StempelVorbelegung } from "@/lib/melden";
 import { JobNumber } from "@/components/job-number";
 import { SearchableSelect, type SelectItem } from "@/components/searchable-select";
 import { formatProjectNumber } from "@/lib/projekte-format";
@@ -119,14 +119,9 @@ interface ScopedEntry extends OwnEntry {
   user_id: string;
 }
 
-/** Payload fuer den Row-"Korrigieren"-Button — wandert 1:1 in
- *  NewTicketModal.initialData rein und belegt das Stempel-Form vor. */
-interface CorrectPayload {
-  timeEntryId: string;
-  clockIn: string;
-  clockOut: string | null;
-  jobId: string | null;
-}
+/** Payload fuer den Row-"Korrigieren"-Button — wandert ueber
+ *  oeffneMelden("stempel") in das Formular «Stempel korrigieren». */
+type CorrectPayload = StempelVorbelegung;
 
 /** Ergebniszeile fuer den Auftragsnummer-Filter (Join zu profiles). */
 interface JobFilterEntry {
@@ -432,12 +427,6 @@ export function StempelzeitenView({ tabs }: { tabs?: React.ReactNode } = {}) {
   // (?from=dashboard) — bei normaler Navigation keiner.
   const showBackButton = searchParams.get("from") === "dashboard";
   const { confirm, ConfirmModalElement } = useConfirm();
-  const [showStempelTicket, setShowStempelTicket] = useState(false);
-  /** Inline-Context: Payload fuer den Row-"Korrigieren"-Button (oder den
-   *  "Vergessen auszustempeln?"-Link im Aktiv-Banner). Ist gesetzt →
-   *  Modal oeffnet mit vorbelegten Feldern; null → normaler Fallback-
-   *  Aufruf (leeres Form). */
-  const [correctPayload, setCorrectPayload] = useState<CorrectPayload | null>(null);
   // User-ID + Rolle aus dem PermissionsProvider (/api/me) statt via eigenem
   // auth.getUser() + profiles.role-Query — spart 2 serielle Roundtrips beim
   // Mount (etabliertes Muster, vgl. ferien-view). Bei Dev-Mode-Impersonation
@@ -994,12 +983,10 @@ export function StempelzeitenView({ tabs }: { tabs?: React.ReactNode } = {}) {
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
   }, [jobFilterInput]);
 
-  /** Oeffnet das Ticket-Modal fuer eine Stempel-Korrektur mit vorbelegten
-   *  Feldern. Kombi aus: Payload merken + Modal aufmachen. `payload` kann null
-   *  sein — dann ist es der Fallback ohne Prefill (klassischer Top-Button). */
-  const openCorrect = useCallback((payload: CorrectPayload | null) => {
-    setCorrectPayload(payload);
-    setShowStempelTicket(true);
+  /** «Stempel korrigieren» mit vorbelegten Zeiten (Zeile «Korrigieren» bzw.
+   *  «Vergessen auszustempeln?» im Aktiv-Banner) — Formular im MeldenHost. */
+  const openCorrect = useCallback((payload: CorrectPayload) => {
+    oeffneMelden("stempel", { stempel: payload });
   }, []);
 
   /** Excel-Download der aktuell sichtbaren Timesheets. Uebergibt genau die
@@ -1233,18 +1220,6 @@ export function StempelzeitenView({ tabs }: { tabs?: React.ReactNode } = {}) {
               Stempel nachtragen
             </button>
           )}
-          {can("tickets:create") && (
-            <button
-              type="button"
-              onClick={() => openCorrect(null)}
-              className="kasten kasten-green"
-              data-tooltip="Stempel-Änderung anfragen"
-              data-tooltip-align="end"
-            >
-              <Clock className="h-3.5 w-3.5" />
-              Stempel-Änderung
-            </button>
-          )}
         </div>
       </div>
 
@@ -1282,7 +1257,7 @@ export function StempelzeitenView({ tabs }: { tabs?: React.ReactNode } = {}) {
                     jobId: active.job_id ?? null,
                   })}
                   className="text-xs font-medium text-green-700 dark:text-green-400 underline underline-offset-2 hover:text-green-800 dark:hover:text-green-300"
-                  data-tooltip="Ticket mit vorbelegten Zeiten öffnen"
+                  data-tooltip="Stempel korrigieren — Zeiten sind vorbelegt"
                 >
                   Vergessen auszustempeln?
                 </button>
@@ -1485,22 +1460,6 @@ export function StempelzeitenView({ tabs }: { tabs?: React.ReactNode } = {}) {
         />
       )}
 
-      <NewTicketModal
-        open={showStempelTicket}
-        onClose={() => { setShowStempelTicket(false); setCorrectPayload(null); }}
-        onCreated={() => {
-          setShowStempelTicket(false);
-          setCorrectPayload(null);
-          toast.success("Ticket erstellt — Admin wurde benachrichtigt");
-        }}
-        initialType="stempel_aenderung"
-        initialData={correctPayload ? {
-          timeEntryId: correctPayload.timeEntryId,
-          clockIn: correctPayload.clockIn,
-          clockOut: correctPayload.clockOut,
-          jobId: correctPayload.jobId,
-        } : undefined}
-      />
     </div>
   );
 }
@@ -1819,7 +1778,7 @@ function EntryCard({
           aria-label={perAntrag ? "Eintrag per Antrag ändern" : "Eintrag korrigieren"}
           data-tooltip={perAntrag
             ? "Ändern — Monat abgerechnet, nur per Antrag (Vier Augen)"
-            : locked ? TIME_ENTRY_LOCK_MESSAGE : "Korrigieren — Ticket mit vorbelegten Zeiten öffnen"}
+            : locked ? TIME_ENTRY_LOCK_MESSAGE : "Stempel korrigieren — Zeiten sind vorbelegt"}
           data-tooltip-align="end"
         >
           <Edit3 className="h-3.5 w-3.5" />

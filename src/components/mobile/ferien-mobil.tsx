@@ -3,9 +3,8 @@
 /**
  * Ferien / Abwesenheit am Handy (< md), less is more:
  *
- *   Zeile 40 px «Abwesenheit beantragen …» → Sheet: Typ-Chips (5 wie Desktop),
- *               Von/Bis (type=date, nebeneinander 36 px), Tage, Notiz,
- *               «Beantragen» 40 px → POST /api/time-off wie Desktop.
+ *   Zeile 40 px «Abwesenheit melden …» → AbwesenheitModal (dasselbe
+ *               Formular wie am Laptop, components/melden).
  *   Liste       eigene Antraege (user_id = meId serverseitig): Zeile 52 px
  *               Typ · Zeitraum · Tage · Status-Wort (Beantragt amber,
  *               Genehmigt gruen, Abgelehnt rot). Tipp → Sheet mit Details;
@@ -32,6 +31,7 @@ import { ZRH_TZ } from "@/lib/swiss-time";
 import { TOAST } from "@/lib/messages";
 import type { TimeOff, TimeOffStatus, TimeOffType } from "@/types";
 import { Modal } from "@/components/ui/modal";
+import { AbwesenheitModal } from "@/components/melden/abwesenheit-modal";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useConfirm } from "@/components/ui/use-confirm";
@@ -53,7 +53,6 @@ const TYP_LABEL: Record<TimeOffType, string> = {
   frei: "Frei",
   militaer: "Militär",
 };
-const TYPEN = Object.keys(TYP_LABEL) as TimeOffType[];
 
 const STATUS_WORT: Record<TimeOffStatus, { text: string; klasse: string }> = {
   beantragt: { text: "Beantragt", klasse: "text-amber-700 dark:text-amber-300" },
@@ -214,51 +213,9 @@ export function FerienMobil() {
     router.replace(q ? `${pathname}?${q}` : pathname, { scroll: false });
   }
 
-  /* --- Neu beantragen ----------------------------------------------------- */
+  /* --- Neu melden (gemeinsames Formular, components/melden) ------------- */
 
   const [neuOffen, setNeuOffen] = useState(false);
-  const [neuTyp, setNeuTyp] = useState<TimeOffType>("ferien");
-  const [neuStart, setNeuStart] = useState("");
-  const [neuEnde, setNeuEnde] = useState("");
-  const [neuNotiz, setNeuNotiz] = useState("");
-  const [sendet, setSendet] = useState(false);
-
-  function neuAufmachen() {
-    const heute = heuteTag();
-    setNeuTyp("ferien");
-    setNeuStart(heute);
-    setNeuEnde(heute);
-    setNeuNotiz("");
-    setNeuOffen(true);
-  }
-
-  const neuGueltig = !!neuStart && !!neuEnde && neuStart <= neuEnde;
-
-  async function beantragen() {
-    if (!neuGueltig || sendet) return;
-    setSendet(true);
-    try {
-      const res = await fetch("/api/time-off", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ start_date: neuStart, end_date: neuEnde, type: neuTyp, note: neuNotiz.trim() || null }),
-      });
-      const json = await res.json();
-      if (!json.success) {
-        TOAST.errorOr(json.error, "Anlegen fehlgeschlagen");
-        return;
-      }
-      toast.success("Antrag eingereicht");
-      setNeuOffen(false);
-      // Anträge-Punkt (use-nav-counts) sofort nachziehen, wie ferien-view.
-      window.dispatchEvent(new Event("time_off:invalidate"));
-      void load();
-    } catch (e) {
-      TOAST.error(e instanceof Error ? e.message : "Netzwerk-Fehler");
-    } finally {
-      setSendet(false);
-    }
-  }
 
   /* --- Detail-Sheet: Zurueckziehen / Genehmigen / Ablehnen --------------- */
 
@@ -344,11 +301,11 @@ export function FerienMobil() {
     <div className="page-enter space-y-4">
       <button
         type="button"
-        onClick={neuAufmachen}
+        onClick={() => setNeuOffen(true)}
         className="flex h-[40px] w-full items-center gap-3 rounded-xl border border-border bg-card px-4 text-left text-base text-muted-foreground active:bg-foreground/10"
       >
         <Plus className="h-5 w-5 shrink-0" />
-        Abwesenheit beantragen …
+        Abwesenheit melden …
       </button>
 
       {canApprove && (
@@ -410,73 +367,7 @@ export function FerienMobil() {
         </div>
       )}
 
-      {/* Neu-Sheet */}
-      <Modal open={neuOffen} onClose={() => !sendet && setNeuOffen(false)} title="Abwesenheit beantragen" sheet size="md" closable={!sendet} bodyClassName="p-[10px] space-y-4">
-        <div className="space-y-2">
-          <p className="px-1 text-[12px] font-bold uppercase tracking-wider text-muted-foreground">Typ</p>
-          <div className="grid grid-cols-3 gap-2">
-            {TYPEN.map((t) => (
-              <button
-                key={t}
-                type="button"
-                onClick={() => setNeuTyp(t)}
-                aria-pressed={neuTyp === t}
-                disabled={sendet}
-                className={`${neuTyp === t ? "kasten-active" : "kasten-toggle-off"} h-[34px] justify-center px-2 text-[12px]`}
-              >
-                {TYP_LABEL[t]}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="grid grid-cols-2 gap-2">
-          <label className="space-y-1">
-            <span className="px-1 text-[12px] font-bold uppercase tracking-wider text-muted-foreground">Von</span>
-            <input
-              type="date"
-              value={neuStart}
-              onChange={(e) => setNeuStart(e.target.value)}
-              disabled={sendet}
-              className="h-[36px] w-full rounded-xl border border-border bg-background px-3 text-base focus:outline-none focus:ring-2 focus:ring-ring/40"
-            />
-          </label>
-          <label className="space-y-1">
-            <span className="px-1 text-[12px] font-bold uppercase tracking-wider text-muted-foreground">Bis</span>
-            <input
-              type="date"
-              value={neuEnde}
-              min={neuStart || undefined}
-              onChange={(e) => setNeuEnde(e.target.value)}
-              disabled={sendet}
-              className="h-[36px] w-full rounded-xl border border-border bg-background px-3 text-base focus:outline-none focus:ring-2 focus:ring-ring/40"
-            />
-          </label>
-        </div>
-        <p className={`px-1 text-[12px] ${neuGueltig ? "text-muted-foreground" : "text-red-600 dark:text-red-400"}`}>
-          {neuGueltig ? tageText(tage(neuStart, neuEnde)) : "Start muss vor dem Ende liegen"}
-        </p>
-
-        <textarea
-          value={neuNotiz}
-          onChange={(e) => setNeuNotiz(e.target.value.slice(0, 500))}
-          placeholder="Notiz (optional)"
-          rows={2}
-          maxLength={500}
-          disabled={sendet}
-          className="w-full resize-none rounded-xl border border-border bg-background px-3 py-[7px] text-base placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40"
-        />
-
-        <button
-          type="button"
-          onClick={() => void beantragen()}
-          disabled={sendet || !neuGueltig}
-          className="kasten kasten-red h-[40px] w-full text-base"
-        >
-          {sendet && <Loader2 className="h-4 w-4 animate-spin" />}
-          {sendet ? "Wird eingereicht …" : "Beantragen"}
-        </button>
-      </Modal>
+      <AbwesenheitModal open={neuOffen} onClose={() => setNeuOffen(false)} onGesendet={() => { void load(); }} />
 
       {/* Detail-Sheet */}
       <Modal open={offen !== null} onClose={() => !busy && setOffen(null)} title={offen ? TYP_LABEL[offen.type] : undefined} sheet size="md" closable={!busy} bodyClassName="p-[10px] space-y-4">

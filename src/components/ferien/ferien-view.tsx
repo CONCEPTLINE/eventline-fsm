@@ -23,7 +23,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { Modal } from "@/components/ui/modal";
-import { Input } from "@/components/ui/input";
+import { AbwesenheitModal } from "@/components/melden/abwesenheit-modal";
 import { Loading } from "@/components/ui/spinner";
 import { EmptyState } from "@/components/ui/empty-state";
 import {
@@ -132,13 +132,8 @@ export function FerienView() {
   // Client-Rechnung ueber die komplette Historie.
   const [stats, setStats] = useState<{ offen: number; aktuellAbwesend: number; kommend: number } | null>(null);
 
-  // Antrags-Modal
+  // «Abwesenheit melden» (gemeinsames Formular, components/melden).
   const [creating, setCreating] = useState(false);
-  const [newType, setNewType] = useState<TimeOffType>("ferien");
-  const [newStart, setNewStart] = useState("");
-  const [newEnd, setNewEnd] = useState("");
-  const [newNote, setNewNote] = useState("");
-  const [submitting, setSubmitting] = useState(false);
 
   // Decision-Modal (Admin)
   const [deciding, setDeciding] = useState<{ entry: TimeOffWithUser; decision: "genehmigen" | "ablehnen" } | null>(null);
@@ -279,54 +274,6 @@ export function FerienView() {
     return { toApprove, activeUpcoming, past };
   }, [entries, effectiveView, userId]);
 
-  function openCreate() {
-    setNewType("ferien");
-    setNewStart(todayISO());
-    setNewEnd(todayISO());
-    setNewNote("");
-    setCreating(true);
-  }
-
-  async function submitCreate() {
-    if (!newStart || !newEnd) {
-      TOAST.error("Start- und End-Datum sind Pflicht");
-      return;
-    }
-    if (newStart > newEnd) {
-      TOAST.error("Start-Datum muss vor End-Datum liegen");
-      return;
-    }
-    setSubmitting(true);
-    try {
-      const res = await fetch("/api/time-off", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          start_date: newStart,
-          end_date: newEnd,
-          type: newType,
-          note: newNote.trim() || null,
-        }),
-      });
-      const json = await res.json();
-      if (!json.success) {
-        TOAST.errorOr(json.error, "Anlegen fehlgeschlagen");
-        return;
-      }
-      toast.success("Antrag eingereicht");
-      setCreating(false);
-      // Anträge-Punkt (use-nav-counts) im eigenen Tab sofort nachziehen —
-      // Realtime (Migration 316) erreicht nur Genehmiger auf anderen Geraeten.
-      window.dispatchEvent(new Event("time_off:invalidate"));
-      load();
-      loadStats();
-    } catch (err) {
-      TOAST.error(err instanceof Error ? err.message : "Netzwerk-Fehler");
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
   async function deleteEntry(entry: TimeOffWithUser) {
     const ok = await confirm({
       title: "Antrag zurückziehen?",
@@ -412,9 +359,9 @@ export function FerienView() {
             </p>
           </div>
         </div>
-        <button type="button" onClick={openCreate} className="kasten kasten-red shrink-0">
+        <button type="button" onClick={() => setCreating(true)} className="kasten kasten-red shrink-0">
           <Plus className="h-3.5 w-3.5" />
-          Neuer Antrag
+          Abwesenheit melden
         </button>
       </div>
 
@@ -578,99 +525,11 @@ export function FerienView() {
         </div>
       )}
 
-      {/* Antrags-Modal */}
-      <Modal
+      <AbwesenheitModal
         open={creating}
-        onClose={() => !submitting && setCreating(false)}
-        title="Neuer Antrag"
-        icon={<Plane className="h-5 w-5 text-blue-500" />}
-        size="md"
-        closable={!submitting}
-      >
-        <div className="space-y-3">
-          <div>
-            <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Typ</label>
-            <div className="grid grid-cols-2 gap-2 mt-1.5">
-              {(Object.keys(TYPE_META) as TimeOffType[]).map((t) => {
-                const meta = TYPE_META[t];
-                const Icon = meta.icon;
-                const active = newType === t;
-                return (
-                  <button
-                    key={t}
-                    type="button"
-                    onClick={() => setNewType(t)}
-                    className={`px-3 py-2 rounded-lg text-sm flex items-center gap-2 transition-colors ${
-                      active
-                        ? "border-2 border-foreground/30 bg-foreground/5"
-                        : "border border-border hover:bg-muted/50"
-                    }`}
-                  >
-                    <Icon className="h-4 w-4 shrink-0" />
-                    {meta.label}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Von</label>
-              <Input
-                type="date"
-                value={newStart}
-                onChange={(e) => setNewStart(e.target.value)}
-                className="mt-1.5"
-              />
-            </div>
-            <div>
-              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Bis</label>
-              <Input
-                type="date"
-                value={newEnd}
-                onChange={(e) => setNewEnd(e.target.value)}
-                className="mt-1.5"
-              />
-            </div>
-          </div>
-          {newStart && newEnd && newStart <= newEnd && (
-            <p className="text-xs text-muted-foreground">{daysBetween(newStart, newEnd)} Tag(e)</p>
-          )}
-
-          <div>
-            <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Notiz (optional)</label>
-            <textarea
-              value={newNote}
-              onChange={(e) => setNewNote(e.target.value.slice(0, 500))}
-              placeholder="z.B. Italien-Reise, Hochzeit, ..."
-              rows={2}
-              maxLength={500}
-              className="mt-1.5 w-full px-3 py-2 text-sm rounded-lg border border-input bg-background resize-none focus:outline-none focus:ring-2 focus:ring-ring/40"
-            />
-          </div>
-
-          <div className="flex gap-2 pt-2">
-            <button
-              type="button"
-              onClick={() => setCreating(false)}
-              disabled={submitting}
-              className="kasten kasten-muted flex-1"
-            >
-              Abbrechen
-            </button>
-            <button
-              type="button"
-              onClick={submitCreate}
-              disabled={submitting}
-              className="kasten kasten-red flex-1"
-            >
-              <Plus className="h-3.5 w-3.5" />
-              {submitting ? "Speichere…" : "Einreichen"}
-            </button>
-          </div>
-        </div>
-      </Modal>
+        onClose={() => setCreating(false)}
+        onGesendet={() => { load(); loadStats(); }}
+      />
 
       {/* Decision-Modal */}
       <Modal

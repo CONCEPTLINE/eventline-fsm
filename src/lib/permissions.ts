@@ -187,7 +187,7 @@ const ALWAYS_ALLOWED_PREFIXES = ["/dashboard", "/mein-konto", "/ferien"];
  *  /mitarbeiter ist nur noch Weiterleitung dorthin; /sicherheit ist neu die
  *  eigene Admin-Seite (App-Sicherheits-Dashboard) und darum hier admin-only.
  *  - /finanzen: Finanzen Welle 1 ist admin-only (Leo 2026-10-15) — Seite,
- *    Sidebar, Palette, Mehr-Sheet und API (requireAdminTrustedDevice) ziehen
+ *    Sidebar, Palette, Handy-Leiste und API (requireAdminTrustedDevice) ziehen
  *    dieselbe Grenze. Eintrag entfernen, sobald requireFinanzen auf
  *    requireTrustedDevice("finanzen:view") umgestellt wird.
  *  Andere admin-only Bereiche haben ihre eigenen Modul-View-Permissions. */

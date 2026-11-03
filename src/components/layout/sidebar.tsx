@@ -9,6 +9,7 @@ import { NAV_ICON_MAP } from "@/lib/nav-icons";
 import { hasPermission } from "@/lib/permissions";
 import { Logo } from "@/components/logo";
 import { SidebarStempel } from "@/components/stempel/sidebar-stempel";
+import { MeldenMenue } from "@/components/melden/melden-menue";
 import { NotificationsBell } from "@/components/layout/notifications-bell";
 import {
   LogOut,
@@ -281,6 +282,8 @@ export function Sidebar({ profile, permissions, onSignOut }: SidebarProps) {
           ausgestempelt zeigt "Einstempeln"-Button. Steht ueber dem
           Theme-Toggle damit es als prominenter Action-Bereich endet. */}
       <SidebarStempel />
+      {/* «+ Melden»: Beleg, Krank, Abwesenheit, Stempel korrigieren, Anderes. */}
+      <MeldenMenue />
 
       {/* Theme-Toggle (Light/Dark) + Anleitung + Notifications-Glocke.
           Glocke rechts ausgerichtet damit sie immer sichtbar ist. */}

@@ -1,13 +1,17 @@
 "use client";
 
 /**
- * Mein-Konto-Page — User-Self-Service fuer ALLE Rollen.
+ * Mein Konto — der Startpunkt jeder Person (alle Rollen):
  *
- * Aufgeteilt nach Themen (Tabs):
+ * Oben der Hub (KontoHub): Melden (Beleg, Krank, Abwesenheit, Stempel
+ * korrigieren, Anderes), Meine Anfragen (die letzten drei), Stempelzeiten
+ * mit den Stunden des Monats und Lohn mit «n neu».
+ *
+ * Darunter die Konto-Einstellungen als Tabs:
  *  - Profil: Name/Email + Daten-Export (DSG/DSGVO)
+ *  - Sicherheit: Passkeys / Face ID
  *  - Benachrichtigungen: Channel-Matrix + Push + Sound + Quiet Hours
  *  - Kalender: iCal-Feed-Token fuer externen Kalender-Import
- *  - Admin-Space (admin-only): geteilte Notizen aller Admins
  *
  * Vertraute-Geraete-Verwaltung liegt unter Einstellungen › Sicherheit
  * (/einstellungen?tab=sicherheit; Admin-Sicht, sieht alle User-Geraete).
@@ -15,11 +19,8 @@
  * automatisch via TrustedDeviceGate auf sensiblen Seiten.
  *
  * Eigene Lohn-PDFs (Lohnabrechnungen + Lohnausweise) leben unter
- * HR › Lohn (/lohn) — MeineLohndokumenteView. Der frueher hier gehostete
- * "Dokumente"-Tab wurde bewusst dorthin verschoben, damit ALLE
- * HR-Themen (Stempelzeiten, Tickets & Belege, Abwesenheit, Lohn) im
- * selben Bereich landen (2026-09).
- * Legacy-Link ?tab=dokumente wird auf /lohn umgeleitet.
+ * HR › Lohn (/lohn). Legacy-Link ?tab=dokumente wird auf /lohn umgeleitet.
+ * Am Handy rendert die Seite mein-konto-mobil (Hub + Konto-Liste).
  *
  * Verfuegbarkeit: ALLE authenticated User (kein Permission-Gate).
  */
@@ -35,6 +36,7 @@ import { PasskeysCard } from "@/components/einstellungen/passkeys-card";
 import { TabsNav } from "@/components/ui/tabs-nav";
 import { MeinKontoMobil } from "@/components/mobile/mein-konto-mobil";
 import { useIsMobile } from "@/lib/use-is-mobile";
+import { KontoHub } from "@/components/mein-konto/konto-hub";
 import Loading from "./loading";
 
 type Tab = "profil" | "sicherheit" | "benachrichtigungen" | "kalender";
@@ -99,20 +101,25 @@ export default function MeinKontoPage() {
   if (isMobile) return <MeinKontoMobil />;
 
   return (
-    <div>
-      <div className="mb-8">
+    <div className="page-enter">
+      <div className="mb-6">
         <h1 className="text-2xl font-bold tracking-tight">Mein Konto</h1>
         <p className="text-sm text-muted-foreground mt-1">
-          Persönliche Einstellungen — gilt nur für dich, nicht für die ganze Firma.
+          Melden, deine Anfragen, Stunden und Lohn — und deine persönlichen Einstellungen.
         </p>
       </div>
 
+      <div className="mb-10">
+        <KontoHub breit />
+      </div>
+
+      <h2 className="mb-2 px-1 text-[12px] font-bold uppercase tracking-wider text-muted-foreground">Einstellungen</h2>
       <TabsNav
         tabs={tabs}
         active={tab}
         onChange={(k) => selectTab(k as Tab)}
         ariaLabel="Konto-Bereiche"
-        className="mb-12"
+        className="mb-8"
       />
 
       {tab === "profil" && (

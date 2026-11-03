@@ -1,7 +1,9 @@
 // POST /api/tickets/notify — In-App-Notification fuer Ticket-Events.
 // Events:
 //   "created"          → an alle User mit 'tickets:manage' (Admin +
-//                        Custom-Rollen mit dieser Permission)
+//                        Custom-Rollen mit dieser Permission); bei Belegen
+//                        bekommt die Person «abgesprochen mit» eine eigene
+//                        Nachricht (notifyBelegAbgesprochen)
 //   "status_changed"   → an Ersteller (Manager hat erledigt/abgelehnt)
 //
 // Notifications gehen via zentralem NotificationService, der die
@@ -14,7 +16,9 @@ import {
   notifyTicketNew,
   notifyTicketDone,
   notifyTicketRejected,
+  notifyBelegAbgesprochen,
 } from "@/lib/notification-service";
+import { personenMitRecht } from "@/lib/rechte-empfaenger";
 
 export async function POST(request: Request) {
   const auth = await requireInternal();
@@ -29,7 +33,7 @@ export async function POST(request: Request) {
 
   const { data: ticket } = await admin
     .from("tickets")
-    .select("id, type, status, title, ticket_number, created_by, creator:profiles!created_by(full_name)")
+    .select("id, type, status, title, ticket_number, created_by, data, creator:profiles!created_by(full_name)")
     .eq("id", body.ticket_id)
     .maybeSingle();
 
@@ -44,25 +48,30 @@ export async function POST(request: Request) {
     title: string;
     ticket_number: number;
     created_by: string;
+    data: { genehmigt_von_user_id?: unknown; betrag_chf?: unknown } | null;
     creator: { full_name: string } | { full_name: string }[] | null;
   };
   const t = ticket as unknown as TicketRow;
   const creatorName = Array.isArray(t.creator) ? t.creator[0]?.full_name : t.creator?.full_name;
 
   if (body.event === "created") {
-    // Empfaenger = alle aktiven Profile mit einer Rolle, die
-    // 'tickets:manage' hat (admin-Rolle bekommt das immer, Custom-Rollen
-    // via Rollen-Matrix). Kein hardcoded role='admin' mehr — sonst
-    // wuerde eine Teamleiter-Rolle mit 'tickets:manage' keine
-    // Benachrichtigungen fuer neue Tickets bekommen.
-    const { data: rolesRes } = await admin.from("roles").select("slug, permissions");
-    const managerSlugs = ((rolesRes ?? []) as { slug: string; permissions: unknown }[])
-      .filter((r) => r.slug === "admin" || (Array.isArray(r.permissions) && (r.permissions as string[]).includes("tickets:manage")))
-      .map((r) => r.slug);
-    const recipients = managerSlugs.length > 0
-      ? await admin.from("profiles").select("id").in("role", managerSlugs).eq("is_active", true)
-      : { data: [] as { id: string }[] };
-    const recipientIds = (recipients.data ?? []).map((a) => a.id).filter((id) => id !== t.created_by);
+    // Empfaenger = alle aktiven internen Konten mit 'tickets:manage'
+    // (Admins immer, Custom-Rollen via Rollen-Matrix) — personenMitRecht.
+    const manager = await personenMitRecht(admin, "tickets:manage");
+    let recipientIds = manager.map((m) => m.id).filter((id) => id !== t.created_by);
+
+    // Beleg «abgesprochen mit»: diese Person bekommt eine eigene Nachricht
+    // (statt der allgemeinen), damit sie weiss, dass es um ihre Absprache geht.
+    const abgesprochenMit = t.type === "beleg" ? t.data?.genehmigt_von_user_id : undefined;
+    if (typeof abgesprochenMit === "string" && abgesprochenMit !== t.created_by) {
+      recipientIds = recipientIds.filter((id) => id !== abgesprochenMit);
+      await notifyBelegAbgesprochen(admin, {
+        recipients: [abgesprochenMit],
+        ticketId: t.id,
+        betragChf: typeof t.data?.betrag_chf === "number" ? t.data.betrag_chf : null,
+        byName: creatorName ?? "Unbekannt",
+      });
+    }
 
     await notifyTicketNew(admin, {
       recipients: recipientIds,

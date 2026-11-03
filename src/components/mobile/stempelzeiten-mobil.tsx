@@ -9,8 +9,8 @@
  *                 laufend teal «08:02 – läuft»; Pille «nicht gesendet» (amber)
  *                 fuer Aktionen, die noch in der Offline-Warteschlange stehen;
  *                 Pille «gesperrt» (grau) nach Abrechnungssperre.
- *   Tipp → Sheet  Details + «Stempel-Änderung melden» (Stempel-Ticket mit
- *                 Vorbelegung wie das Desktop-«Korrigieren»); «Löschen» nur
+ *   Tipp → Sheet  Details + «Stempel korrigieren» (Formular mit Vorbelegung
+ *                 wie das Desktop-«Korrigieren», MeldenHost); «Löschen» nur
  *                 stempelzeiten:edit-all.
  *
  * Kein Personen-Umschalter, keine Kennzahl-Kaesten, kein Export (Konzept §3).
@@ -44,7 +44,7 @@ import { Modal } from "@/components/ui/modal";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useConfirm } from "@/components/ui/use-confirm";
-import { NewTicketModal } from "@/components/tickets/new-ticket-modal";
+import { oeffneMelden } from "@/lib/melden";
 import { LadeFehler } from "@/components/mobile/lade-fehler";
 
 const MONAT_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
@@ -285,7 +285,6 @@ export function StempelzeitenMobil() {
   }, [schluessel]);
 
   const [offen, setOffen] = useState<Zeile | null>(null);
-  const [ticketFuer, setTicketFuer] = useState<Zeile | null>(null);
   const [loescht, setLoescht] = useState(false);
   const [now, setNow] = useState(() => Date.now());
 
@@ -385,7 +384,7 @@ export function StempelzeitenMobil() {
 
   function aenderungMelden(z: Zeile) {
     setOffen(null);
-    setTicketFuer(z);
+    oeffneMelden("stempel", { stempel: { timeEntryId: z.id, clockIn: z.clockIn, clockOut: z.clockOut, jobId: z.jobId } });
   }
 
   async function loeschen(z: Zeile) {
@@ -518,7 +517,7 @@ export function StempelzeitenMobil() {
               <p className="rounded-xl bg-amber-50 px-3 py-2 text-[12px] font-medium text-amber-800 dark:bg-amber-500/15 dark:text-amber-200">
                 {!offen.clockOut
                   ? endeGesperrtMeldung(offen.clockIn)
-                  : `${TIME_ENTRY_LOCK_MESSAGE} — Änderungen setzt die Lohnverwaltung per Antrag (Ticket «Stempel-Änderung»).`}
+                  : `${TIME_ENTRY_LOCK_MESSAGE} — «Stempel korrigieren» geht trotzdem, die Lohnverwaltung setzt es mit zweiter Bestätigung um.`}
               </p>
             )}
 
@@ -528,7 +527,7 @@ export function StempelzeitenMobil() {
                 onClick={() => aenderungMelden(offen)}
                 className="kasten kasten-red h-[40px] w-full text-base"
               >
-                Stempel-Änderung melden
+                Stempel korrigieren
               </button>
             )}
             {offen.gesendet && !offen.gesperrt && canEditAll && (
@@ -548,23 +547,6 @@ export function StempelzeitenMobil() {
 
       {ConfirmModalElement}
 
-      <NewTicketModal
-        open={ticketFuer !== null}
-        onClose={() => setTicketFuer(null)}
-        onCreated={() => {
-          setTicketFuer(null);
-          toast.success("Ticket erstellt — Admin wurde benachrichtigt");
-          void load();
-        }}
-        initialType="stempel_aenderung"
-        initialData={ticketFuer ? {
-          timeEntryId: ticketFuer.id,
-          clockIn: ticketFuer.clockIn,
-          clockOut: ticketFuer.clockOut,
-          jobId: ticketFuer.jobId,
-        } : undefined}
-        sheet
-      />
     </div>
   );
 }

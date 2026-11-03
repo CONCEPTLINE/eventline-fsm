@@ -10,39 +10,17 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import dynamic from "next/dynamic";
-import { Clock, Square, Briefcase, FileText, Ticket, Loader2, CloudOff } from "lucide-react";
+import { Clock, Square, Briefcase, FileText, Loader2, CloudOff } from "lucide-react";
 import { useStempel, formatStempelDuration, stempelErfolgText } from "@/lib/use-stempel";
 import { StempelModal } from "./stempel-modal";
 import { RateTierLiveSwitcher } from "./rate-tier-live-switcher";
 import { UebertragungenSheet } from "@/components/mobile/uebertragungen-sheet";
-import { usePermissions } from "@/lib/use-permissions";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
 
-// NewTicketModal (groesste layout-geteilte Komponente, ~62 KB Quelle) via
-// next/dynamic + Conditional-Mount: vorher hing sie statisch im Layout-Chunk
-// jeder Seite UND feuerte beim Mount ihre Lade-Queries, obwohl sie nur nach
-// Klick auf den Ticket-Button oeffnet. Jetzt laedt der Chunk erst bei
-// showTicket; der loading-Fallback zeigt sofort den Modal-Backdrop mit
-// Spinner (CLAUDE.md §7 — kein toter Klick waehrend der Chunk laedt).
-const NewTicketModal = dynamic(
-  () => import("@/components/tickets/new-ticket-modal").then((m) => m.NewTicketModal),
-  {
-    ssr: false,
-    loading: () => (
-      <div className="fixed inset-0 z-[1100] bg-black/60 backdrop-blur flex items-center justify-center">
-        <Loader2 className="h-6 w-6 animate-spin text-white" />
-      </div>
-    ),
-  },
-);
-
 export function SidebarStempel() {
   const { active, loading, clockOut, ausstehend, queue, online } = useStempel();
-  const { can } = usePermissions();
   const [showModal, setShowModal] = useState(false);
-  const [showTicket, setShowTicket] = useState(false);
   const [showUebertragungen, setShowUebertragungen] = useState(false);
   const [uebertragungenHovered, setUebertragungenHovered] = useState(false);
   const [now, setNow] = useState(() => Date.now());
@@ -53,13 +31,7 @@ export function SidebarStempel() {
   // Sperre gegen Doppelklick: ein zweites clockOut() mit demselben Eintrag
   // traefe am Server 0 Zeilen und meldete faelschlich «anderswo ausgestempelt».
   const [stopBusy, setStopBusy] = useState(false);
-  const [ticketHovered, setTicketHovered] = useState(false);
   const supabase = createClient();
-  // Ticket-Button ist ein sekundaerer Trigger neben dem Einstempeln-Button.
-  // Nur sichtbar wenn der User Tickets erstellen darf — Admins passen via
-  // has_permission() automatisch durch. Icon-only + data-tooltip haelt die
-  // Sidebar kompakt (Grundregel: less but intuitive).
-  const canTicket = can("tickets:create");
 
   useEffect(() => {
     if (!active) return;
@@ -214,30 +186,6 @@ export function SidebarStempel() {
           </button>
         )}
         </div>
-        {/* Sekundaerer Trigger: Stempel-Aenderungs-Ticket. Icon-only + Tooltip
-            damit die Sidebar kompakt bleibt. Sichtbar in beiden Zustaenden
-            (aktiv + idle) — der User will genau dann eine Korrektur, wenn
-            was schief lief. self-stretch matched die Hoehe der Pille/des
-            Einstempeln-Buttons. */}
-        {canTicket && (
-          <button
-            type="button"
-            onClick={() => setShowTicket(true)}
-            onMouseEnter={() => setTicketHovered(true)}
-            onMouseLeave={() => setTicketHovered(false)}
-            aria-label="Stempel-Änderung anfragen"
-            data-tooltip="Stempel-Änderung anfragen"
-            className="shrink-0 self-stretch w-10 flex items-center justify-center rounded-xl"
-            style={{
-              transition: "background-color 180ms, color 180ms, border-color 180ms",
-              border: `2px solid ${ticketHovered ? "var(--stempel-color, #14b8a6)" : "rgba(20,184,166,0.35)"}`,
-              backgroundColor: ticketHovered ? "rgba(20,184,166,0.18)" : "rgba(20,184,166,0.06)",
-              color: ticketHovered ? "rgb(15,118,110)" : "rgb(20,184,166)",
-            }}
-          >
-            <Ticket className="h-4 w-4" />
-          </button>
-        )}
       </div>
 
       {/* Wartende Uebertragungen (Desktop-Einstieg, eine Textzeile): muted,
@@ -270,18 +218,6 @@ export function SidebarStempel() {
 
       <StempelModal open={showModal} onClose={() => setShowModal(false)} />
       <UebertragungenSheet open={showUebertragungen} onClose={() => setShowUebertragungen(false)} />
-      {/* Conditional-Mount: Chunk + Lade-Queries erst beim Oeffnen. */}
-      {showTicket && (
-        <NewTicketModal
-          open={showTicket}
-          onClose={() => setShowTicket(false)}
-          onCreated={() => {
-            setShowTicket(false);
-            toast.success("Ticket erstellt — Admin wurde benachrichtigt");
-          }}
-          initialType="stempel_aenderung"
-        />
-      )}
     </>
   );
 }

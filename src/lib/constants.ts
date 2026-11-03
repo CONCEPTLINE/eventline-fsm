@@ -76,8 +76,8 @@ export const USER_ROLES = {
 
 // === NAVIGATION (single source of truth) ===
 // Adding/changing nav items: edit ONLY this file.
-// Sidebar, Bottom-Nav und Befehlspalette lesen NAV_GROUPS; das Mehr-Sheet
-// am Handy hat seine eigene, bewusst kurze Liste in src/lib/mobile-seiten.ts.
+// Sidebar, Bottom-Nav und Befehlspalette lesen NAV_GROUPS; der Handy-Hub
+// «Mein Konto» verlinkt Aufträge/Locations selbst (mein-konto-mobil.tsx).
 // Icons resolve via src/lib/nav-icons.ts — add new icons there.
 
 export interface NavItem {
@@ -148,8 +148,8 @@ export const NAV_GROUPS: NavGroup[] = [
       // Umwandlung in echten Auftrag als bewusster Schritt. Liegt bewusst
       // ueber "Aufträge", weil Entwuerfe der Vorstufe in der Pipeline sind.
       { href: "/entwuerfe", label: "Entwürfe", icon: "FileEdit" },
-      // Am Handy im Mehr-Sheet (Mobile-Overhaul 2026-10): die Bottom-Nav hat
-      // fuenf feste Plaetze — Dashboard, Todos, Stempeln, Kalender, Mehr.
+      // Am Handy unter Mein Konto › Arbeit: die Bottom-Nav hat
+      // fuenf feste Plaetze — Dashboard, Todos, Stempeln, Kalender, Mein Konto.
       { href: "/auftraege", label: "Aufträge", icon: "ClipboardList" },
       // Projekte (intern, Stunden-Budget) bleiben fachlich getrennt von
       // Auftraegen — eigene Seite, eigene Daten; nur die Gruppe ist gemeinsam.

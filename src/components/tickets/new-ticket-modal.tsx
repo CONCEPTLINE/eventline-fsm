@@ -1,15 +1,14 @@
 "use client";
 
 /**
- * Modal zum Erstellen eines neuen Tickets.
+ * Formular fuer Beleg, Stempel korrigieren, IT-Problem und Material — EINE
+ * Quelle fuer die Sende-Logik.
  *
- * Hero + Sekundaer: Modal oeffnet direkt im Stempel-Aenderungs-Formular,
- * weil ~90% aller Tickets Stempel-Korrekturen sind. Oben ein schmaler
- * Chip-Toggle (Stempel-Aenderung | IT | Beleg | Material) statt eines
- * vollen Picker-Screens — 0 Klicks fuer den 90%-Fall, 1 Klick fuer die 10%.
- *
- * Wird der Modal mit initialType geoeffnet (z.B. aus /stempelzeiten Row-
- * "Korrigieren"), entfaellt der Chip-Toggle — der Kontext ist eindeutig.
+ * Mitarbeiter oeffnen es ueber «Melden» (lib/melden.ts → MeldenHost) immer
+ * mit festem Typ (initialType): keine Typ-Auswahl, kein Titel-Feld bei Beleg
+ * und Stempel. «Anderes melden» uebergibt typen=["it","material"] und zeigt
+ * nur diese zwei als Chips. Ohne initialType/typen (Bearbeitungs-Ansicht
+ * /tickets fuer tickets:manage) gibt es die Chips fuer alle vier Typen.
  *
  * Beim Submit:
  *   1. INSERT in tickets (mit type, title, description, priority, data)
@@ -28,12 +27,13 @@ import type { TypePickerTone } from "@/components/ui/type-picker-card";
 import { createClient } from "@/lib/supabase/client";
 import { localDateIso, localTimeHM } from "@/lib/swiss-time";
 import { toast } from "sonner";
-import { Wrench, Receipt, Clock, Package, Upload, X, CheckCircle2, AlertCircle, Loader2, AlertTriangle, Sparkles, Plus, Lock } from "lucide-react";
+import { Wrench, Receipt, Clock, Package, Upload, X, CheckCircle2, AlertCircle, Loader2, AlertTriangle, Sparkles, Plus, Lock, Camera } from "lucide-react";
 import { isTimeEntryLocked } from "@/lib/time-lock";
 import { findeUeberlappung, istLang, LANG_STUNDEN, ueberlappungsMeldung, zeitEingabeFehler, zuerichZuIso } from "@/lib/stempel-meldungen";
 import type { TicketType } from "@/types";
-import { PORTAL_ROLLEN_IN } from "@/lib/roles";
 import { JOB_STATUS_VORSTUFEN } from "@/lib/constants";
+import { anfragenGeaendert } from "@/lib/melden";
+import { useIsMobile } from "@/lib/use-is-mobile";
 
 /** Kontext-Typ fuer den gestempelten Zeitraum: externer Auftrag, internes
  *  Projekt (Zeit-Budget), oder freie "Andere Arbeit" (kein Kontext-Objekt).
@@ -117,6 +117,9 @@ interface Props {
   };
   /** Am Handy als Bottom-Sheet rendern (wird 1:1 an <Modal sheet> gereicht). */
   sheet?: boolean;
+  /** Nur diese Typen als Chips anbieten (z. B. «Anderes melden»: IT +
+   *  Material). Erster Eintrag = Vorauswahl. */
+  typen?: TicketType[];
 }
 
 const TYPES: { id: TicketType; label: string; description: string; icon: React.ComponentType<{ className?: string }>; tone: TypePickerTone }[] = [
@@ -129,6 +132,14 @@ const TYPES: { id: TicketType; label: string; description: string; icon: React.C
 /** Default-Titel je Typ — Stempel/Beleg/Material bekommen den Titel
  *  vorbelegt, damit der User nicht jedes Mal tippen muss. IT bleibt leer,
  *  weil der Titel dort tatsaechlich das Problem beschreibt. */
+/** Kopf des Formulars bei festem Typ — Mitarbeiter-Woerter. */
+const MELDEN_TITEL: Record<TicketType, string> = {
+  beleg: "Beleg melden",
+  stempel_aenderung: "Stempel korrigieren",
+  it: "IT-Problem melden",
+  material: "Material anfragen",
+};
+
 function defaultTitleFor(t: TicketType): string {
   if (t === "beleg") return "Beleg-Erstattung";
   if (t === "stempel_aenderung") return "Stempelzeit-Änderung";
@@ -136,17 +147,20 @@ function defaultTitleFor(t: TicketType): string {
   return "";
 }
 
-export function NewTicketModal({ open, onClose, onCreated, initialType, initialData, sheet }: Props) {
+export function NewTicketModal({ open, onClose, onCreated, initialType, initialData, sheet, typen }: Props) {
   const supabase = createClient();
-  // Hero-Default: Stempel-Aenderung (90%-Fall). initialType, wenn gesetzt,
-  // hat Vorrang (z.B. Sidebar-/Widget-/Row-Trigger).
-  const defaultType: TicketType = initialType ?? "stempel_aenderung";
+  const isMobile = useIsMobile();
+  // Vorauswahl: fester Typ (Melden) > erster der angebotenen Typen >
+  // Stempel-Aenderung (haeufigster Fall in der Bearbeitungs-Ansicht).
+  const defaultType: TicketType = initialType ?? typen?.[0] ?? "stempel_aenderung";
+  // Chips nur, wenn es etwas zu waehlen gibt.
+  const chipTypen = TYPES.filter((t) => (typen ? typen.includes(t.id) : !initialType));
   const [type, setType] = useState<TicketType>(defaultType);
   const [saving, setSaving] = useState(false);
   const [files, setFiles] = useState<File[]>([]);
 
   // Gemeinsame Felder.
-  const [title, setTitle] = useState("");
+  const [title, setTitle] = useState(() => defaultTitleFor(defaultType));
   const [description, setDescription] = useState("");
   const [urgent, setUrgent] = useState(false);
 
@@ -157,8 +171,14 @@ export function NewTicketModal({ open, onClose, onCreated, initialType, initialD
   const [belegApprovalSource, setBelegApprovalSource] = useState<"person" | "ticket">("person");
   const [belegApprovalUserId, setBelegApprovalUserId] = useState("");
   const [belegApprovalTicketId, setBelegApprovalTicketId] = useState("");
-  // Profile-Liste fuer Person-Picker, Material-Tickets fuer Ticket-Picker.
-  const [profilesForApproval, setProfilesForApproval] = useState<Array<{ id: string; full_name: string; role: string }>>([]);
+  // «Für Auftrag» (optional). Mit Auftrag ist «Abgesprochen mit» freiwillig.
+  const [belegAuftragId, setBelegAuftragId] = useState("");
+  // Auswahl aus /api/melden/beleg-optionen: wer Belege freigeben darf
+  // (tickets:manage, Admins inkl.) und die eigenen Einsaetze.
+  const [belegOptionen, setBelegOptionen] = useState<{
+    abgesprochen: Array<{ id: string; full_name: string }>;
+    auftraege: Array<{ id: string; job_number: number; title: string; project_lead_id: string | null }>;
+  }>({ abgesprochen: [], auftraege: [] });
   const [erledigteMaterialTickets, setErledigteMaterialTickets] = useState<Array<{ id: string; ticket_number: number; title: string }>>([]);
   // KI-Analyse-State fuer Beleg: laeuft beim ersten File-Pick.
   const [analyzing, setAnalyzing] = useState(false);
@@ -215,6 +235,7 @@ export function NewTicketModal({ open, onClose, onCreated, initialType, initialD
       setBelegApprovalSource("person");
       setBelegApprovalUserId("");
       setBelegApprovalTicketId("");
+      setBelegAuftragId("");
       setAnalyzing(false);
       setAnalysisIssues([]);
       setAnalysisDone(false);
@@ -314,17 +335,34 @@ export function NewTicketModal({ open, onClose, onCreated, initialType, initialD
     })();
   }, [type, supabase]);
 
-  // Beleg: Profile-Liste + erledigte Material-Tickets fuer Genehmigung-Picker.
+  // Beleg: Auswahl (Abgesprochen mit, eigene Auftraege, Vorschlag) +
+  // erledigte Material-Tickets als Alternative zur Absprache.
   useEffect(() => {
-    if (type !== "beleg") return;
+    if (type !== "beleg" || !open) return;
+    let abgebrochen = false;
     (async () => {
-      const { data: profs } = await supabase
-        .from("profiles")
-        .select("id, full_name, role")
-        .eq("is_active", true)
-        .not("role", "in", PORTAL_ROLLEN_IN)
-        .order("full_name");
-      if (profs) setProfilesForApproval(profs as typeof profilesForApproval);
+      try {
+        const res = await fetch("/api/melden/beleg-optionen", { cache: "no-store" });
+        const json = await res.json().catch(() => ({}));
+        if (abgebrochen) return;
+        if (!json.success) {
+          toast.error(json.error ?? "Auswahl konnte nicht geladen werden");
+        } else {
+          const opt = { abgesprochen: json.abgesprochen ?? [], auftraege: json.auftraege ?? [] } as typeof belegOptionen;
+          setBelegOptionen(opt);
+          // Vorbelegen: Auftrag des heutigen/letzten Einsatzes und dessen
+          // Projektleitung (wenn sie Belege freigeben darf) — nur wenn der
+          // Nutzer noch nichts gewaehlt hat.
+          const vorschlag = typeof json.vorschlag_auftrag_id === "string" ? json.vorschlag_auftrag_id : "";
+          if (vorschlag) {
+            setBelegAuftragId((alt) => alt || vorschlag);
+            const lead = opt.auftraege.find((j) => j.id === vorschlag)?.project_lead_id;
+            if (lead && opt.abgesprochen.some((p) => p.id === lead)) setBelegApprovalUserId((alt) => alt || lead);
+          }
+        }
+      } catch (e) {
+        if (!abgebrochen) toast.error(e instanceof Error ? e.message : "Auswahl konnte nicht geladen werden");
+      }
 
       const { data: mats } = await supabase
         .from("tickets")
@@ -333,10 +371,19 @@ export function NewTicketModal({ open, onClose, onCreated, initialType, initialD
         .eq("status", "erledigt")
         .order("created_at", { ascending: false })
         .limit(50);
-      if (mats) setErledigteMaterialTickets(mats as typeof erledigteMaterialTickets);
+      if (mats && !abgebrochen) setErledigteMaterialTickets(mats as typeof erledigteMaterialTickets);
     })();
+    return () => { abgebrochen = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [type, supabase]);
+  }, [type, open, supabase]);
+
+  /** Auftrag wechseln: dessen Projektleitung als Absprache vorschlagen,
+   *  wenn sie in der Liste steht. */
+  function waehleBelegAuftrag(id: string) {
+    setBelegAuftragId(id);
+    const lead = belegOptionen.auftraege.find((j) => j.id === id)?.project_lead_id;
+    if (lead && belegOptionen.abgesprochen.some((p) => p.id === lead)) setBelegApprovalUserId(lead);
+  }
 
   // Jobs fuer Stempel-/Material-Form laden.
   // Stempel-Aenderung: alle Stati inkl. abgeschlossen/storniert (=archiviert),
@@ -537,8 +584,10 @@ export function NewTicketModal({ open, onClose, onCreated, initialType, initialD
       if (files.length === 0) return "Beleg-Foto oder PDF ist Pflicht — bitte Datei hochladen";
       if (!beleg.betrag_chf || isNaN(parseFloat(beleg.betrag_chf))) return "Betrag fehlt";
       if (!beleg.kaufdatum) return "Kaufdatum fehlt";
-      if (belegApprovalSource === "person" && !belegApprovalUserId) return "Wer hat den Kauf genehmigt? Bitte Person auswählen.";
-      if (belegApprovalSource === "ticket" && !belegApprovalTicketId) return "Bitte das Material-Ticket auswählen das den Kauf genehmigt hat.";
+      if (belegApprovalSource === "person" && !belegApprovalUserId && !belegAuftragId) {
+        return "Mit wem hast du den Kauf abgesprochen? Ohne Auftrag ist das Pflicht.";
+      }
+      if (belegApprovalSource === "ticket" && !belegApprovalTicketId) return "Bitte die Material-Anfrage auswählen, die den Kauf freigegeben hat.";
     }
     if (type === "stempel_aenderung") {
       if (!stempel.grund.trim()) return "Grund ist Pflicht";
@@ -607,7 +656,8 @@ export function NewTicketModal({ open, onClose, onCreated, initialType, initialD
           betrag_chf: parseFloat(beleg.betrag_chf),
           kaufdatum: beleg.kaufdatum,
           lieferant: beleg.lieferant || undefined,
-          genehmigt_von_user_id: belegApprovalSource === "person" ? belegApprovalUserId : undefined,
+          auftrag_id: belegAuftragId || undefined,
+          genehmigt_von_user_id: belegApprovalSource === "person" && belegApprovalUserId ? belegApprovalUserId : undefined,
           genehmigt_via_ticket_id: belegApprovalSource === "ticket" ? belegApprovalTicketId : undefined,
         };
       } else if (type === "stempel_aenderung") {
@@ -700,7 +750,12 @@ export function NewTicketModal({ open, onClose, onCreated, initialType, initialD
         body: JSON.stringify({ ticket_id: created.id, event: "created" }),
       }).catch(() => {});
 
-      toast.success("Ticket eingereicht");
+      toast.success(
+        type === "beleg" ? "Beleg gesendet"
+          : type === "stempel_aenderung" ? "Korrektur gesendet"
+            : "Meldung gesendet",
+      );
+      anfragenGeaendert();
       onCreated();
       onClose();
     } catch (e) {
@@ -710,12 +765,16 @@ export function NewTicketModal({ open, onClose, onCreated, initialType, initialD
     }
   }
 
-  // Header-Titel: bei initialType (Kontext-Trigger) den spezifischen Typ-
-  // Label zeigen, sonst neutral "Neues Ticket" — die Chips oben zeigen,
-  // welcher Typ aktiv ist.
+  // Kopf: bei festem Typ das Mitarbeiter-Wort (melden/korrigieren), bei
+  // «Anderes melden» neutral, in der Bearbeitungs-Ansicht «Neues Ticket».
   const modalTitle = initialType
-    ? (TYPES.find((t) => t.id === type)?.label ?? "Neues Ticket")
-    : "Neues Ticket";
+    ? MELDEN_TITEL[type]
+    : typen
+      ? "Anderes melden"
+      : "Neues Ticket";
+  // Titel-Feld nur, wo es etwas beschreibt (IT/Material bzw. Bearbeitungs-
+  // Ansicht); Beleg und Stempel bekommen den Standard-Titel.
+  const zeigeTitel = !(initialType === "beleg" || initialType === "stempel_aenderung");
 
   // datetime-local-Strings ('YYYY-MM-DDTHH:MM') in Datum + Uhrzeit
   // splitten — fuer separate <input type=date> und <ZeitFeld> (Uhrzeit).
@@ -747,22 +806,52 @@ export function NewTicketModal({ open, onClose, onCreated, initialType, initialD
     <div className="space-y-1">
       <p className="text-[10px] text-muted-foreground/70 ml-1">
         {type === "beleg"
-          ? "Beleg-Foto oder PDF *"
+          ? "Foto des Belegs *"
           : type === "material"
             ? "Warenkorb-Screenshot *"
             : "Anhänge"}
       </p>
-      <label className="kasten kasten-muted cursor-pointer w-full justify-center">
-        <Upload className="h-3.5 w-3.5" />
-        Datei wählen (Bild oder PDF)
-        <input
-          type="file"
-          multiple
-          accept="image/*,application/pdf"
-          onChange={handleFiles}
-          className="hidden"
-        />
-      </label>
+      {type === "beleg" && isMobile ? (
+        // Handy: Beleg = Foto. Die Kamera oeffnet direkt (capture), Galerie
+        // oder PDF bleiben als zweite Moeglichkeit.
+        <div className="space-y-2">
+          <label className="kasten kasten-red cursor-pointer w-full h-[40px] justify-center text-base">
+            <Camera className="h-4 w-4" />
+            {files.length > 0 ? "Weiteres Foto" : "Foto aufnehmen"}
+            <input
+              type="file"
+              accept="image/*"
+              capture="environment"
+              onChange={handleFiles}
+              className="hidden"
+              data-testid="beleg-kamera"
+            />
+          </label>
+          <label className="kasten kasten-muted cursor-pointer w-full h-[34px] justify-center text-[13px]">
+            <Upload className="h-3.5 w-3.5" />
+            Aus Galerie/PDF
+            <input
+              type="file"
+              multiple
+              accept="image/*,application/pdf"
+              onChange={handleFiles}
+              className="hidden"
+            />
+          </label>
+        </div>
+      ) : (
+        <label className="kasten kasten-muted cursor-pointer w-full justify-center">
+          <Upload className="h-3.5 w-3.5" />
+          Datei wählen (Bild oder PDF)
+          <input
+            type="file"
+            multiple
+            accept="image/*,application/pdf"
+            onChange={handleFiles}
+            className="hidden"
+          />
+        </label>
+      )}
       {files.length > 0 && (
         <div className="space-y-1.5 mt-2">
           {files.map((f, i) => (
@@ -817,9 +906,9 @@ export function NewTicketModal({ open, onClose, onCreated, initialType, initialD
               wurde (nicht ueber einen Kontext-Trigger mit initialType).
               Aktiver Typ ist visuell hervorgehoben (rote Akzent-Border),
               Klick wechselt das Formular ohne Zwischen-Screen. */}
-          {!initialType && (
+          {chipTypen.length > 1 && (
             <div className="flex flex-wrap gap-1.5">
-              {TYPES.map((t) => {
+              {chipTypen.map((t) => {
                 const Icon = t.icon;
                 const active = type === t.id;
                 return (
@@ -844,7 +933,7 @@ export function NewTicketModal({ open, onClose, onCreated, initialType, initialD
           )}
 
           {/* Titel + Dringend-Toggle (gleicher Stil wie Auftrag-Form). */}
-          <div className="space-y-1">
+          {zeigeTitel && <div className="space-y-1">
             <div className="flex items-center justify-between">
               <p className="text-[10px] text-muted-foreground/70 ml-1">Titel *</p>
               <button
@@ -863,7 +952,7 @@ export function NewTicketModal({ open, onClose, onCreated, initialType, initialD
               </button>
             </div>
             <Input value={title} onChange={(e) => setTitle(e.target.value)} />
-          </div>
+          </div>}
 
           {/* Beleg/Material: File-Upload zuerst, damit KI-Analyse die
               Felder ausfuellen kann bevor der User selbst tippt. */}
@@ -902,58 +991,76 @@ export function NewTicketModal({ open, onClose, onCreated, initialType, initialD
                   <Input type="date" value={beleg.kaufdatum} onChange={(e) => setBeleg({ ...beleg, kaufdatum: e.target.value })} disabled={analyzing} />
                 </div>
                 <div className="space-y-1 col-span-2">
-                  <p className="text-[10px] text-muted-foreground/70 ml-1">Lieferant / Geschäft</p>
+                  <p className="text-[10px] text-muted-foreground/70 ml-1">Geschäft</p>
                   <Input value={beleg.lieferant} onChange={(e) => setBeleg({ ...beleg, lieferant: e.target.value })} placeholder="z.B. Conrad, Migros" disabled={analyzing} />
                 </div>
               </div>
 
-              {/* Genehmigung — Person ODER Material-Ticket. */}
-              <div className="space-y-2">
-                <p className="text-[10px] text-muted-foreground/70 ml-1">Genehmigung *</p>
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setBelegApprovalSource("person")}
-                    className={belegApprovalSource === "person" ? "kasten-active flex-1" : "kasten-toggle-off flex-1"}
-                  >
-                    Person
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setBelegApprovalSource("ticket")}
-                    className={belegApprovalSource === "ticket" ? "kasten-active flex-1" : "kasten-toggle-off flex-1"}
-                  >
-                    Material-Ticket
-                  </button>
-                </div>
-                {belegApprovalSource === "person" && (
+              {/* Für Auftrag (optional, vorbelegt mit dem heutigen bzw.
+                  letzten Einsatz) + Absprache. Mit Auftrag ist die Absprache
+                  freiwillig, ohne Pflicht. Alternative: eine erledigte
+                  Material-Anfrage hat den Kauf schon freigegeben. */}
+              <div className="space-y-1">
+                <p className="text-[10px] text-muted-foreground/70 ml-1">Für Auftrag (optional)</p>
+                <SearchableSelect
+                  value={belegAuftragId}
+                  onChange={waehleBelegAuftrag}
+                  items={[
+                    { id: "", label: "Kein Auftrag" },
+                    ...belegOptionen.auftraege.map((j) => ({ id: j.id, label: `INT-${j.job_number} — ${j.title}` })),
+                  ]}
+                  placeholder="Kein Auftrag"
+                  clearable={false}
+                />
+              </div>
+
+              {belegApprovalSource === "person" ? (
+                <div className="space-y-1">
+                  <p className="text-[10px] text-muted-foreground/70 ml-1">
+                    Abgesprochen mit {belegAuftragId ? "(optional)" : "*"}
+                  </p>
                   <SearchableSelect
                     value={belegApprovalUserId}
                     onChange={setBelegApprovalUserId}
-                    items={profilesForApproval.map((p) => ({ id: p.id, label: p.full_name }))}
-                    placeholder="Wer hat den Kauf genehmigt?"
+                    items={[
+                      ...(belegAuftragId ? [{ id: "", label: "Niemand" }] : []),
+                      ...belegOptionen.abgesprochen.map((p) => ({ id: p.id, label: p.full_name })),
+                    ]}
+                    placeholder="Mit wem abgesprochen?"
                     clearable={false}
                   />
-                )}
-                {belegApprovalSource === "ticket" && (
-                  erledigteMaterialTickets.length === 0 ? (
-                    <div className="px-3 py-2 rounded-lg bg-muted/40 text-xs text-muted-foreground">
-                      Keine erledigten Material-Tickets vorhanden — wähle stattdessen eine Person.
-                    </div>
-                  ) : (
-                    <SearchableSelect
-                      value={belegApprovalTicketId}
-                      onChange={setBelegApprovalTicketId}
-                      items={erledigteMaterialTickets.map((t) => ({
-                        id: t.id,
-                        label: `T-${t.ticket_number} · ${t.title}`,
-                      }))}
-                      placeholder="Welches Material-Ticket?"
-                      clearable={false}
-                    />
-                  )
-                )}
-              </div>
+                  {erledigteMaterialTickets.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setBelegApprovalSource("ticket")}
+                      className="ml-1 text-[11px] text-muted-foreground underline-offset-2 hover:underline"
+                    >
+                      Freigegeben über eine Material-Anfrage?
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <div className="space-y-1">
+                  <p className="text-[10px] text-muted-foreground/70 ml-1">Freigegeben über Material-Anfrage *</p>
+                  <SearchableSelect
+                    value={belegApprovalTicketId}
+                    onChange={setBelegApprovalTicketId}
+                    items={erledigteMaterialTickets.map((t) => ({
+                      id: t.id,
+                      label: `T-${t.ticket_number} · ${t.title}`,
+                    }))}
+                    placeholder="Welche Material-Anfrage?"
+                    clearable={false}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setBelegApprovalSource("person")}
+                    className="ml-1 text-[11px] text-muted-foreground underline-offset-2 hover:underline"
+                  >
+                    Stattdessen: abgesprochen mit einer Person
+                  </button>
+                </div>
+              )}
             </>
           )}
 
@@ -1310,9 +1417,11 @@ export function NewTicketModal({ open, onClose, onCreated, initialType, initialD
               {saving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
               {saving
                 ? "Wird gesendet…"
-                : type === "stempel_aenderung"
-                  ? "Ticket senden"
-                  : "Ticket einreichen"}
+                : type === "beleg"
+                  ? "Beleg senden"
+                  : type === "stempel_aenderung"
+                    ? "Korrektur senden"
+                    : "Meldung senden"}
             </button>
           </div>
         </div>

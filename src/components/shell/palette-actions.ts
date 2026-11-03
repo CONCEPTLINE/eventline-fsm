@@ -2,7 +2,7 @@
 //
 // Zwei Quellen, zusammengefuehrt in paletteEintraege():
 //   1. PALETTE_ACTIONS — statischer Katalog von App-Aktionen/Zielen mit
-//      deutschen Synonymen — "krank" fuehrt zu Abwesenheit melden,
+//      deutschen Synonymen — "krank" fuehrt zu Abwesenheit eintragen,
 //      "lohnerhoehung" zu HR › Lohn, usw.
 //   2. Seiten — exakt die Sidebar (sichtbareNavGruppen: gleiche Labels,
 //      gleiche Sichtbarkeit). SEITEN_INFO ergaenzt nur Unterzeile und
@@ -22,10 +22,12 @@
 
 import {
   CalendarOff, Clock, ClipboardList, FileText, Wallet, FileStack,
-  Timer, Percent, TicketCheck, Users, Shield, ShieldCheck, Building2,
+  Timer, Percent, Users, Shield, ShieldCheck, Building2,
   Plug, Handshake, UserCircle, TrendingUp, CalendarCheck, Truck, LayoutDashboard,
+  Receipt, Wrench,
 } from "lucide-react";
 import { sichtbareNavGruppen } from "@/lib/constants";
+import type { MeldenArt } from "@/lib/melden";
 import { NAV_ICON_MAP, type IconComponent } from "@/lib/nav-icons";
 import { hasPermission } from "@/lib/permissions";
 import { rechteAntraegeHref } from "@/lib/antraege-links";
@@ -42,17 +44,41 @@ export interface PaletteAction {
   keywords: string[];
   /** Optional: Permission-Slug (via hasPermission) oder "admin" (via role). */
   gate?: string;
+  /** Statt zu navigieren direkt das Formular oeffnen (oeffneMelden). `href`
+   *  bleibt die Seite, auf der die Meldung danach zu sehen ist. */
+  melden?: MeldenArt;
 }
 
 export const PALETTE_ACTIONS: PaletteAction[] = [
   // ─── Alltag / Melden ────────────────────────────────────────────
   {
     id: "abwesenheit",
-    label: "Abwesenheit melden",
-    sublabel: "Krankheit, Ferien, Militär — Abwesenheit beantragen",
+    label: "Abwesenheit eintragen",
+    sublabel: "Ferien, frei, Kompensation, Militär — Formular öffnen",
     href: "/ferien",
     icon: CalendarOff,
-    keywords: ["krank", "krankheit", "krankmeldung", "arzt", "unfall", "abwesenheit", "absenz", "ferien", "urlaub", "frei nehmen", "militaer", "abwesend"],
+    keywords: ["krank", "krankheit", "krankmeldung", "arzt", "unfall", "abwesenheit", "absenz", "ferien", "urlaub", "frei nehmen", "militaer", "abwesend", "melden"],
+    melden: "abwesenheit",
+  },
+  {
+    id: "beleg",
+    label: "Beleg erfassen",
+    sublabel: "Quittung fotografieren und senden",
+    href: "/tickets",
+    icon: Receipt,
+    keywords: ["beleg", "belege", "quittung", "spesen", "einkauf", "kassenzettel", "rueckerstattung", "melden"],
+    gate: "tickets:create",
+    melden: "beleg",
+  },
+  {
+    id: "stempel-korrigieren",
+    label: "Stempel korrigieren",
+    sublabel: "Vergessen oder falsch gestempelt — Korrektur senden",
+    href: "/stempelzeiten",
+    icon: Clock,
+    keywords: ["stempel aendern", "stempel korrektur", "korrektur", "vergessen einzustempeln", "vergessen auszustempeln", "nachtragen", "melden"],
+    gate: "tickets:create",
+    melden: "stempel",
   },
   {
     id: "stempeln",
@@ -82,13 +108,14 @@ export const PALETTE_ACTIONS: PaletteAction[] = [
     gate: "auftraege:create",
   },
   {
-    id: "ticket",
-    label: "Ticket erstellen",
-    sublabel: "Problem melden oder Stempel-Änderung anfragen",
+    id: "anderes",
+    label: "Anderes melden",
+    sublabel: "IT-Problem oder Material anfragen",
     href: "/tickets",
-    icon: TicketCheck,
-    keywords: ["ticket", "problem melden", "stempel aendern", "stempel korrektur", "korrektur anfragen", "support"],
-    gate: "tickets:view",
+    icon: Wrench,
+    keywords: ["ticket", "problem melden", "it", "drucker", "computer", "material", "bestellen", "support", "melden"],
+    gate: "tickets:create",
+    melden: "anderes",
   },
 
   // ─── HR / Lohn (sensibel, gegated) ─────────────────────────────

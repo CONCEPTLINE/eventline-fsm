@@ -11,29 +11,21 @@
  * time_entries.lang_begruendung — offline-fest ueber die Warteschlange.
  *
  * Liegt der Beginn in einem abgerechneten Monat, geht Ausstempeln nicht mehr:
- * der Dialog sagt das klar und fuehrt zum Ticket «Stempel-Änderung» (das Ende
- * setzt die Lohnverwaltung per Antrag).
- *
- * Bleibt immer gemountet (der Provider rendert ihn), damit das Ticket-Fenster
- * offen bleiben kann, nachdem die Frage beantwortet ist.
+ * der Dialog sagt das klar und oeffnet «Stempel korrigieren» (MeldenHost,
+ * lib/melden.ts; das Ende setzt die Lohnverwaltung per Antrag).
  */
 
 import { useState } from "react";
-import dynamic from "next/dynamic";
 import { Clock, Lock } from "lucide-react";
 import { Modal } from "@/components/ui/modal";
 import { Input } from "@/components/ui/input";
 import { ZeitFeld } from "@/components/ui/zeit-feld";
 import { useIsMobile } from "@/lib/use-is-mobile";
 import { usePermissions } from "@/lib/use-permissions";
+import { oeffneMelden } from "@/lib/melden";
 import { isoZuZuerich, LANG_STUNDEN, stempelTag, stempelZeit, zeitEingabeFehler, zuerichZuIso } from "@/lib/stempel-meldungen";
 import type { TimeEntry } from "@/types";
 
-// Ticket-Fenster erst laden, wenn es gebraucht wird (Provider haengt an jeder Seite).
-const NewTicketModal = dynamic(
-  () => import("@/components/tickets/new-ticket-modal").then((m) => m.NewTicketModal),
-  { ssr: false },
-);
 
 export interface AusstempelnAntwort {
   /** Endzeit (UTC-ISO). */
@@ -66,7 +58,6 @@ interface Props {
 export function LangAusstempelnDialog({ frage, onAntwort }: Props) {
   const isMobile = useIsMobile();
   const { can } = usePermissions();
-  const [ticketFuer, setTicketFuer] = useState<TimeEntry | null>(null);
 
   return (
     <>
@@ -97,7 +88,7 @@ export function LangAusstempelnDialog({ frage, onAntwort }: Props) {
             Lohnverwaltung per Antrag.
           </p>
           <p className="text-sm text-muted-foreground">
-            Melde die richtige Endzeit mit einem Ticket «Stempel-Änderung».
+            Melde die richtige Endzeit mit «Stempel korrigieren».
           </p>
           <div className="flex gap-2 pt-1 max-md:flex-col-reverse">
             <button type="button" onClick={() => onAntwort(null)} className="kasten flex-1 max-md:h-[40px] max-md:text-[15px]">
@@ -107,32 +98,18 @@ export function LangAusstempelnDialog({ frage, onAntwort }: Props) {
               <button
                 type="button"
                 onClick={() => {
-                  setTicketFuer(frage.eintrag);
+                  const e = frage.eintrag;
                   onAntwort(null);
+                  oeffneMelden("stempel", { stempel: { timeEntryId: e.id, clockIn: e.clock_in, clockOut: null, jobId: e.job_id } });
                 }}
                 className="kasten kasten-green flex-1 max-md:h-[40px] max-md:text-[15px]"
               >
                 <Clock className="h-3.5 w-3.5" />
-                Ticket «Stempel-Änderung»
+                Stempel korrigieren
               </button>
             )}
           </div>
         </Modal>
-      )}
-      {ticketFuer && (
-        <NewTicketModal
-          open
-          onClose={() => setTicketFuer(null)}
-          onCreated={() => setTicketFuer(null)}
-          initialType="stempel_aenderung"
-          initialData={{
-            timeEntryId: ticketFuer.id,
-            clockIn: ticketFuer.clock_in,
-            clockOut: null,
-            jobId: ticketFuer.job_id,
-          }}
-          sheet={isMobile === true}
-        />
       )}
     </>
   );

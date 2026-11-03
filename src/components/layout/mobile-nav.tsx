@@ -2,12 +2,13 @@
 
 /**
  * Bottom-Nav (nur Handy, < md). Fuenf feste Plaetze:
- *   Dashboard · Todos · [Stempeln] · Kalender · Mehr
+ *   Dashboard · Todos · [Stempeln] · Kalender · Mein Konto
  *
  * Stempeln ist eine Aktion (Sheet), kein Link — und zeigt eingestempelt
  * die laufende Zeit in der Kachel. Die frueher separate Stempel-Bar ueber
- * der Nav ist weg (belegte zusammen mit der Nav ~130 px). «Mehr» oeffnet
- * das Mehr-Sheet (Aufträge, Stempelzeiten, Tickets, Ferien, Mein Konto …).
+ * der Nav ist weg (belegte zusammen mit der Nav ~130 px). «Mein Konto» ist
+ * der Startpunkt der Person (Melden, Anfragen, Stempelzeiten, Lohn, Arbeit,
+ * Einstellungen) — das fruehere Mehr-Sheet gibt es nicht mehr.
  *
  * Plaetze kommen aus NAV_GROUPS (mobile: true) und werden per
  * isPathAllowed gefiltert — Admin sieht alles.
@@ -20,7 +21,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
-import { Clock, Loader2, Menu } from "lucide-react";
+import { Clock, Loader2, UserRound } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatTime } from "@/lib/format";
 import { NAV_GROUPS, ADMIN_NAV_GROUP, type NavItem } from "@/lib/constants";
@@ -28,14 +29,12 @@ import { NAV_ICON_MAP } from "@/lib/nav-icons";
 import { hasPermission, isPathAllowed } from "@/lib/permissions";
 import { useNavCounts, getBadgeForHref } from "@/lib/use-nav-counts";
 import { useStempel } from "@/lib/use-stempel";
-import { istMehrBereich } from "@/lib/mobile-seiten";
+import { istKontoBereich } from "@/lib/mobile-seiten";
 
 interface MobileNavProps {
   permissions: string[];
   role: string;
-  mehrOpen: boolean;
   stempelOpen: boolean;
-  onMehrOpen: () => void;
   onStempelOpen: () => void;
 }
 
@@ -52,7 +51,7 @@ function kurzDauer(clockIn: string, now: number): string {
   return `${h}:${m.toString().padStart(2, "0")}`;
 }
 
-export function MobileNav({ permissions, role, mehrOpen, stempelOpen, onMehrOpen, onStempelOpen }: MobileNavProps) {
+export function MobileNav({ permissions, role, stempelOpen, onStempelOpen }: MobileNavProps) {
   const pathname = usePathname();
   const items = getMobileItems(permissions, role);
   const navCounts = useNavCounts();
@@ -79,14 +78,12 @@ export function MobileNav({ permissions, role, mehrOpen, stempelOpen, onMehrOpen
   const links = items.filter((i) => i.href !== "/kalender");
   const kalender = items.find((i) => i.href === "/kalender") ?? null;
   const spalten = links.length + 1 + (kalender ? 1 : 0) + 1;
-  const sheetOffen = mehrOpen || stempelOpen;
-
   function isActive(href: string) {
-    if (sheetOffen) return false;
+    if (stempelOpen) return false;
     if (href === "/dashboard" || href === "/kalender") return pathname === href;
     return pathname.startsWith(href);
   }
-  const mehrAktiv = mehrOpen || (!stempelOpen && istMehrBereich(pathname));
+  const kontoAktiv = !stempelOpen && istKontoBereich(pathname);
 
   return (
     <nav
@@ -95,7 +92,7 @@ export function MobileNav({ permissions, role, mehrOpen, stempelOpen, onMehrOpen
       style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
     >
       {/* Empty-State analog Sidebar: User mit leerer Permissions-Liste sieht
-          sonst nur «Mehr» und glaubt die App ist kaputt. */}
+          sonst nur «Mein Konto» und glaubt die App ist kaputt. */}
       {items.length === 0 ? (
         <div className="px-4 py-[7px] text-center text-[12px] leading-snug text-sidebar-foreground/70">
           Deine Rolle hat keine Module freigeschaltet. Bitte sprich mit deinem Admin.
@@ -151,21 +148,21 @@ export function MobileNav({ permissions, role, mehrOpen, stempelOpen, onMehrOpen
             <NavPlatz item={kalender} active={isActive(kalender.href)} badge={0} />
           )}
 
-          <button
-            type="button"
-            onClick={onMehrOpen}
+          <Link
+            href="/mein-konto"
+            aria-current={kontoAktiv ? "page" : undefined}
             className={cn(
               "flex flex-col items-center justify-center gap-[3px] text-[11px] font-bold transition-colors",
-              mehrAktiv ? "text-red-500" : "text-sidebar-foreground/60",
+              kontoAktiv ? "text-red-500" : "text-sidebar-foreground/60",
             )}
           >
             {/* Icon-Bereich gleich hoch wie die Stempel-Pille (h-7), damit
                 alle Labels auf einer Linie liegen. */}
             <span className="inline-flex h-7 items-center">
-              <Menu className="h-[22px] w-[22px]" />
+              <UserRound className="h-[22px] w-[22px]" />
             </span>
-            Mehr
-          </button>
+            <span className="truncate">Mein Konto</span>
+          </Link>
         </div>
       )}
     </nav>

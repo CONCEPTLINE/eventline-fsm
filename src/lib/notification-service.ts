@@ -387,6 +387,26 @@ export async function notifyTicketRejected(
   });
 }
 
+/** Beleg gemeldet, «abgesprochen mit» dieser Person (statt der allgemeinen
+ *  «Neues Beleg»-Nachricht an alle mit tickets:manage). */
+export async function notifyBelegAbgesprochen(
+  client: SupabaseClient,
+  args: BaseArgs & {
+    ticketId: string;
+    betragChf: number | null;
+    byName: string;
+  },
+) {
+  const betrag = args.betragChf !== null ? ` über CHF ${args.betragChf.toFixed(2)}` : "";
+  await deliver(client, args.recipients, "ticket_new", {
+    title: `Beleg${betrag}: mit dir abgesprochen`,
+    message: `${args.byName} hat einen Beleg gemeldet und dich als Absprache angegeben.`,
+    link: `/tickets/${args.ticketId}`,
+    resource_type: "ticket",
+    resource_id: args.ticketId,
+  });
+}
+
 // --- JOBS ----------------------------------------------------
 
 export async function notifyJobAssigned(

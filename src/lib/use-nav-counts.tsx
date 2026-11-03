@@ -276,7 +276,7 @@ export function useNavCounts(): NavCounts {
 }
 
 /** Mapping von Nav-Item-href auf den entsprechenden Counter. Wird in
- *  Sidebar, MobileNav und Mehr-Sheet benutzt um den Punkt pro Item zu
+ *  Sidebar, MobileNav und Mein Konto (Handy) benutzt um den Punkt pro Item zu
  *  bestimmen. Reihenfolge der Auswertung: spezifischer Pfad zuerst.
  *  canManageTickets = hasPermission(…, "tickets:manage") — muss zur
  *  Provider-Prop passen, sonst zeigt der Badge 0 obwohl die Queue laedt.
