@@ -6,7 +6,7 @@ import { ZRH_TZ } from "@/lib/swiss-time";
 import { PORTAL_ROLLEN_IN } from "@/lib/roles";
 
 /**
- * GET /api/hr/anfragen — Aggregat fuer die Seite HR › Anträge (/antraege).
+ * GET /api/hr/anfragen — Aggregat fuer die Seite HR › Freigaben (/antraege).
  *
  * Liefert drei Aktions-Listen (ungenehmigte Ferien, Stempel-Aenderungs-
  * Tickets, andere offene Tickets) sowie eine kompakte Mitarbeiter-Ampel

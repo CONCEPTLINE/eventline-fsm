@@ -27,6 +27,11 @@ export interface TimeOff {
   approved_by: string | null;
   approved_at: string | null;
   decision_note: string | null;
+  /** Krankmeldung mit unbekanntem Ende (Migration 378). */
+  ende_offen?: boolean;
+  /** Arztzeugnis im privaten Bucket «arztzeugnisse» (nur ueber /api/krank). */
+  arztzeugnis_pfad?: string | null;
+  arztzeugnis_hochgeladen_at?: string | null;
   created_at: string;
   updated_at: string;
 }

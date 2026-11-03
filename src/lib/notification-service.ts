@@ -407,6 +407,61 @@ export async function notifyBelegAbgesprochen(
   });
 }
 
+// --- KRANK MELDEN (Migration 378) ----------------------------
+// Datenschutz: nur «krank gemeldet» + Zeitraum, nie Diagnose/Freitext.
+
+/** «vom 03.11. bis 05.11.» / «am 03.11.» / «ab 03.11., Ende offen.» —
+ *  endet immer mit Punkt (Satzende). */
+function krankZeitraum(ab: string, bis: string | null): string {
+  const kurz = (iso: string) => `${iso.slice(8, 10)}.${iso.slice(5, 7)}.`;
+  if (!bis) return `ab ${kurz(ab)}, Ende offen.`;
+  return bis === ab ? `am ${kurz(ab)}` : `vom ${kurz(ab)} bis ${kurz(bis)}`;
+}
+
+/** An ferien:approve (Admins inkl.): neue Krankmeldung. */
+export async function notifyKrankGemeldet(
+  client: SupabaseClient,
+  args: BaseArgs & { timeOffId: string; name: string; ab: string; bis: string | null; einsaetze: number },
+) {
+  const betroffen = args.einsaetze > 0 ? ` ${args.einsaetze === 1 ? "1 Einsatz ist" : `${args.einsaetze} Einsätze sind`} betroffen.` : "";
+  await deliver(client, args.recipients, "system", {
+    title: `${args.name} ist krank gemeldet`,
+    message: `${args.name} ist krank gemeldet ${krankZeitraum(args.ab, args.bis)}${betroffen}`,
+    link: "/ferien",
+    resource_type: "time_off",
+    resource_id: args.timeOffId,
+  });
+}
+
+/** An die Projektleitung eines betroffenen Auftrags (je Person einmal). */
+export async function notifyKrankProjektleitung(
+  client: SupabaseClient,
+  args: BaseArgs & { name: string; ab: string; bis: string | null; auftraege: string[]; jobId: string },
+) {
+  const liste = args.auftraege.join(", ");
+  await deliver(client, args.recipients, "system", {
+    title: `${args.name} ist krank gemeldet`,
+    message: `${args.name} ist krank gemeldet ${krankZeitraum(args.ab, args.bis)} Betrifft ${liste}.`,
+    link: `/auftraege/${args.jobId}`,
+    resource_type: "job",
+    resource_id: args.jobId,
+  });
+}
+
+/** An ferien:approve: wieder gesund (Ende gesetzt). */
+export async function notifyWiederGesund(
+  client: SupabaseClient,
+  args: BaseArgs & { timeOffId: string; name: string; ab: string; bis: string },
+) {
+  await deliver(client, args.recipients, "system", {
+    title: `${args.name} ist wieder gesund`,
+    message: `${args.name} war krank gemeldet ${krankZeitraum(args.ab, args.bis)}`,
+    link: "/ferien",
+    resource_type: "time_off",
+    resource_id: args.timeOffId,
+  });
+}
+
 // --- JOBS ----------------------------------------------------
 
 export async function notifyJobAssigned(

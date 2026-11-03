@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * HR › Anträge — Inhalt der Seite /antraege (Kopf + Rechte-Pruefung macht
+ * HR › Freigaben — Inhalt der Seite /antraege (Kopf + Rechte-Pruefung macht
  * die Seite; sichtbar nur mit ferien:approve, tickets:manage oder
  * stempelzeiten:see-all, Admin immer). „Anträge" = interne Anträge zum
  * Genehmigen — „Anfrage" ist in der App mehrfach belegt; der API-Name

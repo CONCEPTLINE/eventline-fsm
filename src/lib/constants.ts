@@ -85,7 +85,7 @@ export interface NavItem {
   label: string;
   icon: string;
   /** Fester Link-Platz in der Bottom-Nav (Dashboard, Todos, Kalender).
-   *  Nicht erweitern: die Nav hat fuenf feste Plaetze (3 Links + Stempeln + Mehr). */
+   *  Nicht erweitern: die Nav hat fuenf feste Plaetze (3 Links + Stempeln + Mein Konto). */
   mobile?: boolean;
   /** Zusatz-Pfade die als "in diesem Bereich" gelten — fuer Routen die unter
    *  einem anderen Top-Level-Pfad liegen aber semantisch hierher gehoeren
@@ -94,6 +94,10 @@ export interface NavItem {
   /** Fuer Eintraege, deren Pfad an keinem Rechte-Modul haengt: sichtbar nur
    *  mit mindestens einem dieser Rechte (Admin sieht immer alles). */
   rechte?: string[];
+  /** Ausblenden fuer alle, die eines dieser Rechte haben (z. B. «Meine
+   *  Anfragen» nicht fuer tickets:manage — die haben «Tickets»). Admins
+   *  haben alle Rechte und sehen den Eintrag darum nicht. */
+  ohneRechte?: string[];
   /** false = nicht in der Befehlspalette (z. B. Finanzen). Default sichtbar. */
   palette?: boolean;
 }
@@ -172,16 +176,20 @@ export const NAV_GROUPS: NavGroup[] = [
     // mit Tabs mehr). /hr und /hr?tab=… leiten auf die passende Seite um.
     label: "HR",
     items: [
-      // Genehmigen (Abwesenheit, Tickets, Belege, Stempel-Korrekturen) —
-      // nur wer etwas genehmigen darf.
+      // Freigeben (Abwesenheit, Tickets, Belege, Stempel-Korrekturen) —
+      // nur wer etwas freigeben darf. Route bleibt /antraege.
       {
         href: "/antraege",
-        label: "Anträge",
+        label: "Freigaben",
         icon: "Inbox",
         rechte: ["ferien:approve", "tickets:manage", "stempelzeiten:see-all"],
       },
+      // Mitarbeiter: alles selbst Gemeldete (Tickets + Abwesenheiten).
+      // Wer Tickets bearbeitet (tickets:manage), hat stattdessen «Tickets»
+      // und erreicht die eigenen ueber Mein Konto › Alle Anfragen.
+      { href: "/anfragen", label: "Meine Anfragen", icon: "Send", ohneRechte: ["tickets:manage"] },
       { href: "/stempelzeiten", label: "Stempelzeiten", icon: "Clock" },
-      { href: "/tickets", label: "Tickets & Belege", icon: "TicketCheck" },
+      { href: "/tickets", label: "Tickets", icon: "TicketCheck", rechte: ["tickets:manage"] },
       { href: "/ferien", label: "Abwesenheit", icon: "Palmtree" },
       { href: "/lohn", label: "Lohn", icon: "Wallet" },
     ],
@@ -221,7 +229,8 @@ export const ADMIN_NAV_GROUP: NavGroup = {
 export function sichtbareNavGruppen(permissions: string[], role: string): NavGroup[] {
   const sichtbar = (i: NavItem) =>
     isPathAllowed(i.href, permissions, role) &&
-    (!i.rechte || i.rechte.some((r) => hasPermission(permissions, role, r)));
+    (!i.rechte || i.rechte.some((r) => hasPermission(permissions, role, r))) &&
+    (!i.ohneRechte || !i.ohneRechte.some((r) => hasPermission(permissions, role, r)));
   return [...NAV_GROUPS, ADMIN_NAV_GROUP]
     .map((g) => ({ ...g, items: g.items.filter(sichtbar) }))
     .filter((g) => g.items.length > 0);

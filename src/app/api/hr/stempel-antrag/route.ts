@@ -108,7 +108,7 @@ async function loeschAntrag(
         recipients: empfaenger,
         title: "Lohndaten: Antrag wartet auf Bestätigung",
         // Wie aendereLohndaten: auch als Push (Sperrbildschirm) — ohne Details/Begründung.
-        message: `${a.akteurName ?? "Jemand"} beantragt eine Änderung (Stempel${a.zielName ? `, ${a.zielName}` : ""}) — Details und Bestätigen unter Anträge › Rechte & Lohndaten.`,
+        message: `${a.akteurName ?? "Jemand"} beantragt eine Änderung (Stempel${a.zielName ? `, ${a.zielName}` : ""}) — Details und Bestätigen unter Freigaben › Rechte & Lohndaten.`,
         link: rechteAntraegeHref(),
       });
     }

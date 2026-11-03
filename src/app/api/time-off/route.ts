@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logError } from "@/lib/log";
 
-// POST /api/time-off — Mitarbeiter erstellt einen Ferien-Antrag.
+// POST /api/time-off — Mitarbeiter meldet eine Abwesenheit (wartet auf Freigabe).
 // Body: { start_date, end_date, type, note? }
 // Insert via User-Client damit RLS den user_id-Match enforce'd.
 
@@ -13,7 +13,8 @@ interface Body {
   note?: unknown;
 }
 
-const ALLOWED_TYPES = new Set(["ferien", "krank", "kompensation", "frei", "militaer"]);
+// «krank» laeuft ueber /api/krank (ohne Freigabe, Migration 378).
+const ALLOWED_TYPES = new Set(["ferien", "kompensation", "frei", "militaer"]);
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 export async function POST(request: NextRequest) {
@@ -34,6 +35,9 @@ export async function POST(request: NextRequest) {
   }
   if (start > end) {
     return NextResponse.json({ success: false, error: "Start-Datum muss vor End-Datum liegen" }, { status: 400 });
+  }
+  if (type === "krank") {
+    return NextResponse.json({ success: false, error: "Krank bitte über «Krank melden» melden" }, { status: 400 });
   }
   if (!ALLOWED_TYPES.has(type)) {
     return NextResponse.json({ success: false, error: "Ungültiger Typ" }, { status: 400 });

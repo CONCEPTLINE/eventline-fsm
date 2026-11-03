@@ -200,7 +200,7 @@ function PersonZeile({ p, onPruefen }: { p: Person; onPruefen: () => void }) {
         {p.probleme.length > 0 ? (
           <button type="button" onClick={onPruefen} className="kasten kasten-blue">Prüfen</button>
         ) : p.antraege_offen > 0 ? (
-          <PrefetchLink href="/antraege" className="kasten kasten-muted">Anträge</PrefetchLink>
+          <PrefetchLink href="/antraege" className="kasten kasten-muted">Freigaben</PrefetchLink>
         ) : (
           <PrefetchLink href={`/stempelzeiten?user=${p.profile_id}`} className="kasten kasten-muted">Ansehen</PrefetchLink>
         )}
@@ -282,7 +282,7 @@ function PruefDialog({ person, monatText, gesperrt, onClose, onGeaendert }: {
     if (!j) return;
     if (j.mode === "begruendung_noetig") { setMeldung(String(j.meldung ?? "Begründung nötig")); return; }
     if (!j.success) { toast.error(fehlerText(j, "Ende konnte nicht gesetzt werden")); return; }
-    toast.success(j.mode === "antrag" ? String(j.meldung ?? "Antrag gestellt — die zweite Person bestätigt ihn unter Anträge") : "Ende gesetzt");
+    toast.success(j.mode === "antrag" ? String(j.meldung ?? "Antrag gestellt — die zweite Person bestätigt ihn unter Freigaben") : "Ende gesetzt");
     setEndeFuer(null);
     onGeaendert();
   }
@@ -325,7 +325,7 @@ function PruefDialog({ person, monatText, gesperrt, onClose, onGeaendert }: {
                           {gesperrt ? "Antrag stellen" : "Ende speichern"}
                         </button>
                       </div>
-                      {gesperrt && <p className="text-[10px] text-muted-foreground">Der Monat ist gesperrt — die Änderung bestätigt eine zweite Person unter Anträge (Vier Augen).</p>}
+                      {gesperrt && <p className="text-[10px] text-muted-foreground">Der Monat ist gesperrt — die Änderung bestätigt eine zweite Person unter Freigaben (Vier Augen).</p>}
                     </div>
                   ) : (
                     <div className="flex flex-wrap gap-1.5">
@@ -346,7 +346,7 @@ function PruefDialog({ person, monatText, gesperrt, onClose, onGeaendert }: {
           {p.antraege_offen > 0 && (
             <p className="text-xs text-muted-foreground">
               {p.antraege_offen === 1 ? "1 Antrag" : `${p.antraege_offen} Anträge`} offen —{" "}
-              <PrefetchLink href="/antraege" className="underline underline-offset-2">unter Anträge entscheiden</PrefetchLink>.
+              <PrefetchLink href="/antraege" className="underline underline-offset-2">unter Freigaben entscheiden</PrefetchLink>.
             </p>
           )}
         </div>

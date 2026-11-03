@@ -12,8 +12,10 @@
 //   abgelehnt → «abgelehnt».
 
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { arztzeugnisFehlt, arztzeugnisFaelligAb, krankLaeuft, KRANKMELDUNG } from "@/lib/krank";
+import { todayLocalIso } from "@/lib/swiss-time";
 
-export type AnfrageArt = "beleg" | "stempel" | "it" | "material" | "abwesenheit";
+export type AnfrageArt = "beleg" | "stempel" | "it" | "material" | "abwesenheit" | "krank";
 export type AnfrageTon = "amber" | "green" | "red" | "muted";
 
 export interface Anfrage {
@@ -33,6 +35,15 @@ export interface Anfrage {
   link: string | null;
   /** Darf die Person das selbst zurueckziehen? (offene Abwesenheit) */
   zurueckziehbar: boolean;
+  /** Nur Krankmeldungen (Migration 378). */
+  krank?: {
+    laeuft: boolean;
+    endeOffen: boolean;
+    hatZeugnis: boolean;
+    zeugnisFehlt: boolean;
+    /** Ab wann das Arztzeugnis faellig ist (YYYY-MM-DD). */
+    zeugnisAb: string;
+  };
 }
 
 export const ART_LABEL: Record<AnfrageArt, string> = {
@@ -41,6 +52,7 @@ export const ART_LABEL: Record<AnfrageArt, string> = {
   it: "IT",
   material: "Material",
   abwesenheit: "Abwesenheit",
+  krank: "Krank",
 };
 
 const ABWESENHEIT_LABEL: Record<string, string> = {
@@ -85,6 +97,15 @@ interface AbwesenheitZeile {
   start_date: string;
   end_date: string;
   created_at: string;
+  approved_by_name: string | null;
+  ende_offen: boolean | null;
+  arztzeugnis_pfad: string | null;
+}
+
+const ABWESENHEIT_SPALTEN = "id, type, status, start_date, end_date, created_at, approved_by_name, ende_offen, arztzeugnis_pfad";
+
+function istKrankmeldung(a: AbwesenheitZeile): boolean {
+  return a.type === "krank" && a.status === "genehmigt" && a.approved_by_name === KRANKMELDUNG;
 }
 
 function ticketAlsAnfrage(t: TicketZeile): Anfrage {
@@ -120,7 +141,30 @@ function ticketAlsAnfrage(t: TicketZeile): Anfrage {
   };
 }
 
-function abwesenheitAlsAnfrage(a: AbwesenheitZeile): Anfrage {
+function krankAlsAnfrage(a: AbwesenheitZeile, heute: string): Anfrage {
+  const endeOffen = a.ende_offen === true;
+  const hatZeugnis = !!a.arztzeugnis_pfad;
+  const laeuft = krankLaeuft({ bis: a.end_date, endeOffen }, heute);
+  const zeugnisFehlt = arztzeugnisFehlt({ ab: a.start_date, bis: a.end_date, endeOffen, hatZeugnis }, heute);
+  const zeitraum = endeOffen ? `ab ${tagKurz(a.start_date)}, Ende offen` : zeitraumKurz(a.start_date, a.end_date);
+  return {
+    key: `abwesenheit:${a.id}`,
+    id: a.id,
+    quelle: "abwesenheit",
+    art: "krank",
+    was: zeitraum,
+    gemeldet_at: a.created_at,
+    stand: zeugnisFehlt ? "Arztzeugnis fehlt" : laeuft ? "gemeldet" : "abgeschlossen",
+    ton: zeugnisFehlt ? "red" : laeuft ? "amber" : "green",
+    offen: laeuft || zeugnisFehlt,
+    link: null,
+    zurueckziehbar: false,
+    krank: { laeuft, endeOffen, hatZeugnis, zeugnisFehlt, zeugnisAb: arztzeugnisFaelligAb(a.start_date) },
+  };
+}
+
+function abwesenheitAlsAnfrage(a: AbwesenheitZeile, heute: string): Anfrage {
+  if (istKrankmeldung(a)) return krankAlsAnfrage(a, heute);
   return {
     key: `abwesenheit:${a.id}`,
     id: a.id,
@@ -137,13 +181,15 @@ function abwesenheitAlsAnfrage(a: AbwesenheitZeile): Anfrage {
 }
 
 /** Anfragen einer Person. `stand`: nur offene, nur erledigte oder alle
- *  (neueste zuerst). `limit` je Quelle. */
+ *  (neueste zuerst). `limit` je Quelle. Krankmeldungen sind «offen», solange
+ *  sie laufen oder das Arztzeugnis fehlt (lib/krank.ts). */
 export async function ladeAnfragen(
   admin: SupabaseClient,
   userId: string,
   opts: { stand: "offen" | "erledigt" | "alle"; limit?: number },
 ): Promise<Anfrage[]> {
   const limit = opts.limit ?? 100;
+  const heute = todayLocalIso();
   let tq = admin
     .from("tickets")
     .select("id, type, status, title, data, created_at")
@@ -152,13 +198,14 @@ export async function ladeAnfragen(
     .limit(limit);
   let aq = admin
     .from("time_off")
-    .select("id, type, status, start_date, end_date, created_at")
+    .select(ABWESENHEIT_SPALTEN)
     .eq("user_id", userId)
     .order("created_at", { ascending: false })
     .limit(limit);
   if (opts.stand === "offen") {
     tq = tq.eq("status", "offen");
-    aq = aq.eq("status", "beantragt");
+    // Offen: beantragte + alle Krankmeldungen (Feinfilter unten).
+    aq = aq.or(`status.eq.beantragt,approved_by_name.eq.${KRANKMELDUNG}`);
   } else if (opts.stand === "erledigt") {
     tq = tq.neq("status", "offen");
     aq = aq.neq("status", "beantragt");
@@ -166,21 +213,29 @@ export async function ladeAnfragen(
   const [t, a] = await Promise.all([tq, aq]);
   if (t.error) throw new Error(`Meldungen konnten nicht geladen werden: ${t.error.message}`);
   if (a.error) throw new Error(`Abwesenheiten konnten nicht geladen werden: ${a.error.message}`);
-  const liste = [
+  let liste = [
     ...((t.data ?? []) as TicketZeile[]).map(ticketAlsAnfrage),
-    ...((a.data ?? []) as AbwesenheitZeile[]).map(abwesenheitAlsAnfrage),
+    ...((a.data ?? []) as unknown as AbwesenheitZeile[]).map((z) => abwesenheitAlsAnfrage(z, heute)),
   ];
+  if (opts.stand === "offen") liste = liste.filter((x) => x.offen);
+  if (opts.stand === "erledigt") liste = liste.filter((x) => !x.offen);
   liste.sort((x, y) => y.gemeldet_at.localeCompare(x.gemeldet_at));
   return liste;
 }
 
-/** Anzahl offener Anfragen (fuer «Offen (n)»), aus der DB gezaehlt. */
+/** Anzahl offener Anfragen (fuer «Offen (n)»), aus der DB gezaehlt;
+ *  Krankmeldungen nach lib/krank.ts eingeordnet. */
 export async function zaehleOffeneAnfragen(admin: SupabaseClient, userId: string): Promise<number> {
-  const [t, a] = await Promise.all([
+  const heute = todayLocalIso();
+  const [t, a, k] = await Promise.all([
     admin.from("tickets").select("id", { count: "exact", head: true }).eq("created_by", userId).eq("status", "offen"),
     admin.from("time_off").select("id", { count: "exact", head: true }).eq("user_id", userId).eq("status", "beantragt"),
+    admin.from("time_off").select(ABWESENHEIT_SPALTEN).eq("user_id", userId).eq("type", "krank")
+      .eq("status", "genehmigt").eq("approved_by_name", KRANKMELDUNG).order("created_at", { ascending: false }).limit(200),
   ]);
   if (t.error) throw new Error(t.error.message);
   if (a.error) throw new Error(a.error.message);
-  return (t.count ?? 0) + (a.count ?? 0);
+  if (k.error) throw new Error(k.error.message);
+  const krankOffen = ((k.data ?? []) as unknown as AbwesenheitZeile[]).filter((z) => krankAlsAnfrage(z, heute).offen).length;
+  return (t.count ?? 0) + (a.count ?? 0) + krankOffen;
 }

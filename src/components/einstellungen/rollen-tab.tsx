@@ -290,7 +290,7 @@ export function RollenTab({ scope = "firma" }: RollenTabProps = {}) {
       return;
     }
     // Lohnrecht geben/nehmen wird nur beantragt (Vier Augen, Migration 361).
-    if (json.hinweis) toast.success(json.hinweis as string, { action: { label: "Anträge", onClick: () => window.location.assign(rechteAntraegeHref()) } });
+    if (json.hinweis) toast.success(json.hinweis as string, { action: { label: "Freigaben", onClick: () => window.location.assign(rechteAntraegeHref()) } });
     else toast.success("Rolle gespeichert");
     load();
   }
@@ -329,7 +329,7 @@ export function RollenTab({ scope = "firma" }: RollenTabProps = {}) {
       TOAST.errorOr(json.error);
       return;
     }
-    if (json.hinweis) toast.success(json.hinweis as string, { action: { label: "Anträge", onClick: () => window.location.assign(rechteAntraegeHref()) } });
+    if (json.hinweis) toast.success(json.hinweis as string, { action: { label: "Freigaben", onClick: () => window.location.assign(rechteAntraegeHref()) } });
     else toast.success("Rolle angelegt");
     setShowCreate(false);
     setCreateForm({ label: "", permissions: [], scope: "self" });

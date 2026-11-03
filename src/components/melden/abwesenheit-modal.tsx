@@ -19,12 +19,12 @@ import { anfragenGeaendert } from "@/lib/melden";
 import { todayLocalIso } from "@/lib/swiss-time";
 import type { TimeOffType } from "@/types";
 
-/** Arten im allgemeinen Abwesenheits-Formular. */
+/** Arten im allgemeinen Abwesenheits-Formular. «Krank» hat ein eigenes
+ *  Formular ohne Freigabe (krank-modal.tsx, /api/krank). */
 export const ABWESENHEIT_ARTEN: ReadonlyArray<{ typ: TimeOffType; label: string }> = [
   { typ: "ferien", label: "Ferien" },
-  { typ: "krank", label: "Krank" },
-  { typ: "kompensation", label: "Kompensation" },
   { typ: "frei", label: "Frei" },
+  { typ: "kompensation", label: "Kompensation" },
   { typ: "militaer", label: "Militär" },
 ];
 
@@ -99,7 +99,7 @@ function AbwesenheitFormular({ onClose, onGesendet }: Props) {
     >
       <div className="space-y-2">
         <p className={label}>Art</p>
-        <div className="grid grid-cols-3 gap-2">
+        <div className="grid grid-cols-2 gap-2">
           {ABWESENHEIT_ARTEN.map((a) => (
             <button
               key={a.typ}

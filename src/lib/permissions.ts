@@ -174,7 +174,7 @@ export const PARTNER_EXTRA_PERMISSIONS = [
  *  - /dashboard: Startseite, jeder soll dort landen koennen
  *  - /mein-konto: User-Self-Service (Profil, Benachrichtigungen, Dokumente, Kalender;
  *                 Admin-Space-Tab nur sichtbar fuer role='admin') */
-const ALWAYS_ALLOWED_PREFIXES = ["/dashboard", "/mein-konto", "/ferien"];
+const ALWAYS_ALLOWED_PREFIXES = ["/dashboard", "/mein-konto", "/ferien", "/anfragen"];
 
 /** Pfade die strikt nur fuer role='admin' sind — Sidebar und Mobile-Menue
  *  blenden sie fuer alle anderen aus, isPathAllowed liefert false

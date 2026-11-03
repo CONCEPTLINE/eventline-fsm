@@ -7,6 +7,7 @@
  *   stempel     → NewTicketModal, fester Typ Stempel-Aenderung (optional
  *                 vorbelegt aus einer Stempelzeiten-Zeile)
  *   anderes     → NewTicketModal mit Chips IT | Material
+ *   krank       → KrankModal (ohne Freigabe)
  *   abwesenheit → AbwesenheitModal
  *
  * Die Formulare laden erst beim ersten Oeffnen (next/dynamic) — sie ziehen
@@ -31,6 +32,10 @@ const NewTicketModal = dynamic(
   () => import("@/components/tickets/new-ticket-modal").then((m) => m.NewTicketModal),
   { ssr: false, loading: LadeFallback },
 );
+const KrankModal = dynamic(
+  () => import("@/components/melden/krank-modal").then((m) => m.KrankModal),
+  { ssr: false, loading: LadeFallback },
+);
 const AbwesenheitModal = dynamic(
   () => import("@/components/melden/abwesenheit-modal").then((m) => m.AbwesenheitModal),
   { ssr: false, loading: LadeFallback },
@@ -51,6 +56,9 @@ export function MeldenHost() {
   if (!offen) return null;
   const schliessen = () => setOffen(null);
 
+  if (offen.art === "krank") {
+    return <KrankModal open onClose={schliessen} />;
+  }
   if (offen.art === "abwesenheit") {
     return <AbwesenheitModal open onClose={schliessen} />;
   }

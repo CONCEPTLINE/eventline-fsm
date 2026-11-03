@@ -368,7 +368,7 @@ function VertretungZeile() {
       // Vier Augen (Migration 361): die Vertretung wird nur beantragt — bis zur
       // Bestaetigung durch den anderen Admin bleibt die bisherige.
       setWert(vorher);
-      toast.success((json.hinweis as string | undefined) ?? "Beantragt", { action: { label: "Anträge", onClick: () => window.location.assign(rechteAntraegeHref()) } });
+      toast.success((json.hinweis as string | undefined) ?? "Beantragt", { action: { label: "Freigaben", onClick: () => window.location.assign(rechteAntraegeHref()) } });
     } catch (e) {
       setWert(vorher);
       toast.error(`Vertretung speichern fehlgeschlagen: ${e instanceof Error ? e.message : String(e)}`);

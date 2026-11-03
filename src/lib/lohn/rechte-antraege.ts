@@ -4,7 +4,7 @@
 // das Lohnrecht einer Rolle ändern und die Vertretung ändern gehen nur als
 // ANTRAG. Bestätigen kann nur der ANDERE Admin (nicht der Antragsteller, bei
 // Gewährung nicht die Zielperson), auf einem vertrauten Gerät, innerhalb von
-// 24 h (/api/admin/rechte-antraege, Seite Anträge › Rechte & Lohndaten,
+// 24 h (/api/admin/rechte-antraege, Seite Freigaben › Rechte & Lohndaten,
 // /antraege?tab=rechte). Ausgeführt wird
 // in der DB-Funktion rechte_antrag_ausfuehren — die Trigger auf profiles,
 // roles und lohn_einstellungen lassen die Änderung nur dort zu.
@@ -102,7 +102,7 @@ export async function stelleRechteAntrag(admin: SupabaseClient, i: AntragInput):
   if (i.art === "rolle_rechte" && i.zielRolle) q = q.eq("ziel_rolle", i.zielRolle);
   const { data: offen, error: offenErr } = await q.maybeSingle();
   if (offenErr) throw new Error(offenErr.message);
-  if (offen) throw new Error("Dafür ist schon ein Antrag offen — erst bestätigen oder ablehnen lassen (Anträge › Rechte & Lohndaten).");
+  if (offen) throw new Error("Dafür ist schon ein Antrag offen — erst bestätigen oder ablehnen lassen (Freigaben › Rechte & Lohndaten).");
 
   // Lohnrecht an eine Rolle: festhalten, WEN das betrifft. Die DB-Funktion
   // lehnt ab, wenn sich die Personen der Rolle bis zur Bestaetigung aendern

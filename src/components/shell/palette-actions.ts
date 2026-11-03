@@ -2,7 +2,7 @@
 //
 // Zwei Quellen, zusammengefuehrt in paletteEintraege():
 //   1. PALETTE_ACTIONS — statischer Katalog von App-Aktionen/Zielen mit
-//      deutschen Synonymen — "krank" fuehrt zu Abwesenheit eintragen,
+//      deutschen Synonymen — "krank" fuehrt zu Krank melden,
 //      "lohnerhoehung" zu HR › Lohn, usw.
 //   2. Seiten — exakt die Sidebar (sichtbareNavGruppen: gleiche Labels,
 //      gleiche Sichtbarkeit). SEITEN_INFO ergaenzt nur Unterzeile und
@@ -24,7 +24,7 @@ import {
   CalendarOff, Clock, ClipboardList, FileText, Wallet, FileStack,
   Timer, Percent, Users, Shield, ShieldCheck, Building2,
   Plug, Handshake, UserCircle, TrendingUp, CalendarCheck, Truck, LayoutDashboard,
-  Receipt, Wrench,
+  Receipt, Wrench, ThermometerSun,
 } from "lucide-react";
 import { sichtbareNavGruppen } from "@/lib/constants";
 import type { MeldenArt } from "@/lib/melden";
@@ -52,19 +52,28 @@ export interface PaletteAction {
 export const PALETTE_ACTIONS: PaletteAction[] = [
   // ─── Alltag / Melden ────────────────────────────────────────────
   {
+    id: "krank",
+    label: "Krank melden",
+    sublabel: "Ohne Freigabe — Projektleitung wird informiert",
+    href: "/anfragen",
+    icon: ThermometerSun,
+    keywords: ["krank", "krankheit", "krankmeldung", "arzt", "arztzeugnis", "unfall", "krank melden", "melden"],
+    melden: "krank",
+  },
+  {
     id: "abwesenheit",
     label: "Abwesenheit eintragen",
     sublabel: "Ferien, frei, Kompensation, Militär — Formular öffnen",
     href: "/ferien",
     icon: CalendarOff,
-    keywords: ["krank", "krankheit", "krankmeldung", "arzt", "unfall", "abwesenheit", "absenz", "ferien", "urlaub", "frei nehmen", "militaer", "abwesend", "melden"],
+    keywords: ["abwesenheit", "absenz", "ferien", "urlaub", "frei nehmen", "kompensation", "militaer", "abwesend", "melden"],
     melden: "abwesenheit",
   },
   {
     id: "beleg",
     label: "Beleg erfassen",
     sublabel: "Quittung fotografieren und senden",
-    href: "/tickets",
+    href: "/anfragen",
     icon: Receipt,
     keywords: ["beleg", "belege", "quittung", "spesen", "einkauf", "kassenzettel", "rueckerstattung", "melden"],
     gate: "tickets:create",
@@ -111,7 +120,7 @@ export const PALETTE_ACTIONS: PaletteAction[] = [
     id: "anderes",
     label: "Anderes melden",
     sublabel: "IT-Problem oder Material anfragen",
-    href: "/tickets",
+    href: "/anfragen",
     icon: Wrench,
     keywords: ["ticket", "problem melden", "it", "drucker", "computer", "material", "bestellen", "support", "melden"],
     gate: "tickets:create",
@@ -167,7 +176,7 @@ export const PALETTE_ACTIONS: PaletteAction[] = [
   {
     id: "abwesenheit-genehmigen",
     label: "Abwesenheit genehmigen",
-    sublabel: "HR › Anträge (offene Anträge prüfen)",
+    sublabel: "HR › Freigaben (offene Abwesenheiten prüfen)",
     href: "/antraege",
     icon: CalendarCheck,
     keywords: ["abwesenheit genehmigen", "ferien genehmigen", "urlaubsantraege", "antraege pruefen", "abwesenheiten genehmigen", "ferienantrag"],
@@ -176,7 +185,7 @@ export const PALETTE_ACTIONS: PaletteAction[] = [
   {
     id: "rechte-antraege",
     label: "Rechte-Anträge bestätigen",
-    sublabel: "HR › Anträge › Rechte & Lohndaten (Vier Augen)",
+    sublabel: "HR › Freigaben › Rechte & Lohndaten (Vier Augen)",
     href: rechteAntraegeHref(),
     icon: ShieldCheck,
     keywords: ["rechte antraege", "vier augen", "bestaetigen", "lohndaten antraege", "admin rolle", "lohnrecht", "vertretung"],
@@ -283,9 +292,10 @@ const SEITEN_INFO: Record<string, { sublabel: string; keywords: string[] }> = {
   "/kunden":        { sublabel: "Kundenverzeichnis", keywords: ["kunden", "kunde", "kundenliste", "datenbank"] },
   "/locations":     { sublabel: "Verwaltungen und Räume (Verrechnungssätze in der Verwaltung)", keywords: ["location", "standorte", "standort", "verwaltung", "raeume", "raum", "verrechnungssatz", "verrechnungssaetze", "stundensatz", "pikett"] },
   "/lieferanten":   { sublabel: "Catering, Technik, AV", keywords: ["lieferanten", "lieferant", "catering", "technik firma", "datenbank"] },
-  "/antraege":      { sublabel: "Offene Anträge prüfen und genehmigen", keywords: ["antraege", "anfragen", "genehmigen", "personal"] },
+  "/antraege":      { sublabel: "Offene Abwesenheiten, Tickets und Vier-Augen-Anträge freigeben", keywords: ["freigaben", "freigeben", "antraege", "genehmigen", "personal"] },
+  "/anfragen":      { sublabel: "Alles, was du gemeldet hast, mit Stand", keywords: ["anfragen", "meine anfragen", "gemeldet", "beleg", "belege", "spesen", "krank", "stand"] },
   "/stempelzeiten": { sublabel: "Ein-/Ausstempeln und Zeiterfassung", keywords: ["stempelzeiten", "stempeln", "zeiterfassung", "personal"] },
-  "/tickets":       { sublabel: "Tickets und Belege", keywords: ["tickets", "ticket", "beleg", "belege", "spesen", "quittung"] },
+  "/tickets":       { sublabel: "Tickets und Belege bearbeiten", keywords: ["tickets", "ticket", "beleg", "belege", "spesen", "quittung"] },
   "/ferien":        { sublabel: "Ferien, Krankheit, Militär", keywords: ["abwesenheit", "ferien", "krank", "urlaub", "personal"] },
   "/lohn":          { sublabel: "Lohnabrechnungen und Lohnausweise", keywords: ["lohn", "loehne", "lohnabrechnung", "lohnausweis", "gehalt", "personal"] },
   "/abrechnung":    { sublabel: "Aufträge verrechnen", keywords: ["abrechnung", "rechnung", "rechnungen", "verrechnen", "rechnung stellen"] },
@@ -324,7 +334,7 @@ export function paletteEintraege(permissions: string[], role: string): PaletteAc
     return extra ? { ...a, keywords: [...a.keywords, ...extra] } : a;
   });
   // Nur SICHTBARE Aktionen mit GLEICHEM Namen verdraengen eine Seite —
-  // sonst verschwaende z. B. «Anträge» fuer tickets:manage ohne
+  // sonst verschwaende z. B. «Freigaben» fuer tickets:manage ohne
   // ferien:approve ganz, oder «Abwesenheit» stuende nur als «Abwesenheit
   // melden» da (Sidebar-Name = Palette-Name).
   const eigeneZeile = new Set(aktionen.map((a) => `${a.href}|${a.label}`));

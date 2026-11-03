@@ -14,7 +14,7 @@
 //
 // Geschrieben wird NUR über aendereLohndaten() (Protokoll alt/neu/wer per
 // Trigger). Betrifft die Änderung einen abgerechneten (gesperrten) Lohnmonat,
-// wird sie zum Antrag (Vier Augen, Anträge › Rechte & Lohndaten):
+// wird sie zum Antrag (Vier Augen, Freigaben › Rechte & Lohndaten):
 //   - Erfassen: Antrags-Begründung = Begründung des Postens (schon Pflicht)
 //   - Ändern/Löschen: `begruendung` (sonst 409 «begruendung_noetig» → Modal)
 // Zugriff: Lohnrecht + vertrautes Gerät; den eigenen Lohn ändert eine zweite

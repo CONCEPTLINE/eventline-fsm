@@ -113,7 +113,7 @@ export default function AntraegePage() {
       <div className="max-w-md mx-auto py-16">
         <EmptyState
           icon={ShieldOff}
-          title="Kein Zugriff auf Anträge"
+          title="Kein Zugriff auf Freigaben"
           description="Diese Seite ist für alle, die Abwesenheiten, Tickets oder Stempelzeiten genehmigen."
         />
       </div>
@@ -155,7 +155,7 @@ export default function AntraegePage() {
       <div className="flex items-center gap-3 min-w-0">
         {fromDashboard && <BackButton fallbackHref="/dashboard" />}
         <div className="min-w-0">
-          <h1 className="text-2xl font-bold tracking-tight">Anträge</h1>
+          <h1 className="text-2xl font-bold tracking-tight">Freigaben</h1>
           <p className="text-sm text-muted-foreground mt-1">{UNTERTITEL[aktiv]}</p>
         </div>
       </div>
@@ -164,7 +164,7 @@ export default function AntraegePage() {
           Abstand von space-y-6 zum Inhalt aufheben würde. */}
       {isAdmin && (
         <div>
-          <TabsNav tabs={tabs} active={aktiv} onChange={(k) => waehleTab(k as Tab)} ariaLabel="Anträge-Bereiche" />
+          <TabsNav tabs={tabs} active={aktiv} onChange={(k) => waehleTab(k as Tab)} ariaLabel="Freigaben-Bereiche" />
         </div>
       )}
 

@@ -793,7 +793,7 @@ function MonatsabschlussDialog({ zeile, name, period, onClose, onGeaendert }: {
     if (!j) return;
     if (j.mode === "begruendung_noetig") { setMeldung(String(j.meldung ?? "Begründung nötig")); return; }
     if (!j.success) { toast.error(fehlerText(j, "Ende konnte nicht gesetzt werden")); return; }
-    toast.success(j.mode === "antrag" ? String(j.meldung ?? "Antrag gestellt — die zweite Person bestätigt ihn unter Anträge") : "Ende gesetzt");
+    toast.success(j.mode === "antrag" ? String(j.meldung ?? "Antrag gestellt — die zweite Person bestätigt ihn unter Freigaben") : "Ende gesetzt");
     setEndeFuer(null);
     onGeaendert();
   }
@@ -876,7 +876,7 @@ function MonatsabschlussDialog({ zeile, name, period, onClose, onGeaendert }: {
                             {gesperrt ? "Antrag stellen" : "Ende speichern"}
                           </button>
                         </div>
-                        {gesperrt && <p className="text-[10px] text-muted-foreground">Der Monat ist abgerechnet — die Änderung bestätigt eine zweite Person unter Anträge (Vier Augen).</p>}
+                        {gesperrt && <p className="text-[10px] text-muted-foreground">Der Monat ist abgerechnet — die Änderung bestätigt eine zweite Person unter Freigaben (Vier Augen).</p>}
                       </div>
                     ) : (
                       <div className="flex flex-wrap gap-1.5">

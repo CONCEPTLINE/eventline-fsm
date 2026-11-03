@@ -109,7 +109,7 @@ export async function aendereLohndaten(
   if (insErr || !antrag) throw new Error(`Antrag konnte nicht gespeichert werden: ${insErr?.message ?? "keine Antwort"}`);
   // Meldung auch als Push (Sperrbildschirm): ohne Beträge und Begründung — Details nur im Reiter.
   await melde(admin, "Lohndaten: Antrag wartet auf Bestätigung",
-    `${a.akteurName ?? "Jemand"} beantragt eine Änderung (${BEREICH_TEXT[a.bereich]}${a.zielName ? `, ${a.zielName}` : ""}) — Details und Bestätigen unter Anträge › Rechte & Lohndaten.`, a.akteurId);
+    `${a.akteurName ?? "Jemand"} beantragt eine Änderung (${BEREICH_TEXT[a.bereich]}${a.zielName ? `, ${a.zielName}` : ""}) — Details und Bestätigen unter Freigaben › Rechte & Lohndaten.`, a.akteurId);
   return { modus: "antrag", antragId: antrag.id as string, gueltigBis: antrag.gueltig_bis as string, betrifftAb };
 }
 

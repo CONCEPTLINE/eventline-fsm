@@ -41,6 +41,7 @@ export function anfragenGeaendert(): void {
 /** Die vier Kacheln (Reihenfolge = Anzeige). Icons setzt die Komponente. */
 export const MELDEN_KACHELN: ReadonlyArray<{ art: Exclude<MeldenArt, "anderes">; label: string; hinweis: string }> = [
   { art: "beleg", label: "Beleg", hinweis: "Foto, fertig" },
+  { art: "krank", label: "Krank", hinweis: "ab heute" },
   { art: "abwesenheit", label: "Abwesenheit", hinweis: "Ferien, frei, Militär" },
   { art: "stempel", label: "Stempel korrigieren", hinweis: "vergessen, falsch" },
 ];

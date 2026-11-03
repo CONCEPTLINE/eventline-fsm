@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Anträge › Rechte & Lohndaten (/antraege?tab=rechte[&id=…]) — Vier Augen bei
+ * Freigaben › Rechte & Lohndaten (/antraege?tab=rechte[&id=…]) — Vier Augen bei
  * Rechten, Lohn-Umbau Phase 1 (Migration 361), und bei Lohndaten nach der
  * Monatssperre, Phase 2 (Migration 364). Bis 29.10.2026 eigene Seite
  * /rechte-antraege (leitet hierher um). Kopf, Reiter und Wartungsschranke

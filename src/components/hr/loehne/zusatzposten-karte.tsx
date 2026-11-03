@@ -283,7 +283,7 @@ export function ZusatzpostenKarte({ profileId, gesperrt, onBeschaeftigt }: {
           {daten.offene > 0 && (
             <p className="flex items-start gap-1.5 text-[11px] text-amber-700 dark:text-amber-300">
               <AlertTriangle className="h-3 w-3 mt-0.5 shrink-0" />
-              {daten.offene === 1 ? "1 Antrag" : `${daten.offene} Anträge`} offen — bestätigt eine zweite Person unter Anträge › Rechte &amp; Lohndaten.
+              {daten.offene === 1 ? "1 Antrag" : `${daten.offene} Anträge`} offen — bestätigt eine zweite Person unter Freigaben › Rechte &amp; Lohndaten.
             </p>
           )}
           {posten.length === 0 && bearbeite === null && (

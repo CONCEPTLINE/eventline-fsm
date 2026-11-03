@@ -25,6 +25,7 @@ const FELD_PREFIXES = [
   "/tickets",
   "/ferien",
   "/lohn",
+  "/anfragen",
   "/mein-konto",
   "/locations",
   "/standorte",
@@ -60,7 +61,8 @@ const EXTRA_TITEL: Array<[string, string]> = [
   // «Finanzen» (Buero-Seite → Hinweis-Balken kommt automatisch).
   ["/finanzen", "Finanzen"],
   ["/stempelzeiten", "Stempelzeiten"],
-  ["/tickets", "Tickets & Belege"],
+  ["/tickets", "Tickets"],
+  ["/anfragen", "Meine Anfragen"],
   ["/ferien", "Abwesenheit"],
   ["/mein-konto", "Mein Konto"],
   ["/anleitung", "Anleitung"],
@@ -95,6 +97,7 @@ export function bereichsWurzel(pathname: string): string | null {
  *  (Stempelzeiten, Lohn, Abwesenheit, Tickets, Aufträge, Locations …). */
 const KONTO_BEREICH = [
   "/mein-konto",
+  "/anfragen",
   "/stempelzeiten",
   "/lohn",
   "/ferien",

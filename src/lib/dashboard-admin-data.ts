@@ -103,7 +103,7 @@ export interface AufmerksamkeitRechte {
   /** Admin — Fristen der Ablage in Trust one (die Ablage ist nur Admin, kein Rechte-Slug). */
   fristen: boolean;
   /** Admin — offene Rechte-/Lohndaten-Anträge, die DIESE Person bestätigen
-   *  kann (Anträge › Rechte & Lohndaten, Regeln src/lib/lohn/antraege-zaehler.ts).
+   *  kann (Freigaben › Rechte & Lohndaten, Regeln src/lib/lohn/antraege-zaehler.ts).
    *  Personenbezogen (Gerät, eigene Anträge) — null = Zeile nicht laden. */
   rechteAntraege: ZaehlerBetrachter | null;
 }

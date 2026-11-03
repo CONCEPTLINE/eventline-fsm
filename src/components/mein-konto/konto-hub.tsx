@@ -21,7 +21,7 @@ import { ART_LABEL, type Anfrage, type AnfrageTon } from "@/lib/anfragen";
 import { Skeleton } from "@/components/ui/skeleton";
 
 /** Ziel von «Alle Anfragen». */
-export const ALLE_ANFRAGEN_HREF = "/tickets";
+export const ALLE_ANFRAGEN_HREF = "/anfragen";
 
 interface Uebersicht {
   anfragen: Anfrage[];
@@ -132,12 +132,12 @@ function AnfragenKurz({ daten, fehler }: { daten: Uebersicht | null; fehler: str
           </>
         );
         const klasse = "flex min-h-[42px] items-center gap-3 border-t border-border px-4 text-[14px] first:border-t-0";
-        return a.link ? (
-          <PrefetchLink key={a.key} href={a.link} className={`${klasse} row-hover [--row-hover-x:0.5rem]`}>
+        // Tickets oeffnen ihre Detailseite, Abwesenheiten/Krank die Liste
+        // (dort: Wieder gesund, Arztzeugnis, Zurückziehen).
+        return (
+          <PrefetchLink key={a.key} href={a.link ?? ALLE_ANFRAGEN_HREF} className={`${klasse} row-hover [--row-hover-x:0.5rem]`}>
             {inhalt}
           </PrefetchLink>
-        ) : (
-          <div key={a.key} className={klasse}>{inhalt}</div>
         );
       })}
     </div>

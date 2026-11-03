@@ -1,4 +1,4 @@
-// Seite «Anträge» (/antraege): Reiter «Rechte & Lohndaten» (Vier Augen bei
+// Seite «Freigaben» (/antraege): Reiter «Rechte & Lohndaten» (Vier Augen bei
 // Rechten und Lohndaten, früher eigene Seite /rechte-antraege). Eine Quelle für
 // alle Links dorthin — Glocke, Toast-Aktionen, Dashboard, Befehlspalette — und
 // für die Umleitung der alten Adresse. Rein (Browser + Server).
