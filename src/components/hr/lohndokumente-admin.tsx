@@ -447,7 +447,7 @@ function WahlModal({ open, onClose, profileId, name, wahl, historie, onDone }: {
     <Modal open={open} onClose={() => { if (!busy) onClose(); }} closable={!busy} title={`Zustellung · ${name}`} size="md">
       <div className="space-y-3 text-sm">
         <p className="text-xs text-muted-foreground">
-          Normalerweise wählt die Person selbst (Lohn › Meine). Hier nur auf ihren Wunsch eintragen — die Notiz hält fest, wie sie es gewünscht hat.
+          Normalerweise wählt die Person selbst (unter Lohn). Hier nur auf ihren Wunsch eintragen — die Notiz hält fest, wie sie es gewünscht hat.
         </p>
         <div className="flex gap-1">
           <button type="button" onClick={() => setNeu("digital")} disabled={busy} className={neu === "digital" ? "kasten-active" : "kasten-toggle-off"}>

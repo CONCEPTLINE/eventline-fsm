@@ -149,7 +149,7 @@ export function RechteAntraegeView({ onGeaendert }: { onGeaendert?: () => void }
     if (aktion === "bestaetigen") {
       const ok = await confirm({
         title: "Antrag bestätigen?",
-        message: `${a.beschreibung}.\nBegründung: ${a.begruendung}\n\nDie Änderung gilt sofort. Danach rechnet das System die betroffenen Monate neu und schlägt Korrekturfassungen vor (Lohn › Lohndokumente).`,
+        message: `${a.beschreibung}.\nBegründung: ${a.begruendung}\n\nDie Änderung gilt sofort. Danach rechnet das System die betroffenen Monate neu und schlägt Korrekturfassungen vor (Lohn › Lohnverwaltung › Lohndokumente).`,
         confirmLabel: "Bestätigen",
         variant: "blue",
       });
@@ -185,7 +185,7 @@ export function RechteAntraegeView({ onGeaendert }: { onGeaendert?: () => void }
         toast.error((json?.error as string | undefined) ?? "Entscheid fehlgeschlagen.");
       } else if (aktion === "bestaetigen") {
         const n = Number(json.vorschlaege ?? 0);
-        toast.success(`Bestätigt — ${n} Korrektur-Vorschl${n === 1 ? "ag" : "äge"} (Lohn › Lohndokumente)`);
+        toast.success(`Bestätigt — ${n} Korrektur-Vorschl${n === 1 ? "ag" : "äge"} (Lohn › Lohnverwaltung › Lohndokumente)`);
         const fehler = Array.isArray(json.fehler) ? (json.fehler as string[]) : [];
         if (fehler.length > 0) {
           toast.warning(`${fehler.length} Monat${fehler.length === 1 ? "" : "e"} nicht nachgerechnet`, {

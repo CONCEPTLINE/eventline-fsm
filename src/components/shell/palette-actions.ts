@@ -21,8 +21,8 @@
 // (Defense in depth).
 
 import {
-  CalendarOff, Clock, ClipboardList, FileText, FileStack,
-  Timer, TicketCheck, Users, Shield, ShieldCheck, Building2,
+  CalendarOff, Clock, ClipboardList, FileText, Wallet, FileStack,
+  Timer, Percent, TicketCheck, Users, Shield, ShieldCheck, Building2,
   Plug, Handshake, UserCircle, TrendingUp, CalendarCheck, Truck, LayoutDashboard,
 } from "lucide-react";
 import { sichtbareNavGruppen } from "@/lib/constants";
@@ -99,6 +99,34 @@ export const PALETTE_ACTIONS: PaletteAction[] = [
     href: "/lohn",
     icon: FileStack,
     keywords: ["lohn", "lohnabrechnung", "lohn pdf", "lohnausweis", "payslip", "lohnzettel"],
+  },
+  // Befristet bis nach dem Lohnlauf November 2026 (Phase 2 entfernt /lohn/verwaltung).
+  {
+    id: "lohnerhoehung",
+    label: "Löhne & Lohnerhöhung",
+    sublabel: "HR › Lohn › Lohnverwaltung › Mitarbeiter-Lohn (Lohn ändern oder Erhöhung planen)",
+    href: "/lohn/verwaltung?tab=mitarbeiter",
+    icon: Wallet,
+    keywords: ["lohn", "lohnerhoehung", "gehalt", "gehaltserhoehung", "salaer", "stundenlohn", "lohn aendern", "verdienst", "brutto"],
+    gate: "lohn:manage",
+  },
+  {
+    id: "lohnabrechnungen",
+    label: "Lohndokumente verwalten",
+    sublabel: "HR › Lohn › Lohnverwaltung › Lohndokumente (Monats-Abrechnungen)",
+    href: "/lohn/verwaltung?tab=dokumente",
+    icon: FileStack,
+    keywords: ["lohnabrechnung", "lohndokumente", "lohnlauf", "abrechnung lohn", "lohn pdf"],
+    gate: "lohn:manage",
+  },
+  {
+    id: "lohn-standardwerte",
+    label: "Lohn-Standardwerte",
+    sublabel: "HR › Lohn › Lohnverwaltung › Standardwerte (AHV/ALV/BVG-Sätze)",
+    href: "/lohn/verwaltung?tab=standardwerte",
+    icon: Percent,
+    keywords: ["standardwerte", "abzuege", "ahv", "alv", "bvg", "sozialleistungen", "arbeitgeberanteil", "quellensteuer"],
+    gate: "lohn:manage",
   },
   {
     id: "monatsstunden",

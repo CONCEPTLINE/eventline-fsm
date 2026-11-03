@@ -77,7 +77,7 @@ export async function POST(request: Request) {
   if (hourly_wage_chf != null && (await pruefeVertrautesGeraet(auth.user.id)) !== "vertraut") {
     return NextResponse.json({
       success: false,
-      error: "Stundenlohn nur auf einem vertrauten Gerät erfassen — Feld leer lassen und den Lohn später unter Lohn › Mitarbeiter-Lohn eintragen.",
+      error: "Stundenlohn nur auf einem vertrauten Gerät erfassen — Feld leer lassen und den Lohn später unter Lohn › Lohnverwaltung › Mitarbeiter-Lohn eintragen.",
     }, { status: 403 });
   }
 

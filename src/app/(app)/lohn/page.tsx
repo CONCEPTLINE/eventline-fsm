@@ -7,21 +7,28 @@
  * Trust flow; das ERP zeigt die gelieferten PDFs.
  *
  * Alte Links auf die frühere Team-Ansicht (?ansicht=team&tab=…, Mails,
- * Glocke, Lesezeichen) landen auf Stempelzeiten › Prüfen (mit ?monat=).
- * Schlüssel: src/components/hr/lohn-bereiche.ts.
+ * Glocke, Lesezeichen): Monatsstunden → Stempelzeiten › Prüfen (mit ?monat=),
+ * Lohndokumente/Mitarbeiter-Lohn/Standardwerte → /lohn/verwaltung (befristet).
+ * Mit lohn:manage ein dezenter Link auf die Lohnverwaltung (bis Lohnlauf
+ * November 2026). Schlüssel: src/components/hr/lohn-bereiche.ts.
  */
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { BackButton } from "@/components/ui/back-button";
 import { MeinLohn } from "@/components/lohn/mein-lohn";
-import { LOHN_PARAM_ANSICHT, teamLinkZiel } from "@/components/hr/lohn-bereiche";
+import { PrefetchLink } from "@/components/shell/prefetch-link";
+import { LOHN_PARAM_ANSICHT, LOHN_PARAM_BEREICH, teamLinkZiel, verwaltungLink } from "@/components/hr/lohn-bereiche";
+import { usePermissions } from "@/lib/use-permissions";
 import Loading from "./loading";
 
 export default function LohnPage() {
   const searchParams = useSearchParams();
   const router = useRouter();
-  const teamZiel = searchParams.get(LOHN_PARAM_ANSICHT) === "team" ? teamLinkZiel(searchParams.get("monat")) : null;
+  const { can, ready } = usePermissions();
+  const teamZiel = searchParams.get(LOHN_PARAM_ANSICHT) === "team"
+    ? teamLinkZiel(searchParams.get(LOHN_PARAM_BEREICH), searchParams.get("monat"))
+    : null;
 
   useEffect(() => {
     if (teamZiel) router.replace(teamZiel);
@@ -41,7 +48,24 @@ export default function LohnPage() {
           <p className="text-sm text-muted-foreground mt-1">Deine Lohnabrechnungen, Lohnausweise und Stunden.</p>
         </div>
       </div>
+      {ready && can("lohn:manage") && <VerwaltungLink />}
       <MeinLohn />
     </div>
+  );
+}
+
+/** Dezenter Link auf die befristete Lohnverwaltung (nur lohn:manage). Entfällt in Phase 2. */
+function VerwaltungLink() {
+  const [hover, setHover] = useState(false);
+  return (
+    <p className="-mt-3 text-xs text-muted-foreground" onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}>
+      <PrefetchLink
+        href={verwaltungLink()}
+        className="underline underline-offset-2"
+        style={{ color: hover ? "var(--accent)" : undefined }}
+      >
+        Lohnverwaltung (bis Lohnlauf November 2026)
+      </PrefetchLink>
+    </p>
   );
 }

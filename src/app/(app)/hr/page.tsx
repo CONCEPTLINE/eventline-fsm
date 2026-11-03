@@ -10,9 +10,10 @@
  *   ?tab=stempelzeiten                    → /stempelzeiten
  *   ?tab=tickets                          → /tickets
  *   ?tab=ferien | abwesenheit             → /ferien
- *   ?tab=loehne | lohn                    → /lohn  (lohn=team → Stempelzeiten
- *                                                   › Prüfen, die Team-Ansicht
- *                                                   gibt es nicht mehr)
+ *   ?tab=loehne | lohn                    → /lohn  (lohn=team: subtab
+ *                                                   dokumente|mitarbeiter|standardwerte
+ *                                                   → /lohn/verwaltung, sonst
+ *                                                   → Stempelzeiten › Prüfen)
  *   ?tab=mitarbeiter                      → /einstellungen?tab=mitarbeiter
  *                                            (nur Admins)
  *   ohne/unbekannt oder Ziel nicht erlaubt → erste erlaubte Seite in der
@@ -75,11 +76,14 @@ export default function HrWeiterleitung() {
       "/einstellungen": role === "admin",
     };
 
-    // Alte Links auf Lohn › Team → Stempelzeiten › Prüfen (wer die Seite sehen darf).
+    // Alte Links auf Lohn › Team → Lohnverwaltung bzw. Stempelzeiten › Prüfen (nur mit Lohnrecht).
     const tab = searchParams.get("tab");
-    if ((tab === "loehne" || tab === "lohn") && resolveLohnAnsicht(searchParams.get("lohn")) === "team" && can("lohn:manage") && erlaubt["/stempelzeiten"]) {
-      router.replace(teamLinkZiel(searchParams.get("monat")));
-      return;
+    if ((tab === "loehne" || tab === "lohn") && resolveLohnAnsicht(searchParams.get("lohn")) === "team" && can("lohn:manage")) {
+      const ziel = teamLinkZiel(searchParams.get("subtab"), searchParams.get("monat"));
+      if (ziel.startsWith("/lohn/") || erlaubt["/stempelzeiten"]) {
+        router.replace(ziel);
+        return;
+      }
     }
 
     const gewuenscht = TAB_ZIEL[tab ?? ""];

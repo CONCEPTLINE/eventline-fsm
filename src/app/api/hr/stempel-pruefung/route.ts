@@ -4,7 +4,11 @@
 // (gleiche Regel wie Rechenkern und Trust flow, src/lib/lohn/stunden.ts), was
 // vor der Lohnabrechnung zu prüfen ist (offene Stempel, Stempel über 16 h ohne
 // «geprüft» — src/lib/lohn/stempel-pruefung.ts), lange Schichten im Monat und
-// offene Anträge (Stempel-Änderungs-Tickets, Stempel-Anträge der Lohnverwaltung).
+// offene Anträge, die DIESEN Monat betreffen — Stempel-Änderungs-Tickets: neuer
+// Beginn (data.neu_start) bzw. Beginn des korrigierten Stempels (data.time_entry_id);
+// Stempel-Anträge der Lohnverwaltung: Beginn je Operation (werte.clock_in) bzw.
+// des betroffenen Stempels (id), sonst betrifft_ab. Ein Antrag ohne erkennbares
+// Datum zählt in jedem Monat (nie verschluckt).
 // KEINE Beträge — Löhne rechnet Trust flow. Dazu: Monat gesperrt (is_time_entry_locked)
 // und ab wann.
 //
@@ -56,12 +60,12 @@ export async function GET(req: Request) {
           .gte("clock_in", von).lt("clock_in", bis).order("id").range(a, b),
         "Stempelzeiten",
       ),
-      ladeAlleSeiten<{ created_by: string | null }>(
-        (a, b) => admin.from("tickets").select("created_by").eq("type", "stempel_aenderung").eq("status", "offen").order("id").range(a, b),
+      ladeAlleSeiten<{ created_by: string | null; data: Record<string, unknown> | null }>(
+        (a, b) => admin.from("tickets").select("created_by, data").eq("type", "stempel_aenderung").eq("status", "offen").order("id").range(a, b),
         "Stempel-Tickets",
       ),
-      ladeAlleSeiten<{ profile_id: string | null }>(
-        (a, b) => admin.from("lohn_aenderungs_antraege").select("profile_id").eq("bereich", "stempel").eq("status", "offen")
+      ladeAlleSeiten<{ profile_id: string | null; operationen: unknown; betrifft_ab: string | null }>(
+        (a, b) => admin.from("lohn_aenderungs_antraege").select("profile_id, operationen, betrifft_ab").eq("bereich", "stempel").eq("status", "offen")
           .gt("gueltig_bis", jetzt).order("id").range(a, b),
         "Stempel-Anträge",
       ),
@@ -70,9 +74,43 @@ export async function GET(req: Request) {
 
     const jePerson = new Map<string, StempelZeile[]>();
     for (const s of stempel) jePerson.set(s.user_id, [...(jePerson.get(s.user_id) ?? []), s]);
+
+    // Offene Anträge → betroffene Lohnmonate (Ortszeit). Beginn bestehender Stempel über ihre ID.
+    type Op = { id?: unknown; werte?: { clock_in?: unknown } | null };
+    const ops = (a: { operationen: unknown }) => (Array.isArray(a.operationen) ? a.operationen : []) as Op[];
+    const stempelIds = new Set<string>();
+    for (const t of tickets) if (typeof t.data?.time_entry_id === "string") stempelIds.add(t.data.time_entry_id);
+    for (const a of antraege) for (const o of ops(a)) if (typeof o.id === "string") stempelIds.add(o.id);
+    const beginnVon = new Map<string, string>();
+    const idListe = [...stempelIds];
+    for (let i = 0; i < idListe.length; i += 150) {
+      const teil = idListe.slice(i, i + 150);
+      const zeilen = await ladeAlleSeiten<{ id: string; clock_in: string }>(
+        (a, b) => admin.from("time_entries").select("id, clock_in").in("id", teil).order("id").range(a, b),
+        "Stempel der Anträge",
+      );
+      for (const z of zeilen) beginnVon.set(z.id, z.clock_in);
+    }
+    const monatAus = (iso: unknown): string | null =>
+      typeof iso === "string" && !Number.isNaN(new Date(iso).getTime()) ? lokalesDatum(new Date(iso).getTime()).slice(0, 7) : null;
+    const betrifftMonat = (monate: (string | null)[]) => {
+      const bekannt = monate.filter((m): m is string => !!m);
+      return bekannt.length === 0 || bekannt.includes(monatText); // ohne Datum: immer zeigen
+    };
     const offeneAntraege = new Map<string, number>();
-    for (const t of tickets) if (t.created_by) offeneAntraege.set(t.created_by, (offeneAntraege.get(t.created_by) ?? 0) + 1);
-    for (const a of antraege) if (a.profile_id) offeneAntraege.set(a.profile_id, (offeneAntraege.get(a.profile_id) ?? 0) + 1);
+    const zaehle = (id: string) => offeneAntraege.set(id, (offeneAntraege.get(id) ?? 0) + 1);
+    for (const t of tickets) {
+      if (!t.created_by) continue;
+      const alt = typeof t.data?.time_entry_id === "string" ? beginnVon.get(t.data.time_entry_id) : undefined;
+      if (betrifftMonat([monatAus(t.data?.neu_start), monatAus(alt)])) zaehle(t.created_by);
+    }
+    for (const a of antraege) {
+      if (!a.profile_id) continue;
+      const monate: (string | null)[] = ops(a).flatMap((o) => [monatAus(o.werte?.clock_in), typeof o.id === "string" ? monatAus(beginnVon.get(o.id)) : null]);
+      const ohneDatum = !monate.some((m) => m !== null);
+      if (ohneDatum && a.betrifft_ab) monate.push(a.betrifft_ab.slice(0, 7));
+      if (betrifftMonat(monate)) zaehle(a.profile_id);
+    }
 
     const minutenVon = (id: string) => minutenJeMonat((jePerson.get(id) ?? []).map((s) => ({ start: s.clock_in, ende: s.clock_out }))).get(monatText) ?? 0;
     const sichtbar = profile

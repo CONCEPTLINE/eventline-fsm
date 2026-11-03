@@ -45,6 +45,7 @@
 // nichts — die Cron-Route ruft pausiereLohnLauf() statt fuehreLohnLaufAus()
 // und hält «pausiert (Wartung)» in lohn_lauf fest.
 
+import { verwaltungLink } from "@/components/hr/lohn-bereiche";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { logError } from "@/lib/log";
 import { todayLocalIso } from "@/lib/swiss-time";
@@ -310,7 +311,7 @@ export interface LaufAntwort {
   meldung?: string;
 }
 
-async function melde(admin: SupabaseClient, titel: string, text: string, link = "/lohn?ansicht=team&tab=dokumente") {
+async function melde(admin: SupabaseClient, titel: string, text: string, link = verwaltungLink("dokumente")) {
   try {
     const empfaenger = await recipientsWithPermission(admin, LOHN_RECHT);
     if (empfaenger.length === 0) return;
