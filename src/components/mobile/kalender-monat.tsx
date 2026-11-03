@@ -102,6 +102,7 @@ import { formatProjectNumber } from "@/lib/projekte-format";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { LadeFehler } from "@/components/mobile/lade-fehler";
+import { ABWESEND_LABEL, type AbwesenheitAnzeigeTyp } from "@/lib/abwesenheit-sichtbarkeit";
 
 /** Sofortiges Lade-Feedback (§7), solange der Modal-Chunk nachlaedt —
  *  gleich wie in kalender/page.tsx: Backdrop der Modal-Komponente + Spinner. */
@@ -128,7 +129,8 @@ type ListenEinsatz = Einsatz & { person: string | null };
 
 interface Abwesenheit {
   id: string;
-  typ: "ferien" | "krank" | "kompensation" | "frei" | "militaer";
+  /** «abwesend» = maskierte Krankheit fuer Nicht-Berechtigte (Migration 379). */
+  typ: AbwesenheitAnzeigeTyp;
   start: string; // YYYY-MM-DD
   ende: string;  // YYYY-MM-DD, inklusiv
   /** Wer abwesend ist (Team-Sicht). In der Ich-Sicht null — dort ist es
@@ -144,6 +146,7 @@ const ABWESENHEIT_LABEL: Record<Abwesenheit["typ"], string> = {
   kompensation: "Kompensation",
   frei: "Frei",
   militaer: "Militär",
+  abwesend: ABWESEND_LABEL,
 };
 
 // ---------------------------------------------------------------------------
@@ -207,8 +210,8 @@ type TeamProjektRow = {
   assignee: Verknuepft<{ full_name: string }>;
 };
 type TeamAbwesenheitRow = {
-  id: string; user_id: string; type: Abwesenheit["typ"]; start_date: string; end_date: string;
-  user: Verknuepft<{ full_name: string; is_active: boolean | null }>;
+  id: string; user_id: string; typ: Abwesenheit["typ"]; start_date: string; end_date: string;
+  status: string; user_name: string | null; user_aktiv: boolean;
 };
 
 /** Team-Sicht: wie ladeMeineEinsaetze (bisTag exklusiv), aber ohne
@@ -327,32 +330,28 @@ async function ladeAbwesenheiten(
 }
 
 /** Team-Sicht: alle sichtbaren genehmigten Abwesenheiten im Fenster [vonTag,
- *  bisTag] (bisTag INKLUSIV), mit Namen. RLS time_off_select_team (Migration
- *  257) begrenzt auf eigene, eigenes Team, scope all bzw. ferien:approve.
- *  !inner + is_active wie der Desktop-Kalender: Abwesenheiten deaktivierter
- *  Mitarbeiter gehoeren nicht mehr in den Kalender. */
+ *  bisTag] (bisTag INKLUSIV), mit Namen. Ueber team_abwesenheiten()
+ *  (Migration 379): dieselben Personen wie bisher (eigene, eigenes Team,
+ *  scope all, Berechtigte), «krank» fuer Nicht-Berechtigte als «abwesend».
+ *  Abwesenheiten deaktivierter Mitarbeiter gehoeren nicht in den Kalender. */
 async function ladeTeamAbwesenheiten(
   supabase: SupabaseClient,
   vonTag: string,
   bisTag: string,
 ): Promise<Abwesenheit[]> {
-  const { data, error } = await supabase
-    .from("time_off")
-    .select("id, user_id, type, start_date, end_date, user:profiles!user_id!inner(full_name, is_active)")
-    .eq("status", "genehmigt")
-    .eq("user.is_active", true)
-    .gte("end_date", vonTag)
-    .lte("start_date", bisTag)
-    .order("start_date", { ascending: true });
+  const { data, error } = await supabase.rpc("team_abwesenheiten", { p_von: vonTag, p_bis: bisTag });
   if (error) throw new Error(error.message);
-  return ((data ?? []) as unknown as TeamAbwesenheitRow[]).map((r) => ({
-    id: r.id,
-    typ: r.type,
-    start: r.start_date,
-    ende: r.end_date,
-    person: eins(r.user)?.full_name ?? null,
-    userId: r.user_id,
-  }));
+  return ((data ?? []) as TeamAbwesenheitRow[])
+    .filter((r) => r.status === "genehmigt" && r.user_aktiv)
+    .sort((a, b) => a.start_date.localeCompare(b.start_date))
+    .map((r) => ({
+      id: r.id,
+      typ: r.typ,
+      start: r.start_date,
+      ende: r.end_date,
+      person: r.user_name,
+      userId: r.user_id,
+    }));
 }
 
 interface Geladen {

@@ -121,8 +121,10 @@ interface RawTimeOff {
   user_id: string;
   start_date: string;
   end_date: string;
-  type: "ferien" | "krank" | "kompensation" | "frei" | "militaer";
-  user: { full_name: string } | null;
+  status: string;
+  typ: CalendarTimeOff["type"];
+  user_name: string | null;
+  user_aktiv: boolean;
 }
 
 function KalenderDesktop() {
@@ -234,16 +236,9 @@ function KalenderDesktop() {
           .not("start_time", "is", null)
           .gte("start_time", rangeStart)
           .lte("start_time", rangeEnd),
-        supabase
-          .from("time_off")
-          // !inner + is_active-Filter: Abwesenheiten DEAKTIVIERTER
-          // Mitarbeiter gehoeren nicht mehr in den Kalender (Vorfall
-          // Tim, 2026-09-29 — Konto deaktiviert, Ferien weiter sichtbar).
-          .select("id, user_id, start_date, end_date, type, user:profiles!user_id!inner(full_name, is_active)")
-          .eq("status", "genehmigt")
-          .eq("user.is_active", true)
-          .gte("end_date", rangeStartDate)
-          .lte("start_date", rangeEndDate),
+        // Fremde Abwesenheiten nur ueber team_abwesenheiten() (Migration
+        // 379): «krank» kommt fuer Nicht-Berechtigte als «abwesend».
+        supabase.rpc("team_abwesenheiten", { p_von: rangeStartDate, p_bis: rangeEndDate }),
         supabase
           .from("project_appointments")
           .select("id, title, start_time, end_time, assigned_to, assignee:profiles!project_appointments_assigned_to_fkey(full_name), project:projects!project_id(id, project_number, title, status)")
@@ -381,13 +376,16 @@ function KalenderDesktop() {
       const calTimeOffs: CalendarTimeOff[] = [];
       for (const r of (timeOffRes.data ?? []) as unknown as RawTimeOff[]) {
         if (!r.user_id) continue;
+        // Nur genehmigte, und keine DEAKTIVIERTEN Mitarbeiter (Vorfall Tim,
+        // 2026-09-29 — Konto deaktiviert, Ferien weiter sichtbar).
+        if (r.status !== "genehmigt" || !r.user_aktiv) continue;
         const [sy, sm, sd] = r.start_date.split("-").map(Number);
         const [ey, em, ed] = r.end_date.split("-").map(Number);
         calTimeOffs.push({
           id: r.id,
           userId: r.user_id,
-          userName: r.user?.full_name ?? "Unbekannt",
-          type: r.type,
+          userName: r.user_name ?? "Unbekannt",
+          type: r.typ,
           startDate: new Date(sy, sm - 1, sd),
           endDate: new Date(ey, em - 1, ed),
         });

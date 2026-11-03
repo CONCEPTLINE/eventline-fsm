@@ -15,6 +15,7 @@ import { JOB_FIELDS } from "@/lib/constants";
 import { PORTAL_ROLLEN_IN } from "@/lib/roles";
 import { ablageFristenLink, ladeTrustOneFristen } from "@/lib/trust-one-ablage";
 import { logError } from "@/lib/log";
+import { typFuerBetrachter, type AbwesenheitAnzeigeTyp } from "@/lib/abwesenheit-sichtbarkeit";
 import { zaehleBestaetigbareAntraege, type ZaehlerBetrachter } from "@/lib/lohn/antraege-zaehler";
 
 type AdminClient = ReturnType<typeof createAdminClient>;
@@ -419,9 +420,11 @@ export async function teamMitgliederIds(admin: AdminClient, userId: string): Pro
  *  `sicht: "alle"` — alle aktiven internen Mitarbeiter (Admin, Rollen mit
  *  stempelzeiten:see-all, Buero-Bildschirm).
  *  `sicht: "team"` — nur die Mitarbeiter mit profiles.team_lead_id = userId
- *  (Team-Leiter-Sicht «Mein Team»; die leitende Person selbst nicht). */
+ *  (Team-Leiter-Sicht «Mein Team»; die leitende Person selbst nicht).
+ *  `typSichtbar` — false: «krank» wird als «abwesend» geliefert (Migration
+ *  379; echter Typ nur fuer Admin, ferien:approve, tickets:manage). */
 export async function ladeTeamStatus(
-  opts: { sicht: "alle" } | { sicht: "team"; userId: string },
+  opts: ({ sicht: "alle" } | { sicht: "team"; userId: string }) & { typSichtbar: boolean },
 ): Promise<TeamMemberStatus[]> {
   const admin = createAdminClient();
   const today = todayLocalIso();
@@ -489,7 +492,10 @@ export async function ladeTeamStatus(
   }
   const absenceByUser = new Map<string, { type: string; end_date: string }>();
   for (const a of (absencesRes.data ?? []) as { user_id: string; type: string; end_date: string }[]) {
-    if (!absenceByUser.has(a.user_id)) absenceByUser.set(a.user_id, { type: a.type, end_date: a.end_date });
+    if (!absenceByUser.has(a.user_id)) {
+      const type = typFuerBetrachter(a.type as AbwesenheitAnzeigeTyp, { eigen: false, privilegiert: opts.typSichtbar });
+      absenceByUser.set(a.user_id, { type, end_date: a.end_date });
+    }
   }
 
   const members: TeamMemberStatus[] = ((profilesRes.data ?? []) as { id: string; full_name: string }[]).map((p) => {
@@ -707,7 +713,8 @@ export async function loadAdminData(): Promise<AdminPayload> {
   const [kennzahlen, aufmerksamkeit, members] = await Promise.all([
     ladeKennzahlen({ auftraege: false, termine: true }),
     ladeAufmerksamkeit(ALLE_AUFMERKSAMKEIT_RECHTE),
-    ladeTeamStatus({ sicht: "alle" }),
+    // Wand-Bildschirm: fuer alle sichtbar → nie «krank».
+    ladeTeamStatus({ sicht: "alle", typSichtbar: false }),
   ]);
   // Alle Rechte gesetzt → kein Zaehler ist null; «?? 0» nur fuer den Typ.
   return {

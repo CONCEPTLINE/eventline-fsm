@@ -20,7 +20,8 @@ import { ZeitFeld } from "@/components/ui/zeit-feld";
 import { Search, Video } from "lucide-react";
 import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
-import type { Profile, TimeOffType } from "@/types";
+import type { Profile } from "@/types";
+import { ABWESEND_LABEL, type AbwesenheitAnzeigeTyp } from "@/lib/abwesenheit-sichtbarkeit";
 import { useTimeOffConflicts, buildConflictMap } from "@/lib/use-time-off-conflicts";
 import { AlertTriangle } from "lucide-react";
 import { toLocalIsoString } from "@/lib/format";
@@ -173,12 +174,13 @@ export function NeuerTerminModal({ open, onClose, onCreated, initialDate, sheet 
   const timeOffConflicts = useTimeOffConflicts(open ? date : null);
   const conflictByUser = buildConflictMap(timeOffConflicts);
 
-  const TYPE_LABEL: Record<TimeOffType, string> = {
+  const TYPE_LABEL: Record<AbwesenheitAnzeigeTyp, string> = {
     ferien: "Ferien",
     krank: "Krank",
     kompensation: "Kompensation",
     frei: "Frei",
     militaer: "Militär",
+    abwesend: ABWESEND_LABEL,
   };
 
   function formatDateShort(iso: string): string {

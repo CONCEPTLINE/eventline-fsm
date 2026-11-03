@@ -3,6 +3,8 @@
  * gleichen Strukturen — Page-Controller laedt einmal, gibt's jeweils weiter.
  */
 
+import type { AbwesenheitAnzeigeTyp } from "@/lib/abwesenheit-sichtbarkeit";
+
 /** vertrieb = naechster Schritt eines Raums aus /vertrieb (ganztaegig). */
 export type ItemType = "auftrag" | "vermietung" | "entwurf" | "projekt" | "vertrieb";
 
@@ -58,13 +60,14 @@ export interface BvgPersonForecast {
 }
 
 /** Genehmigte Abwesenheit (time_off) — wird in beiden Views dezent als
- *  kleiner Marker pro Tag/Person gerendert. RLS scoped Non-Admins eh auf
- *  eigene, Admins sehen alle. */
+ *  kleiner Marker pro Tag/Person gerendert. Geladen ueber
+ *  team_abwesenheiten() (Migration 379): «abwesend» = maskierte Krankheit
+ *  fuer Nicht-Berechtigte. */
 export interface CalendarTimeOff {
   id: string;
   userId: string;
   userName: string;
-  type: "ferien" | "krank" | "kompensation" | "frei" | "militaer";
+  type: AbwesenheitAnzeigeTyp;
   startDate: Date;
   endDate: Date;
 }

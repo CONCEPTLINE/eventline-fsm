@@ -23,6 +23,7 @@ import Link from "next/link";
 import { useMemo, Fragment } from "react";
 import { MapPin, ExternalLink, Clock, User, Plane, Video } from "lucide-react";
 import type { CalendarItem, CalendarShift, CalendarTimeOff } from "./types";
+import { ABWESEND_LABEL } from "@/lib/abwesenheit-sichtbarkeit";
 
 const TIME_OFF_LABEL: Record<CalendarTimeOff["type"], string> = {
   ferien: "Ferien",
@@ -30,6 +31,7 @@ const TIME_OFF_LABEL: Record<CalendarTimeOff["type"], string> = {
   kompensation: "Komp-Tag",
   frei: "Frei",
   militaer: "Militär",
+  abwesend: ABWESEND_LABEL,
 };
 
 const MAX_LANES_PER_WEEK = 6;

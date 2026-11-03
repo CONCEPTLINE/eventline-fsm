@@ -436,15 +436,18 @@ export async function notifyKrankGemeldet(
   });
 }
 
-/** An die Projektleitung eines betroffenen Auftrags (je Person einmal). */
+/** An die Projektleitung eines betroffenen Auftrags (je Person einmal).
+ *  `grundSichtbar` false (kein Admin/ferien:approve/tickets:manage,
+ *  Migration 379): nur «abwesend», nie «krank». */
 export async function notifyKrankProjektleitung(
   client: SupabaseClient,
-  args: BaseArgs & { name: string; ab: string; bis: string | null; auftraege: string[]; jobId: string },
+  args: BaseArgs & { name: string; ab: string; bis: string | null; auftraege: string[]; jobId: string; grundSichtbar: boolean },
 ) {
   const liste = args.auftraege.join(", ");
+  const wie = args.grundSichtbar ? "krank gemeldet" : "abwesend";
   await deliver(client, args.recipients, "system", {
-    title: `${args.name} ist krank gemeldet`,
-    message: `${args.name} ist krank gemeldet ${krankZeitraum(args.ab, args.bis)} Betrifft ${liste}.`,
+    title: `${args.name} ist ${wie}`,
+    message: `${args.name} ist ${wie} ${krankZeitraum(args.ab, args.bis)} Betrifft ${liste}.`,
     link: `/auftraege/${args.jobId}`,
     resource_type: "job",
     resource_id: args.jobId,

@@ -18,6 +18,7 @@ import { Fragment, useMemo } from "react";
 import Link from "next/link";
 import { Clock, User, Plane } from "lucide-react";
 import type { BvgPersonForecast, CalendarItem, CalendarShift, CalendarTimeOff } from "./types";
+import { ABWESEND_LABEL } from "@/lib/abwesenheit-sichtbarkeit";
 
 const TIME_OFF_LABEL: Record<CalendarTimeOff["type"], string> = {
   ferien: "Ferien",
@@ -25,6 +26,7 @@ const TIME_OFF_LABEL: Record<CalendarTimeOff["type"], string> = {
   kompensation: "Komp-Tag",
   frei: "Frei",
   militaer: "Militär",
+  abwesend: ABWESEND_LABEL,
 };
 
 interface Props {

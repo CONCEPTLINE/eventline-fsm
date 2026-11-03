@@ -108,11 +108,15 @@ export async function POST(req: NextRequest) {
 
     // Benachrichtigen — Fehler hier blockieren die Meldung nicht.
     try {
-      const [{ data: prof }, approver, einsaetze] = await Promise.all([
+      const [{ data: prof }, approver, leitung, einsaetze] = await Promise.all([
         admin.from("profiles").select("full_name").eq("id", ich).maybeSingle(),
         personenMitRecht(admin, "ferien:approve"),
+        personenMitRecht(admin, "tickets:manage"),
         ladeBetroffeneEinsaetze(admin, ich, z.ab, betroffenBis(z.ab, z.bis)),
       ]);
+      // Wer «krank» lesen darf (Migration 379): Admin, ferien:approve,
+      // tickets:manage. Alle anderen Projektleitungen lesen «abwesend».
+      const darfKrankSehen = new Set([...approver, ...leitung].map((p) => p.id));
       const name = (prof?.full_name as string | undefined) ?? "Jemand";
       const approverIds = approver.map((p) => p.id).filter((id) => id !== ich);
       await notifyKrankGemeldet(admin, { recipients: approverIds, timeOffId: neu.id, name, ab: z.ab, bis: z.bis, einsaetze: einsaetze.length });
@@ -129,7 +133,10 @@ export async function POST(req: NextRequest) {
       }
       await Promise.all(
         Array.from(jeLeitung.entries()).map(([lead, v]) =>
-          notifyKrankProjektleitung(admin, { recipients: [lead], name, ab: z.ab, bis: z.bis, auftraege: Array.from(v.auftraege), jobId: v.jobId }),
+          notifyKrankProjektleitung(admin, {
+            recipients: [lead], name, ab: z.ab, bis: z.bis, auftraege: Array.from(v.auftraege), jobId: v.jobId,
+            grundSichtbar: darfKrankSehen.has(lead),
+          }),
         ),
       );
     } catch (e) {

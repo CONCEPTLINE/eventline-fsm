@@ -7,16 +7,34 @@
 // (status genehmigt ODER beantragt). Konsumenten zeigen die Liste
 // als Warnung an + markieren betroffene User-Buttons.
 //
-// RLS: Admins (mit ferien:approve) sehen alle, normale User sehen nur
-// eigene Eintraege. Termin-Anlegen ist typisch eine Admin-Action,
-// daher reicht das in der Praxis.
+// Daten ueber team_abwesenheiten() (Migration 379): dieselben Personen wie
+// die time_off-Sicht bisher (eigene, eigenes Team, scope all, Berechtigte),
+// ohne Notizen; «krank» fuer Nicht-Berechtigte als «abwesend».
 
 import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
-import type { TimeOff } from "@/types";
+import type { AbwesenheitAnzeigeTyp } from "@/lib/abwesenheit-sichtbarkeit";
+import type { TimeOffStatus } from "@/types";
 
-export interface TimeOffConflict extends TimeOff {
+export interface TimeOffConflict {
+  id: string;
+  user_id: string;
+  start_date: string;
+  end_date: string;
+  type: AbwesenheitAnzeigeTyp;
+  status: TimeOffStatus;
   user: { full_name: string } | null;
+}
+
+interface TeamAbwesenheitRow {
+  id: string;
+  user_id: string;
+  start_date: string;
+  end_date: string;
+  status: TimeOffStatus;
+  typ: AbwesenheitAnzeigeTyp;
+  user_name: string | null;
+  user_aktiv: boolean;
 }
 
 /** Returnt die Liste der time_off-Eintraege die das gegebene Datum (YYYY-MM-DD)
@@ -32,17 +50,23 @@ export function useTimeOffConflicts(date: string | null | undefined): TimeOffCon
     const supabase = createClient();
     let cancelled = false;
     (async () => {
-      const { data } = await supabase
-        .from("time_off")
-        // Nur AKTIVE Mitarbeiter — deaktivierte sind eh nicht zuweisbar,
-        // ihre Abwesenheiten gehoeren nicht in die Konflikt-Warnung.
-        .select("*, user:profiles!time_off_user_id_fkey!inner(full_name, is_active)")
-        .eq("user.is_active", true)
-        .lte("start_date", date)
-        .gte("end_date", date)
-        .in("status", ["genehmigt", "beantragt"]);
+      const { data } = await supabase.rpc("team_abwesenheiten", { p_von: date, p_bis: date });
       if (cancelled) return;
-      setConflicts((data as unknown as TimeOffConflict[]) ?? []);
+      setConflicts(
+        ((data ?? []) as TeamAbwesenheitRow[])
+          // Nur AKTIVE Mitarbeiter — deaktivierte sind eh nicht zuweisbar,
+          // ihre Abwesenheiten gehoeren nicht in die Konflikt-Warnung.
+          .filter((r) => r.user_aktiv && (r.status === "genehmigt" || r.status === "beantragt"))
+          .map((r) => ({
+            id: r.id,
+            user_id: r.user_id,
+            start_date: r.start_date,
+            end_date: r.end_date,
+            type: r.typ,
+            status: r.status,
+            user: r.user_name ? { full_name: r.user_name } : null,
+          })),
+      );
     })();
     return () => { cancelled = true; };
   }, [date]);

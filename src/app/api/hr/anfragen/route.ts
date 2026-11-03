@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { requireAnyPermission } from "@/lib/api-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { createClient } from "@/lib/supabase/server";
+import { typFuerBetrachter, type AbwesenheitAnzeigeTyp } from "@/lib/abwesenheit-sichtbarkeit";
 import { logError } from "@/lib/log";
 import { ZRH_TZ } from "@/lib/swiss-time";
 import { PORTAL_ROLLEN_IN } from "@/lib/roles";
@@ -77,6 +79,13 @@ export async function GET() {
 
   try {
     const admin = createAdminClient();
+    // «krank» und Notizen anderer nur fuer Admin, ferien:approve,
+    // tickets:manage (Migration 379) — stempelzeiten:see-all allein sieht
+    // nur «abwesend». Gleiche Person wie requireAnyPermission (echtes Konto).
+    const { data: darf } = await (await createClient()).rpc("darf_abwesenheitsgrund_sehen");
+    const privilegiert = darf === true;
+    const sichtbarerTyp = (userId: string, typ: string) =>
+      typFuerBetrachter(typ as AbwesenheitAnzeigeTyp, { eigen: userId === adminUserId, privilegiert });
 
     // Monatsgrenzen (Europe/Zurich Kalender-Monat) — als ISO fuer die
     // Postgres-Vergleiche gegen clock_in (timestamptz).
@@ -231,7 +240,7 @@ export async function GET() {
         is_active_stamped: !!activeSince,
         active_since_iso: activeSince,
         current_absence: absence
-          ? { type: absence.type, end_date: absence.end_date }
+          ? { type: sichtbarerTyp(p.id, absence.type), end_date: absence.end_date }
           : null,
       };
     });
@@ -242,11 +251,11 @@ export async function GET() {
         id: f.id,
         user_id: f.user_id,
         user_name: nameById.get(f.user_id) ?? "Unbekannt",
-        type: f.type,
+        type: sichtbarerTyp(f.user_id, f.type),
         start_date: f.start_date,
         end_date: f.end_date,
         created_at: f.created_at,
-        note: f.note,
+        note: privilegiert || f.user_id === adminUserId ? f.note : null,
       })),
       stempelAntraege: stempelTickets.map((t) => ({
         id: t.id,

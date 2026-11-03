@@ -24,7 +24,8 @@ import { Calendar, Clock, User, Plus, Send, Check, Trash2, AlertTriangle, UserPl
 import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
 import { usePermissions } from "@/lib/use-permissions";
-import type { JobAppointment, Profile, TimeOffType } from "@/types";
+import type { JobAppointment, Profile } from "@/types";
+import { ABWESEND_LABEL, type AbwesenheitAnzeigeTyp } from "@/lib/abwesenheit-sichtbarkeit";
 import { useTimeOffConflicts, buildConflictMap } from "@/lib/use-time-off-conflicts";
 import { toLocalIsoString, todayLocalDateString } from "@/lib/format";
 import { PlannedCostBadge } from "@/components/auftrag/job-cost-card";
@@ -131,12 +132,13 @@ export function AppointmentsSection({
   const timeOffConflicts = useTimeOffConflicts(showApptForm ? apptForm.date : null);
   const conflictByUser = buildConflictMap(timeOffConflicts);
 
-  const TYPE_LABEL: Record<TimeOffType, string> = {
+  const TYPE_LABEL: Record<AbwesenheitAnzeigeTyp, string> = {
     ferien: "Ferien",
     krank: "Krank",
     kompensation: "Kompensation",
     frei: "Frei",
     militaer: "Militär",
+    abwesend: ABWESEND_LABEL,
   };
 
   function formatDateShort(iso: string): string {

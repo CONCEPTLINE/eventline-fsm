@@ -13,6 +13,7 @@ import { PersonAvatar } from "@/components/ui/person-avatar";
 import type { TeamDaten, TeamMemberStatus } from "@/components/dashboard/typen";
 import { Karte, TON_KLASSEN, ZeilenRaster } from "@/components/dashboard/karte";
 import { abwesendBis, uhrzeit } from "@/components/dashboard/format";
+import { ABWESEND_LABEL } from "@/lib/abwesenheit-sichtbarkeit";
 
 /** Anzeige der Abwesenheits-Typen (time_off.type). */
 const ABWESENHEIT_LABEL: Record<string, string> = {
@@ -21,6 +22,7 @@ const ABWESENHEIT_LABEL: Record<string, string> = {
   kompensation: "Kompensation",
   frei: "Frei",
   militaer: "Militär",
+  abwesend: ABWESEND_LABEL,
 };
 
 /** Mehr Kuerzel passen nicht ruhig in eine Zeile — der Rest als «+N». */

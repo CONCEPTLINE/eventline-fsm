@@ -27,6 +27,7 @@ import { jeLokalerStunde, lohnzeileAm, type Stempel } from "@/lib/lohn/kern";
 import { bereichMitVormonaten, ladeLohnPersonen, monatKey, rechneMonate } from "@/lib/lohn/daten";
 import { termineAlsStempel } from "@/lib/lohn/prognose";
 import { hasPermission } from "@/lib/permissions";
+import { darfAbwesenheitsgrundSehen } from "@/lib/abwesenheit-sichtbarkeit";
 import { istIntern } from "@/lib/roles";
 import { DASHBOARD_BEREICH_KEYS, sichtbareBereiche, type DashboardBereichKey } from "@/lib/dashboard-bereiche";
 import { ladeAufmerksamkeit, ladeKennzahlen, ladeNaechsteAuftraege, ladeTeamStatus } from "@/lib/dashboard-admin-data";
@@ -318,7 +319,11 @@ export async function GET() {
         : null,
       sichtbar.has("todos") ? ladeMeineTodos(supabase, userId) : null,
       sichtbar.has("team")
-        ? ladeTeamStatus(teamSicht === "team" ? { sicht: "team", userId } : { sicht: "alle" })
+        ? ladeTeamStatus({
+            ...(teamSicht === "team" ? { sicht: "team" as const, userId } : { sicht: "alle" as const }),
+            // «krank» nur fuer Admin, ferien:approve, tickets:manage (Migration 379).
+            typSichtbar: darfAbwesenheitsgrundSehen(hat),
+          })
         : null,
       // Team-Sicht: nur Auftraege, in denen das eigene Team (oder man selbst)
       // eingeteilt ist. Sichtbereich «Nur ich» sieht den Bereich gar nicht.

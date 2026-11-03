@@ -33,6 +33,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { PrefetchLink } from "@/components/shell/prefetch-link";
 import { usePermissions } from "@/lib/use-permissions";
 import { ZRH_TZ } from "@/lib/swiss-time";
+import { ABWESEND_LABEL } from "@/lib/abwesenheit-sichtbarkeit";
 
 interface FerienAntrag {
   id: string;
@@ -85,7 +86,7 @@ interface AnfragenPayload {
 
 const TIME_OFF_LABEL: Record<string, string> = {
   ferien: "Ferien", krank: "Krank", kompensation: "Kompensation",
-  frei: "Frei", militaer: "Militär",
+  frei: "Frei", militaer: "Militär", abwesend: ABWESEND_LABEL,
 };
 
 const TICKET_TYPE_META: Record<string, { label: string; icon: React.ComponentType<{ className?: string }>; className: string }> = {
