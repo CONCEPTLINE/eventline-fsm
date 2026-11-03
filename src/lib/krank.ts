@@ -17,6 +17,46 @@ export const ARZTZEUGNIS_AB_TAG = 3;
  *  (bis und mit dem Tag, ab dem das Arztzeugnis faellig ist). */
 export const OFFENES_ENDE_VORSCHAU_TAGE = ARZTZEUGNIS_AB_TAG;
 
+/** So viele Tage nach der Übergabe an Trust flow (arztzeugnis_an_flow_at)
+ *  löscht das ERP seine Kopie des Arztzeugnisses (Entscheid Mischa,
+ *  2026-11-03; Gesundheitsdaten nicht doppelt, DSG Art. 5, OR 328b). Die
+ *  Personalakte in Trust flow bleibt massgebend. Hochgeladen-/Übergabe-
+ *  Zeitpunkt, Dateiname, Typ, Grösse und sha256 bleiben als Beleg stehen. */
+export const ARZTZEUGNIS_LOESCHEN_NACH_TAGEN = 30;
+
+/** Stand des Arztzeugnisses einer Krankmeldung:
+ *   fehlt          nie eins hochgeladen
+ *   vorhanden      Datei liegt im ERP (ansehbar)
+ *   an_trust_flow  an Trust flow übergeben und hier gelöscht (nur Beleg) */
+export type ArztzeugnisStatus = "fehlt" | "vorhanden" | "an_trust_flow";
+
+export function arztzeugnisStatus(z: {
+  arztzeugnis_pfad: string | null;
+  arztzeugnis_hochgeladen_at: string | null;
+  arztzeugnis_an_flow_at: string | null;
+}): ArztzeugnisStatus {
+  if (z.arztzeugnis_pfad) return "vorhanden";
+  if (z.arztzeugnis_hochgeladen_at && z.arztzeugnis_an_flow_at) return "an_trust_flow";
+  // Hochgeladen ohne Datei und ohne Übergabe gibt es nicht (der Upload setzt
+  // beides zusammen); vorsichtshalber als «fehlt» — dann erinnert nichts falsch.
+  return "fehlt";
+}
+
+/** Übergaben bis und mit diesem Zeitpunkt sind alt genug zum Löschen (ISO). */
+export function arztzeugnisLoeschenBis(jetzt: Date): string {
+  return new Date(jetzt.getTime() - ARZTZEUGNIS_LOESCHEN_NACH_TAGEN * 86_400_000).toISOString();
+}
+
+/** Ist die Kopie im ERP fällig zum Löschen (Datei da, vor ≥ 30 Tagen übergeben)? */
+export function arztzeugnisLoeschfaellig(
+  z: { arztzeugnis_pfad: string | null; arztzeugnis_an_flow_at: string | null },
+  jetzt: Date,
+): boolean {
+  if (!z.arztzeugnis_pfad || !z.arztzeugnis_an_flow_at) return false;
+  const t = Date.parse(z.arztzeugnis_an_flow_at);
+  return Number.isFinite(t) && t <= Date.parse(arztzeugnisLoeschenBis(jetzt));
+}
+
 /** Kalendertage von `ab` bis `bis`, beide inklusiv (YYYY-MM-DD). */
 export function kalenderTage(ab: string, bis: string): number {
   const [ay, am, ad] = ab.split("-").map(Number);
@@ -39,7 +79,8 @@ export function bisherigeTage(k: { ab: string; bis: string; endeOffen: boolean }
 }
 
 /** Fehlt das Arztzeugnis? Erst ab Tag ARZTZEUGNIS_AB_TAG und nur, wenn noch
- *  keins hochgeladen ist. */
+ *  keins hochgeladen ist (auch ein an Trust flow übergebenes und hier
+ *  gelöschtes zählt als hochgeladen). */
 export function arztzeugnisFehlt(
   k: { ab: string; bis: string; endeOffen: boolean; hatZeugnis: boolean },
   heute: string,

@@ -290,16 +290,38 @@ describe("Abwesenheiten und Arztzeugnis (/abwesenheiten, /arztzeugnis)", () => {
       id: T, user_id: P1, type: "krank", status: "genehmigt", start_date: "2026-11-28", end_date: "2026-12-03",
       ende_offen: null, created_at: "2026-11-28T07:00:00+00:00", approved_at: null,
       arztzeugnis_pfad: `${P1}/${T}/1.pdf`, arztzeugnis_hochgeladen_at: "2026-11-30T10:00:00+00:00",
+      arztzeugnis_an_flow_at: null,
     };
     const d = { dateiname: "Zeugnis.pdf", mime: "application/pdf", groesse: 1234, sha256: "a".repeat(64) };
     expect(abwesenheitFuerFlow(z, d)).toEqual({
       id: T, typ: "krank", status: "genehmigt", von: "2026-11-28", bis: "2026-12-03", ende_offen: false,
       gemeldet_at: "2026-11-28T07:00:00+00:00", entschieden_at: null,
-      arztzeugnis: { id: T, hochgeladen_at: "2026-11-30T10:00:00+00:00", dateiname: "Zeugnis.pdf", mime: "application/pdf", groesse: 1234, sha256: "a".repeat(64) },
+      arztzeugnis: {
+        id: T, hochgeladen_at: "2026-11-30T10:00:00+00:00", dateiname: "Zeugnis.pdf", mime: "application/pdf", groesse: 1234, sha256: "a".repeat(64),
+        an_flow_at: null, geloescht: false,
+      },
     });
     expect(abwesenheitFuerFlow({ ...z, arztzeugnis_pfad: null }, d).arztzeugnis).toBeNull();
     expect(abwesenheitFuerFlow(z, null).arztzeugnis).toBeNull();
     expect(Object.keys(abwesenheitFuerFlow(z, null))).not.toContain("note");
+  });
+
+  it("übergeben und im ERP gelöscht: Angaben bleiben als Beleg, geloescht: true", () => {
+    const z = {
+      id: T, user_id: P1, type: "krank", status: "genehmigt", start_date: "2026-10-01", end_date: "2026-10-05",
+      ende_offen: null, created_at: "2026-10-01T07:00:00+00:00", approved_at: null,
+      arztzeugnis_pfad: null, arztzeugnis_hochgeladen_at: "2026-10-03T10:00:00+00:00",
+      arztzeugnis_an_flow_at: "2026-10-04T08:00:00+00:00",
+    };
+    const d = { dateiname: "Zeugnis.pdf", mime: "application/pdf", groesse: 1234, sha256: "a".repeat(64) };
+    expect(abwesenheitFuerFlow(z, d).arztzeugnis).toEqual({
+      id: T, hochgeladen_at: "2026-10-03T10:00:00+00:00", dateiname: "Zeugnis.pdf", mime: "application/pdf", groesse: 1234,
+      sha256: "a".repeat(64), an_flow_at: "2026-10-04T08:00:00+00:00", geloescht: true,
+    });
+    // Übergeben, Datei noch da: geloescht false.
+    expect(abwesenheitFuerFlow({ ...z, arztzeugnis_pfad: `${P1}/${T}/1.pdf` }, d).arztzeugnis?.geloescht).toBe(false);
+    // Nie übergeben und kein Pfad: nichts.
+    expect(abwesenheitFuerFlow({ ...z, arztzeugnis_an_flow_at: null }, d).arztzeugnis).toBeNull();
   });
 
   it("MIME aus der Endung (ältere Zeugnisse)", () => {

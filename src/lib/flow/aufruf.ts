@@ -130,7 +130,9 @@ export async function bearbeiteFlowAufruf<T>(o: {
   if (!e.ok) {
     await o.speicher.schliesse(b.id, { status: "abgelehnt", geliefert: null, sha256: null, grund: e.code });
     log({ aud: o.aud, status: e.status, code: e.code });
-    return fehlerAntwort(e.status, e.code, e.meldung);
+    return e.daten
+      ? json(e.status, { ...e.daten, success: false, code: e.code, error: e.meldung })
+      : fehlerAntwort(e.status, e.code, e.meldung);
   }
 
   const body = JSON.stringify(e.body);

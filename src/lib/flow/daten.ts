@@ -7,7 +7,7 @@ import { ladeLohnEinstellungen, nachLaufBis } from "@/lib/lohn/zugriff";
 import { speichereBexioFassung } from "@/lib/lohn/fassung";
 import { ladeAktuelleWahl, meldeNeueAbrechnung } from "@/lib/lohn/zustellung";
 import { ARZTZEUGNIS_BUCKET } from "@/lib/krank-server";
-import { arztzeugnisDateiname } from "@/lib/krank";
+import { arztzeugnisDateiname, arztzeugnisLoeschfaellig, arztzeugnisStatus, ARZTZEUGNIS_LOESCHEN_NACH_TAGEN } from "@/lib/krank";
 import { logError } from "@/lib/log";
 import type { Ausgefuehrt } from "./aufruf";
 import type { FlowAusweis } from "./ausweis";
@@ -291,7 +291,8 @@ type ZeugnisZeile = AbwesenheitZeile & {
 };
 // Ohne note und decision_note (Freitext, evtl. Gesundheitsdaten) — sie verlassen das ERP nicht.
 const ABWESENHEIT_SPALTEN = "id, user_id, type, status, start_date, end_date, ende_offen, created_at, approved_at, " +
-  "arztzeugnis_pfad, arztzeugnis_hochgeladen_at, arztzeugnis_dateiname, arztzeugnis_mime, arztzeugnis_groesse, arztzeugnis_sha256";
+  "arztzeugnis_pfad, arztzeugnis_hochgeladen_at, arztzeugnis_dateiname, arztzeugnis_mime, arztzeugnis_groesse, arztzeugnis_sha256, " +
+  "arztzeugnis_an_flow_at";
 
 /** Arztzeugnis aus dem privaten Bucket (nur Server). */
 async function ladeZeugnisDatei(admin: SupabaseClient, pfad: string): Promise<{ bytes: Uint8Array; mime: string }> {
@@ -351,6 +352,12 @@ export async function abwesenheitenAntwort(admin: SupabaseClient, a: Abwesenheit
   }
   const zeugnisse = new Map<string, ArztzeugnisDaten>();
   for (const z of zeilen) {
+    // Übergeben und im ERP gelöscht: nur noch die gespeicherten Angaben (abwesenheitFuerFlow: geloescht: true).
+    if (arztzeugnisStatus(z) === "an_trust_flow") {
+      const d = gespeicherteDaten(z);
+      if (d) zeugnisse.set(z.id, d);
+      continue;
+    }
     const pfad = zeugnisPfad(z);
     if (!pfad) continue;
     zeugnisse.set(z.id, gespeicherteDaten(z) ?? (await datenNachtragen(admin, z, pfad, await ladeZeugnisDatei(admin, pfad))));
@@ -371,6 +378,17 @@ export async function arztzeugnisAntwort(admin: SupabaseClient, a: { timeOffId: 
   const z = data as ZeugnisZeile | null;
   if (!z || (await nurInterne(admin, [z.user_id])).length === 0) {
     return ablehnen(404, "abwesenheit_unbekannt", "Keine Abwesenheit mit dieser ID.");
+  }
+  // 30 Tage nach der Übergabe löscht das ERP seine Kopie (Cron krank-tagesabschluss). Ab dann — auch
+  // schon, bevor der Cron gelaufen ist — gibt es keinen Link mehr: Trust flow hat die Datei.
+  if (arztzeugnisStatus(z) === "an_trust_flow" || arztzeugnisLoeschfaellig(z, new Date())) {
+    return {
+      ok: false,
+      status: 410,
+      code: "arztzeugnis_geloescht",
+      meldung: `Das Arztzeugnis wurde an Trust flow übergeben und ${ARZTZEUGNIS_LOESCHEN_NACH_TAGEN} Tage danach im ERP gelöscht.`,
+      daten: { an_flow_at: z.arztzeugnis_an_flow_at as string },
+    };
   }
   const pfad = zeugnisPfad(z);
   if (!pfad) return ablehnen(404, "kein_arztzeugnis", "Zu dieser Abwesenheit liegt kein Arztzeugnis vor.");
@@ -398,7 +416,7 @@ export async function arztzeugnisAntwort(admin: SupabaseClient, a: { timeOffId: 
   const gueltigBis = new Date(Date.now() + ARZTZEUGNIS_LINK_S * 1000).toISOString();
 
   // Erste Übergabe an Trust flow merken (Link ausgestellt; einmal je Datei, ein neues Zeugnis setzt sie zurück).
-  // Gelöscht wird nichts.
+  // ARZTZEUGNIS_LOESCHEN_NACH_TAGEN danach löscht der Cron die ERP-Kopie (lib/krank-server).
   const { error: uErr } = await admin.from("time_off").update({ arztzeugnis_an_flow_at: new Date().toISOString() })
     .eq("id", z.id).eq("arztzeugnis_pfad", pfad).is("arztzeugnis_an_flow_at", null);
   if (uErr) throw new Error(`Übergabe konnte nicht vermerkt werden: ${uErr.message}`);

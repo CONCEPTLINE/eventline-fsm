@@ -6,16 +6,19 @@
 //      kein direkter Zugriff fuer Clients) und merkt Pfad, Dateiname, Typ,
 //      Grösse und sha256 (Migration 380, für Trust flow: /api/flow/abwesenheiten
 //      und /api/flow/arztzeugnis). Ein neues Zeugnis ersetzt das alte und gilt
-//      wieder als «noch nicht an Trust flow übergeben».
+//      wieder als «noch nicht an Trust flow übergeben» (an_flow_at = null,
+//      Trust flow holt es neu ab) — auch nach dem Löschen der ERP-Kopie.
 // GET  → { url } kurzlebige signierte URL (60 s). Nur die Person selbst,
 //      ferien:approve und Admins (DSG Art. 5).
+//      410 { status: "an_trust_flow" }: 30 Tage nach der Übergabe an Trust flow
+//      gelöscht (lib/krank ARZTZEUGNIS_LOESCHEN_NACH_TAGEN) — es gilt als abgegeben.
 
 import { NextRequest, NextResponse } from "next/server";
 import { requireInternal } from "@/lib/api-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { logError } from "@/lib/log";
 import { ARZTZEUGNIS_BUCKET, darfArztzeugnisSehen } from "@/lib/krank-server";
-import { arztzeugnisDateiname } from "@/lib/krank";
+import { arztzeugnisDateiname, arztzeugnisStatus } from "@/lib/krank";
 import { sha256Hex } from "@/lib/flow/regeln";
 
 const MAX_BYTES = 10 * 1024 * 1024;
@@ -24,7 +27,7 @@ const ERLAUBT = new Set(["image/jpeg", "image/png", "image/webp", "image/heic", 
 async function ladeKrank(admin: ReturnType<typeof createAdminClient>, id: string) {
   const { data, error } = await admin
     .from("time_off")
-    .select("id, user_id, type, arztzeugnis_pfad")
+    .select("id, user_id, type, arztzeugnis_pfad, arztzeugnis_hochgeladen_at, arztzeugnis_an_flow_at")
     .eq("id", id)
     .maybeSingle();
   if (error) throw new Error(error.message);
@@ -41,6 +44,12 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     // Geprueft wird das ECHTE Konto (auch unter «Ansicht als»).
     if (!k || !(await darfArztzeugnisSehen(admin, auth.user.id, k.user_id as string))) {
       return NextResponse.json({ success: false, error: "Nicht gefunden" }, { status: 404 });
+    }
+    if (arztzeugnisStatus(k) === "an_trust_flow") {
+      return NextResponse.json(
+        { success: false, status: "an_trust_flow", error: "Arztzeugnis abgegeben — es liegt in der Personalakte und ist hier nicht mehr gespeichert." },
+        { status: 410 },
+      );
     }
     if (!k.arztzeugnis_pfad) return NextResponse.json({ success: false, error: "Kein Arztzeugnis hochgeladen" }, { status: 404 });
     const { data, error } = await admin.storage.from(ARZTZEUGNIS_BUCKET).createSignedUrl(k.arztzeugnis_pfad as string, 60);

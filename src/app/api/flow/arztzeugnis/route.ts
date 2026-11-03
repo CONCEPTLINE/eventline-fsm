@@ -9,8 +9,10 @@
 // Antwort annimmt; Trust flow lädt die Datei selbst und prüft die sha256. Vor dem Ausstellen prüft das
 // ERP die Datei gegen die beim Hochladen gespeicherte sha256 (weicht sie ab → 500, kein Link).
 // 404 abwesenheit_unbekannt | kein_arztzeugnis.
-// Die erste Übergabe (Link ausgestellt) steht in time_off.arztzeugnis_an_flow_at (einmal je Datei).
-// Gelöscht wird nichts (Lösch-Regel nach Übergabe noch offen).
+// 410 arztzeugnis_geloescht { an_flow_at } — an Trust flow übergeben und 30 Tage danach im ERP gelöscht
+//     (ARZTZEUGNIS_LOESCHEN_NACH_TAGEN, lib/krank; Cron krank-tagesabschluss). Trust flow hat die Datei.
+// Die erste Übergabe (Link ausgestellt) steht in time_off.arztzeugnis_an_flow_at (einmal je Datei;
+// ein neues Zeugnis setzt sie zurück und wird wieder abgeholt).
 
 import { flowAbruf } from "@/lib/flow/server";
 import { arztzeugnisAntwort } from "@/lib/flow/daten";

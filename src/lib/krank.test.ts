@@ -4,6 +4,10 @@ import {
   arztzeugnisDateiname,
   arztzeugnisFaelligAb,
   arztzeugnisFehlt,
+  arztzeugnisLoeschenBis,
+  arztzeugnisLoeschfaellig,
+  arztzeugnisStatus,
+  ARZTZEUGNIS_LOESCHEN_NACH_TAGEN,
   bisherigeTage,
   kalenderTage,
   krankLaeuft,
@@ -70,5 +74,36 @@ describe("krank — Dateiname des Arztzeugnisses (Migration 380)", () => {
   });
   it("höchstens 120 Zeichen", () => {
     expect(arztzeugnisDateiname("x".repeat(500) + ".pdf", "pdf").length).toBe(120);
+  });
+});
+
+describe("krank — Arztzeugnis 30 Tage nach Übergabe an Trust flow löschen", () => {
+  const P = "u/t/1.pdf";
+  const jetzt = new Date("2026-11-03T22:05:00Z");
+
+  it("Frist ist 30 Tage", () => {
+    expect(ARZTZEUGNIS_LOESCHEN_NACH_TAGEN).toBe(30);
+    expect(arztzeugnisLoeschenBis(jetzt)).toBe("2026-10-04T22:05:00.000Z");
+  });
+
+  it("fällig erst mit Datei UND Übergabe vor ≥ 30 Tagen", () => {
+    expect(arztzeugnisLoeschfaellig({ arztzeugnis_pfad: P, arztzeugnis_an_flow_at: "2026-10-04T22:05:00Z" }, jetzt)).toBe(true);
+    expect(arztzeugnisLoeschfaellig({ arztzeugnis_pfad: P, arztzeugnis_an_flow_at: "2026-10-01T08:00:00+00:00" }, jetzt)).toBe(true);
+    expect(arztzeugnisLoeschfaellig({ arztzeugnis_pfad: P, arztzeugnis_an_flow_at: "2026-10-04T22:05:01Z" }, jetzt)).toBe(false);
+    expect(arztzeugnisLoeschfaellig({ arztzeugnis_pfad: P, arztzeugnis_an_flow_at: null }, jetzt)).toBe(false);
+    expect(arztzeugnisLoeschfaellig({ arztzeugnis_pfad: null, arztzeugnis_an_flow_at: "2026-09-01T08:00:00Z" }, jetzt)).toBe(false);
+  });
+
+  it("Status: fehlt | vorhanden | an_trust_flow", () => {
+    const h = "2026-10-01T08:00:00Z";
+    expect(arztzeugnisStatus({ arztzeugnis_pfad: null, arztzeugnis_hochgeladen_at: null, arztzeugnis_an_flow_at: null })).toBe("fehlt");
+    expect(arztzeugnisStatus({ arztzeugnis_pfad: P, arztzeugnis_hochgeladen_at: h, arztzeugnis_an_flow_at: null })).toBe("vorhanden");
+    expect(arztzeugnisStatus({ arztzeugnis_pfad: P, arztzeugnis_hochgeladen_at: h, arztzeugnis_an_flow_at: h })).toBe("vorhanden");
+    expect(arztzeugnisStatus({ arztzeugnis_pfad: null, arztzeugnis_hochgeladen_at: h, arztzeugnis_an_flow_at: h })).toBe("an_trust_flow");
+    expect(arztzeugnisStatus({ arztzeugnis_pfad: null, arztzeugnis_hochgeladen_at: h, arztzeugnis_an_flow_at: null })).toBe("fehlt");
+  });
+
+  it("gelöschtes Zeugnis gilt als abgegeben — es fehlt nicht", () => {
+    expect(arztzeugnisFehlt({ ab: "2026-10-01", bis: "2026-10-05", endeOffen: false, hatZeugnis: true }, "2026-11-03")).toBe(false);
   });
 });

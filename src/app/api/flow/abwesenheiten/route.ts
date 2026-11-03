@@ -8,7 +8,10 @@
 //   { monat,
 //     personen: [{ erp_profil_id, abwesenheiten: [{ id, typ, status, von, bis, ende_offen,
 //       gemeldet_at, entschieden_at,
-//       arztzeugnis: null | { id (= Abwesenheit), hochgeladen_at, dateiname, mime, groesse, sha256 } }] }] }
+//       arztzeugnis: null | { id (= Abwesenheit), hochgeladen_at, dateiname, mime, groesse, sha256,
+//         an_flow_at, geloescht } }] }] }
+// geloescht: true = an Trust flow übergeben und 30 Tage danach im ERP gelöscht (nur noch Beleg;
+// /arztzeugnis → 410). Ein neues Zeugnis hat eine neue sha256, an_flow_at null, geloescht false.
 // Abwesenheiten: alle Einträge (jeder Typ und Status), die den Monat berühren — von/bis sind
 // Zürcher Kalendertage (bis inklusiv). Offenes Ende (Krank «Weiss nicht»): bis = bisher bekannter
 // letzter Tag, täglich nachgezogen. Die Datei selbst: POST /api/flow/arztzeugnis.

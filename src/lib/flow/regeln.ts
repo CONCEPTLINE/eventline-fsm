@@ -41,6 +41,8 @@ export interface RegelFehler {
   status: number;
   code: string;
   meldung: string;
+  /** Zusätzliche Felder im Fehler-Körper (z. B. an_flow_at bei 410 arztzeugnis_geloescht). */
+  daten?: Record<string, string>;
 }
 const fehler = (code: string, meldung: string, status = 400): RegelFehler => ({ ok: false, status, code, meldung });
 
@@ -356,6 +358,7 @@ export interface AbwesenheitZeile {
   approved_at: string | null;
   arztzeugnis_pfad: string | null;
   arztzeugnis_hochgeladen_at: string | null;
+  arztzeugnis_an_flow_at: string | null;
 }
 
 export interface ArztzeugnisDaten {
@@ -374,11 +377,20 @@ export interface AbwesenheitFuerFlow {
   ende_offen: boolean;
   gemeldet_at: string;
   entschieden_at: string | null;
-  arztzeugnis: null | { id: string; hochgeladen_at: string | null; dateiname: string; mime: string; groesse: number; sha256: string };
+  arztzeugnis: null | {
+    id: string; hochgeladen_at: string | null; dateiname: string; mime: string; groesse: number; sha256: string;
+    /** Erste Übergabe dieser Datei an Trust flow (null = noch nicht abgeholt). */
+    an_flow_at: string | null;
+    /** ERP-Kopie 30 Tage nach der Übergabe gelöscht — /arztzeugnis antwortet dann 410 arztzeugnis_geloescht. */
+    geloescht: boolean;
+  };
 }
 
-/** Eine Abwesenheit für Trust flow — ohne Notizen, ohne Entscheid-Text, ohne Namen. */
+/** Eine Abwesenheit für Trust flow — ohne Notizen, ohne Entscheid-Text, ohne Namen.
+ *  Zeugnis: Datei im ERP, oder an Trust flow übergeben und hier gelöscht (pfad null,
+ *  an_flow_at gesetzt) — dann nur noch die Angaben als Beleg, geloescht: true. */
 export function abwesenheitFuerFlow(z: AbwesenheitZeile, zeugnis: ArztzeugnisDaten | null): AbwesenheitFuerFlow {
+  const geloescht = !z.arztzeugnis_pfad && !!z.arztzeugnis_hochgeladen_at && !!z.arztzeugnis_an_flow_at;
   return {
     id: z.id,
     typ: z.type,
@@ -388,8 +400,8 @@ export function abwesenheitFuerFlow(z: AbwesenheitZeile, zeugnis: ArztzeugnisDat
     ende_offen: z.ende_offen === true,
     gemeldet_at: z.created_at,
     entschieden_at: z.approved_at,
-    arztzeugnis: z.arztzeugnis_pfad && zeugnis
-      ? { id: z.id, hochgeladen_at: z.arztzeugnis_hochgeladen_at, ...zeugnis }
+    arztzeugnis: (z.arztzeugnis_pfad || geloescht) && zeugnis
+      ? { id: z.id, hochgeladen_at: z.arztzeugnis_hochgeladen_at, ...zeugnis, an_flow_at: z.arztzeugnis_an_flow_at, geloescht }
       : null,
   };
 }

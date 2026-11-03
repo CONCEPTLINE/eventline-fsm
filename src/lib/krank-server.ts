@@ -8,7 +8,9 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { plusTage } from "@/lib/swiss-time";
 import { zuerichZuIso } from "@/lib/stempel-meldungen";
-import { arztzeugnisFehlt, KRANKMELDUNG, OFFENES_ENDE_VORSCHAU_TAGE } from "@/lib/krank";
+import { arztzeugnisFehlt, arztzeugnisLoeschenBis, KRANKMELDUNG, OFFENES_ENDE_VORSCHAU_TAGE } from "@/lib/krank";
+import { arztzeugnisPfadPasst } from "@/lib/flow/regeln";
+import { logError } from "@/lib/log";
 
 export const ARZTZEUGNIS_BUCKET = "arztzeugnisse";
 
@@ -102,7 +104,10 @@ export async function krankTagesabschluss(
     .eq("type", "krank")
     .eq("status", "genehmigt")
     .eq("approved_by_name", KRANKMELDUNG)
+    // «Keins da» = nie hochgeladen. Ein an Trust flow übergebenes und hier
+    // gelöschtes Zeugnis (pfad null, hochgeladen_at bleibt) ist abgegeben.
     .is("arztzeugnis_pfad", null)
+    .is("arztzeugnis_hochgeladen_at", null)
     .is("arztzeugnis_erinnert_at", null)
     .gte("start_date", plusTage(heute, -30))
     .lte("start_date", heute);
@@ -125,4 +130,71 @@ export async function krankTagesabschluss(
     erinnert++;
   }
   return { verlaengert: verl?.length ?? 0, erinnert };
+}
+
+/** Höchstens so viele Zeugnisse je Lauf löschen (der Rest folgt am nächsten Tag). */
+export const ARZTZEUGNIS_LOESCHEN_JE_LAUF = 200;
+
+/** Arztzeugnisse, die vor ARZTZEUGNIS_LOESCHEN_NACH_TAGEN (lib/krank) an
+ *  Trust flow übergeben wurden, im ERP löschen: erst die Datei im Bucket,
+ *  dann arztzeugnis_pfad = null. Hochgeladen-/Übergabe-Zeitpunkt, Dateiname,
+ *  Typ, Grösse und sha256 bleiben als Beleg. Idempotent; wirft nie (Fehler
+ *  landen im Log, der Rest des Crons läuft weiter).
+ *  Ein neues Zeugnis (Upload) setzt arztzeugnis_an_flow_at zurück — die
+ *  Bedingung auf an_flow_at beim Nullsetzen schützt so eine frische Datei. */
+export async function arztzeugnisseNachUebergabeLoeschen(
+  admin: SupabaseClient,
+  jetzt: Date = new Date(),
+  limit: number = ARZTZEUGNIS_LOESCHEN_JE_LAUF,
+): Promise<{ geloescht: number; fehler: number }> {
+  const bis = arztzeugnisLoeschenBis(jetzt);
+  try {
+    const { data, error } = await admin
+      .from("time_off")
+      .select("id, user_id, arztzeugnis_pfad")
+      .eq("type", "krank")
+      .not("arztzeugnis_pfad", "is", null)
+      .not("arztzeugnis_an_flow_at", "is", null)
+      .lte("arztzeugnis_an_flow_at", bis)
+      .order("arztzeugnis_an_flow_at", { ascending: true })
+      .limit(limit);
+    if (error) throw new Error(`Zeugnisse zum Löschen konnten nicht geladen werden: ${error.message}`);
+    const zeilen = (data ?? []) as { id: string; user_id: string; arztzeugnis_pfad: string }[];
+    if (zeilen.length === 0) return { geloescht: 0, fehler: 0 };
+
+    // Nur Pfade, die zur Abwesenheit gehören (<user_id>/<time_off_id>/…) — nie eine fremde Datei löschen.
+    const passend = zeilen.filter((z) => arztzeugnisPfadPasst(z.arztzeugnis_pfad, z.user_id, z.id));
+    let fehler = zeilen.length - passend.length;
+    if (fehler > 0) {
+      logError("cron.arztzeugnis-loeschen.pfad", new Error("Pfad passt nicht zur Abwesenheit — übersprungen"), {
+        ids: zeilen.filter((z) => !passend.includes(z)).map((z) => z.id),
+      });
+    }
+    if (passend.length === 0) return { geloescht: 0, fehler };
+
+    // Fehlt die Datei schon, meldet storage.remove keinen Fehler — dann ebenfalls nullen.
+    const { error: rmErr } = await admin.storage.from(ARZTZEUGNIS_BUCKET).remove(passend.map((z) => z.arztzeugnis_pfad));
+    if (rmErr) throw new Error(`Dateien konnten nicht gelöscht werden: ${rmErr.message}`);
+
+    let geloescht = 0;
+    for (const z of passend) {
+      const { data: upd, error: uErr } = await admin
+        .from("time_off")
+        .update({ arztzeugnis_pfad: null })
+        .eq("id", z.id)
+        .eq("arztzeugnis_pfad", z.arztzeugnis_pfad)
+        .lte("arztzeugnis_an_flow_at", bis)
+        .select("id");
+      if (uErr) {
+        fehler++;
+        logError("cron.arztzeugnis-loeschen.update", uErr, { id: z.id });
+        continue;
+      }
+      geloescht += upd?.length ?? 0;
+    }
+    return { geloescht, fehler };
+  } catch (e) {
+    logError("cron.arztzeugnis-loeschen", e);
+    return { geloescht: 0, fehler: 1 };
+  }
 }

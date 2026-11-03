@@ -12,7 +12,7 @@
 //   abgelehnt → «abgelehnt».
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { arztzeugnisFehlt, arztzeugnisFaelligAb, krankLaeuft, KRANKMELDUNG } from "@/lib/krank";
+import { arztzeugnisFehlt, arztzeugnisFaelligAb, arztzeugnisStatus, krankLaeuft, KRANKMELDUNG, type ArztzeugnisStatus } from "@/lib/krank";
 import { todayLocalIso } from "@/lib/swiss-time";
 
 export type AnfrageArt = "beleg" | "stempel" | "it" | "material" | "abwesenheit" | "krank";
@@ -39,7 +39,12 @@ export interface Anfrage {
   krank?: {
     laeuft: boolean;
     endeOffen: boolean;
+    /** Zeugnis abgegeben (Datei im ERP ODER an Trust flow übergeben und hier gelöscht). */
     hatZeugnis: boolean;
+    /** fehlt | vorhanden (Datei im ERP) | an_trust_flow (übergeben, hier gelöscht — kein Link mehr). */
+    zeugnisStatus: ArztzeugnisStatus;
+    /** Nur dann gibt GET /api/krank/[id]/arztzeugnis einen Link («Ansehen»). */
+    zeugnisAnsehbar: boolean;
     zeugnisFehlt: boolean;
     /** Ab wann das Arztzeugnis faellig ist (YYYY-MM-DD). */
     zeugnisAb: string;
@@ -100,9 +105,12 @@ interface AbwesenheitZeile {
   approved_by_name: string | null;
   ende_offen: boolean | null;
   arztzeugnis_pfad: string | null;
+  arztzeugnis_hochgeladen_at: string | null;
+  arztzeugnis_an_flow_at: string | null;
 }
 
-const ABWESENHEIT_SPALTEN = "id, type, status, start_date, end_date, created_at, approved_by_name, ende_offen, arztzeugnis_pfad";
+const ABWESENHEIT_SPALTEN = "id, type, status, start_date, end_date, created_at, approved_by_name, ende_offen, " +
+  "arztzeugnis_pfad, arztzeugnis_hochgeladen_at, arztzeugnis_an_flow_at";
 
 function istKrankmeldung(a: AbwesenheitZeile): boolean {
   return a.type === "krank" && a.status === "genehmigt" && a.approved_by_name === KRANKMELDUNG;
@@ -143,7 +151,8 @@ function ticketAlsAnfrage(t: TicketZeile): Anfrage {
 
 function krankAlsAnfrage(a: AbwesenheitZeile, heute: string): Anfrage {
   const endeOffen = a.ende_offen === true;
-  const hatZeugnis = !!a.arztzeugnis_pfad;
+  const zeugnisStatus = arztzeugnisStatus(a);
+  const hatZeugnis = zeugnisStatus !== "fehlt";
   const laeuft = krankLaeuft({ bis: a.end_date, endeOffen }, heute);
   const zeugnisFehlt = arztzeugnisFehlt({ ab: a.start_date, bis: a.end_date, endeOffen, hatZeugnis }, heute);
   const zeitraum = endeOffen ? `ab ${tagKurz(a.start_date)}, Ende offen` : zeitraumKurz(a.start_date, a.end_date);
@@ -154,12 +163,17 @@ function krankAlsAnfrage(a: AbwesenheitZeile, heute: string): Anfrage {
     art: "krank",
     was: zeitraum,
     gemeldet_at: a.created_at,
-    stand: zeugnisFehlt ? "Arztzeugnis fehlt" : laeuft ? "gemeldet" : "abgeschlossen",
+    stand: zeugnisFehlt ? "Arztzeugnis fehlt"
+      : laeuft ? "gemeldet"
+        : zeugnisStatus === "an_trust_flow" ? "Arztzeugnis abgegeben" : "abgeschlossen",
     ton: zeugnisFehlt ? "red" : laeuft ? "amber" : "green",
     offen: laeuft || zeugnisFehlt,
     link: null,
     zurueckziehbar: false,
-    krank: { laeuft, endeOffen, hatZeugnis, zeugnisFehlt, zeugnisAb: arztzeugnisFaelligAb(a.start_date) },
+    krank: {
+      laeuft, endeOffen, hatZeugnis, zeugnisStatus, zeugnisAnsehbar: zeugnisStatus === "vorhanden",
+      zeugnisFehlt, zeugnisAb: arztzeugnisFaelligAb(a.start_date),
+    },
   };
 }
 
