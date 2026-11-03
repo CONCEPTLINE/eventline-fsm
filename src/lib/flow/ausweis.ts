@@ -10,7 +10,8 @@
 // jti (UUID, einmalig — prüft der Server in flow_abrufe), iat, exp (= iat + 60),
 // firma "eventline", aal "aal2", geraet true; je Route weitere (src/lib/flow/regeln.ts):
 // jahr/monat/von/bis und profile (Stempel/Vergleich) bzw. erp_profil_id, art, jahr/monat,
-// fassung, sha256 (Ablage: Lohnabrechnung oder Lohnausweis) bzw. saetze (Personal-Sätze, 377).
+// fassung, sha256 (Ablage: Lohnabrechnung oder Lohnausweis) bzw. saetze (Personal-Sätze, 377)
+// bzw. jahr/monat/profile (Abwesenheiten, 380) bzw. time_off_id (Arztzeugnis, 380).
 //
 // Rein (kein Next.js, keine Datenbank) — Unit-Tests: ausweis.test.ts.
 
@@ -19,7 +20,14 @@ import { createPublicKey, verify, type KeyObject } from "node:crypto";
 export const FLOW_ISS = "https://flow.trust-group.ch";
 export const FLOW_FIRMA = "eventline";
 
-export const FLOW_AUDS = ["erp-stempel", "erp-vergleich", "erp-lohnabrechnung-ablage", "erp-saetze"] as const;
+export const FLOW_AUDS = [
+  "erp-stempel",
+  "erp-vergleich",
+  "erp-lohnabrechnung-ablage",
+  "erp-saetze",
+  "erp-abwesenheiten",
+  "erp-arztzeugnis",
+] as const;
 export type FlowAud = (typeof FLOW_AUDS)[number];
 
 /** Höchstens so lange gilt ein Ausweis (exp − iat). */

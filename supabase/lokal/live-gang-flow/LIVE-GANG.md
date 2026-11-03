@@ -15,7 +15,8 @@ Rückfragen an Trust flow beantwortet (07_Rueckfragen.md, 30.10. 01:50) und umge
 | Teil | Inhalt |
 |---|---|
 | `369_flow_schnittstelle.sql` | `flow_abrufe` (Protokoll jedes Aufrufs mit gültigem Ausweis, Einmal-Schutz `jti`, Höchstzahl je Minute: Abruf 10, Ablage 30), `flow_abruf_beginnen/abschliessen`; `wage_documents.source` erlaubt zusätzlich `bexio`; `lohn_fassung_speichern` nimmt die Quelle an (sonst unverändert); `lohn_bexio_fassungen` + `lohn_bexio_fassung_speichern` (nur Lohnmonate nach `lauf_bis` und ab 12/2026). Alles nur Server, RLS an. Ändert keine bestehende Zeile. Idempotent. |
-| Code | `POST /api/flow/stempel`, `/vergleich`, `/lohnabrechnung` (bis 01.11.2026 auch `/personen`); Statusspalte Dezember+ «Lohnabrechnung aus Bexio liegt bereit»; Lohndokumente zeigen «aus Bexio übernommen»; Altbestand-Skript überspringt Bexio-Dokumente. |
+| `380_flow_abwesenheiten.sql` (03.11.) | aud `erp-abwesenheiten` und `erp-arztzeugnis` (Gruppe «abruf»); `time_off`: Angaben zum Arztzeugnis (Dateiname, Typ, Grösse, sha256 — beim Hochladen gesetzt, ältere beim ersten Abruf nachgetragen) und `arztzeugnis_an_flow_at` (erste Übergabe); eigene Anträge ohne Zeugnis-Angaben (Policy). **Vor dem Code-Deploy einspielen.** Rückweg: `flow_abruf_beginnen` wie 377, Policies wie 378. |
+| Code | `POST /api/flow/stempel`, `/vergleich`, `/lohnabrechnung`, `/saetze` (377), `/abwesenheiten` und `/arztzeugnis` (380) (bis 01.11.2026 auch `/personen`); Statusspalte Dezember+ «Lohnabrechnung aus Bexio liegt bereit»; Lohndokumente zeigen «aus Bexio übernommen»; Altbestand-Skript überspringt Bexio-Dokumente. |
 | Vercel-Env | `FLOW_ABRUF_PUBLIC_KEY` (öffentlicher Schlüssel von Trust flow, **nicht geheim**, kein «sensitive» nötig). Ohne ihn antworten alle `/api/flow/*` mit 503 — nie offen. |
 
 Der Code darf mit dem Phase-4-Deploy mitgehen (er liegt auf demselben Branch): ohne Env-Schlüssel ist die Schnittstelle zu.
@@ -47,7 +48,9 @@ Der Code darf mit dem Phase-4-Deploy mitgehen (er liegt auf demselben Branch): o
   kommen mit). Partner-/Lieferanten-Zugänge und unbekannte IDs fallen weg bzw. → 422 `person_unbekannt`. Nur `/vergleich`
   (≤ 2026-11) filtert weiter auf eine ERP-Anstellung im Stempel-Bereich.
 - Ein Ausweis gilt 60 s und genau einmal (`jti`); Wiederholen mit demselben Ausweis → 409, ein neuer Abruf braucht einen neuen.
-- Höchstzahl: 10 Abrufe (Stempel/Vergleich) bzw. 30 Ablagen (Lohnabrechnungen) je Minute → 429 mit `Retry-After`.
+- Höchstzahl: 10 Abrufe (Stempel/Vergleich/Abwesenheiten/Arztzeugnis zusammen) bzw. 30 Ablagen (Lohnabrechnungen, Sätze) je Minute → 429 mit `Retry-After`.
+- `/abwesenheiten` (380): je Person alle Abwesenheiten, die den Monat berühren, ohne Notizen; `/arztzeugnis` liefert die Datei
+  (≤ 10 MB, Base64) und vermerkt die erste Übergabe in `time_off.arztzeugnis_an_flow_at`. Gelöscht wird nichts (Regel offen).
 - Wartung «lohn» (`node scripts/wartung.mjs an lohn`) schliesst auch die Schnittstelle (503 mit Hinweis); der Ausweis bleibt unverbraucht.
 - `/vergleich` nur bis Lohnmonat 2026-11; `/lohnabrechnung` nur ab 2026-12 und nach `lauf_bis`. Gleiche Fassung + gleiche PDF
   nochmals = «vorhanden» (Wiederholen ist sicher), gleiche Fassung mit anderer PDF bzw. ältere Fassung = 409.

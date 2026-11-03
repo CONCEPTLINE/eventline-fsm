@@ -3,8 +3,10 @@
 // POST (multipart, Feld «datei»: Foto oder PDF, max. 10 MB)
 //      Nur die Person selbst. Legt die Datei im privaten Bucket
 //      «arztzeugnisse» unter <user_id>/<time_off_id>/… ab (Migration 378:
-//      kein direkter Zugriff fuer Clients) und merkt den Pfad. Ein neues
-//      Zeugnis ersetzt das alte.
+//      kein direkter Zugriff fuer Clients) und merkt Pfad, Dateiname, Typ,
+//      Grösse und sha256 (Migration 380, für Trust flow: /api/flow/abwesenheiten
+//      und /api/flow/arztzeugnis). Ein neues Zeugnis ersetzt das alte und gilt
+//      wieder als «noch nicht an Trust flow übergeben».
 // GET  → { url } kurzlebige signierte URL (60 s). Nur die Person selbst,
 //      ferien:approve und Admins (DSG Art. 5).
 
@@ -13,6 +15,8 @@ import { requireInternal } from "@/lib/api-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { logError } from "@/lib/log";
 import { ARZTZEUGNIS_BUCKET, darfArztzeugnisSehen } from "@/lib/krank-server";
+import { arztzeugnisDateiname } from "@/lib/krank";
+import { sha256Hex } from "@/lib/flow/regeln";
 
 const MAX_BYTES = 10 * 1024 * 1024;
 const ERLAUBT = new Set(["image/jpeg", "image/png", "image/webp", "image/heic", "image/heif", "application/pdf"]);
@@ -66,12 +70,21 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
     const endung = datei.type === "application/pdf" ? "pdf" : (datei.type.split("/")[1] ?? "jpg");
     const pfad = `${ich}/${id}/${Date.now()}.${endung}`;
-    const { error: upErr } = await admin.storage.from(ARZTZEUGNIS_BUCKET).upload(pfad, datei, { contentType: datei.type, upsert: false });
+    const bytes = new Uint8Array(await datei.arrayBuffer());
+    const { error: upErr } = await admin.storage.from(ARZTZEUGNIS_BUCKET).upload(pfad, bytes, { contentType: datei.type, upsert: false });
     if (upErr) throw new Error(upErr.message);
 
     const { error: uErr } = await admin
       .from("time_off")
-      .update({ arztzeugnis_pfad: pfad, arztzeugnis_hochgeladen_at: new Date().toISOString() })
+      .update({
+        arztzeugnis_pfad: pfad,
+        arztzeugnis_hochgeladen_at: new Date().toISOString(),
+        arztzeugnis_dateiname: arztzeugnisDateiname(datei.name, endung),
+        arztzeugnis_mime: datei.type,
+        arztzeugnis_groesse: bytes.byteLength,
+        arztzeugnis_sha256: sha256Hex(bytes),
+        arztzeugnis_an_flow_at: null,
+      })
       .eq("id", id);
     if (uErr) {
       await admin.storage.from(ARZTZEUGNIS_BUCKET).remove([pfad]);

@@ -2,12 +2,17 @@
 import { describe, expect, it } from "vitest";
 import { stempelBereich } from "@/lib/lohn/kern";
 import {
+  abwesenheitFuerFlow,
+  arztzeugnisPfadPasst,
   dekodierePdf,
   interneProfile,
+  mimeAusEndung,
   monateDesStempels,
   nachtraeglichGeaendert,
   pruefeAblageClaims,
   pruefeAblageKoerper,
+  pruefeAbwesenheitenClaims,
+  pruefeArztzeugnisClaims,
   pruefeMonatsClaims,
   pruefeSaetzeClaims,
   protokollKennzahlen,
@@ -185,5 +190,62 @@ describe("Personal-Sätze (/saetze)", () => {
     expect(pruefeSaetzeClaims({ saetze: [e({ netto_chf_h: Number.NaN })] })).toMatchObject({ code: "satz_ungueltig" });
     expect(pruefeSaetzeClaims({ saetze: ["x"] })).toMatchObject({ code: "satz_ungueltig" });
     expect(pruefeSaetzeClaims({ saetze: [e(), e({ erp_profil_id: P1.toUpperCase(), kosten_chf_h: 50 })] })).toMatchObject({ code: "satz_doppelt" });
+  });
+});
+
+describe("Abwesenheiten und Arztzeugnis (/abwesenheiten, /arztzeugnis)", () => {
+  const T = "b0000000-0000-4000-8000-000000000001";
+
+  it("Claims Abwesenheiten: Monat als Kalendertage, profile wie /stempel, ohne Stempel-Bereich", () => {
+    expect(pruefeAbwesenheitenClaims({ jahr: 2026, monat: 2, profile: [P1.toUpperCase(), P2] })).toEqual({
+      ok: true,
+      anfrage: { jahr: 2026, monat: 2, profile: [P1, P2], von: "2026-02-01", bis: "2026-02-28" },
+    });
+    expect(pruefeAbwesenheitenClaims({ jahr: 2028, monat: 2, profile: [P1] })).toMatchObject({ anfrage: { bis: "2028-02-29" } });
+    expect(pruefeAbwesenheitenClaims({ jahr: 2026, monat: 12, profile: [P1] })).toMatchObject({ anfrage: { von: "2026-12-01", bis: "2026-12-31" } });
+    expect(pruefeAbwesenheitenClaims({ jahr: 2026, monat: 13, profile: [P1] })).toMatchObject({ code: "monat_ungueltig" });
+    expect(pruefeAbwesenheitenClaims({ jahr: 2026, monat: 12, profile: [] })).toMatchObject({ code: "profile_fehlen" });
+    expect(pruefeAbwesenheitenClaims({ jahr: 2026, monat: 12, profile: [P1, P1] })).toMatchObject({ code: "profile_doppelt" });
+    const viele = Array.from({ length: 51 }, (_, i) => `a0000000-0000-4000-8000-${String(i).padStart(12, "0")}`);
+    expect(pruefeAbwesenheitenClaims({ jahr: 2026, monat: 12, profile: viele })).toMatchObject({ code: "profile_zu_viele" });
+  });
+
+  it("Claims Arztzeugnis: time_off_id (UUID, klein); Protokoll zählt 1", () => {
+    expect(pruefeArztzeugnisClaims({ time_off_id: T.toUpperCase() })).toEqual({ ok: true, anfrage: { timeOffId: T } });
+    expect(pruefeArztzeugnisClaims({})).toMatchObject({ code: "abwesenheit_ungueltig", status: 400 });
+    expect(pruefeArztzeugnisClaims({ time_off_id: "x" })).toMatchObject({ code: "abwesenheit_ungueltig" });
+    expect(protokollKennzahlen({ time_off_id: T })).toEqual({ jahr: null, monat: null, angefragt: 1 });
+  });
+
+  it("Pfad des Zeugnisses muss zu Person und Abwesenheit passen", () => {
+    expect(arztzeugnisPfadPasst(`${P1}/${T}/1730000000000.pdf`, P1, T)).toBe(true);
+    expect(arztzeugnisPfadPasst(`${P2}/${T}/1730000000000.pdf`, P1, T)).toBe(false);
+    expect(arztzeugnisPfadPasst(`${P1}/${P2}/1730000000000.pdf`, P1, T)).toBe(false);
+    expect(arztzeugnisPfadPasst(`${P1}/${T}/x/../y.pdf`, P1, T)).toBe(false);
+    expect(arztzeugnisPfadPasst(`${P1}/${T}/`, P1, T)).toBe(false);
+  });
+
+  it("Abwesenheit für Trust flow: nur die Felder des Vertrags, Zeugnis nur mit Pfad", () => {
+    const z = {
+      id: T, user_id: P1, type: "krank", status: "genehmigt", start_date: "2026-11-28", end_date: "2026-12-03",
+      ende_offen: null, created_at: "2026-11-28T07:00:00+00:00", approved_at: null,
+      arztzeugnis_pfad: `${P1}/${T}/1.pdf`, arztzeugnis_hochgeladen_at: "2026-11-30T10:00:00+00:00",
+    };
+    const d = { dateiname: "Zeugnis.pdf", mime: "application/pdf", groesse: 1234, sha256: "a".repeat(64) };
+    expect(abwesenheitFuerFlow(z, d)).toEqual({
+      id: T, typ: "krank", status: "genehmigt", von: "2026-11-28", bis: "2026-12-03", ende_offen: false,
+      gemeldet_at: "2026-11-28T07:00:00+00:00", entschieden_at: null,
+      arztzeugnis: { id: T, hochgeladen_at: "2026-11-30T10:00:00+00:00", dateiname: "Zeugnis.pdf", mime: "application/pdf", groesse: 1234, sha256: "a".repeat(64) },
+    });
+    expect(abwesenheitFuerFlow({ ...z, arztzeugnis_pfad: null }, d).arztzeugnis).toBeNull();
+    expect(abwesenheitFuerFlow(z, null).arztzeugnis).toBeNull();
+    expect(Object.keys(abwesenheitFuerFlow(z, null))).not.toContain("note");
+  });
+
+  it("MIME aus der Endung (ältere Zeugnisse)", () => {
+    expect(mimeAusEndung("a/b/1.PDF")).toBe("application/pdf");
+    expect(mimeAusEndung("a/b/1.jpeg")).toBe("image/jpeg");
+    expect(mimeAusEndung("a/b/1.heic")).toBe("image/heic");
+    expect(mimeAusEndung("a/b/1")).toBe("application/octet-stream");
   });
 });

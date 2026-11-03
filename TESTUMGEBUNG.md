@@ -130,11 +130,11 @@ Module in `supabase/lokal/phase4/`. App-Mails (Alarm, Erinnerung, «Lohnabrechnu
 NICHT in den Mail-Fänger (`RESEND_API_KEY` leer) — geprüft wird dann `lohn_lauf.alarm_fehler` bzw. die In-App-Meldung.
 Live-Gang-Paket: `supabase/lokal/live-gang-phase4/`.
 
-Prüftor Schnittstelle Trust flow (Migration 369, Routen `/api/flow/*`: Stempel, Vergleich, Lohnabrechnung aus Bexio; `/personen` und `/stammdaten` seit 01.11.2026 weg, Migration 371):
+Prüftor Schnittstelle Trust flow (Migration 369, Routen `/api/flow/*`: Stempel, Vergleich, Lohnabrechnung aus Bexio, Sätze (377), Abwesenheiten und Arztzeugnis (380); `/personen` und `/stammdaten` seit 01.11.2026 weg, Migration 371):
 
 ```bash
 bash supabase/lokal/aufbauen.sh --nur-seed   # frische Testdaten (optional; das Skript läuft auch wiederholt)
-node supabase/lokal/pruefen-flow.mjs         # ~80 Prüfungen, ~2–3 min (wartet auf das Minuten-Fenster der Höchstzahl)
+node supabase/lokal/pruefen-flow.mjs         # ~120 Prüfungen, ~3–4 min (wartet auf das Minuten-Fenster der Höchstzahl)
 ```
 
 Erzeugt einmalig ein Ed25519-**Test**schlüsselpaar in `supabase/lokal/ausgabe/flow-testschluessel.json` (nicht eingecheckt)

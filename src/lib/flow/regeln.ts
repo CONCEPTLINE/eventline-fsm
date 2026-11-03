@@ -4,6 +4,9 @@
 //   pruefeAblageClaims     Ablage: erp_profil_id, art (lohnabrechnung: jahr+monat ab 12/2026 |
 //                          lohnausweis: jahr ab 2026, ohne monat), fassung, sha256
 //   pruefeSaetzeClaims     Personal-Sätze: saetze [{ erp_profil_id, gueltig_ab, kosten_chf_h, netto_chf_h }] (1–50)
+//   pruefeAbwesenheitenClaims  Abwesenheiten (380): jahr, monat, profile (≤ 50)
+//   pruefeArztzeugnisClaims    Arztzeugnis (380): time_off_id
+//   abwesenheitFuerFlow, arztzeugnisPfadPasst
 //   lokalerMonat, monateDesStempels, zaehleUeberlappungen, nachtraeglichGeaendert
 //   vergleichAusMomentaufnahme
 //   pruefeAblageKoerper, dekodierePdf
@@ -48,14 +51,14 @@ function jahrMonat(c: Record<string, unknown>): { jahr: number; monat: number } 
 }
 
 /** Kennzahlen fürs Protokoll, bevor die Route die Claims streng prüft (nie Wurf).
- *  Lohnausweis: nur jahr (monat leer); Sätze: angefragt = Anzahl Einträge. */
+ *  Lohnausweis: nur jahr (monat leer); Sätze: angefragt = Anzahl Einträge; Arztzeugnis: 1. */
 export function protokollKennzahlen(c: Record<string, unknown>): { jahr: number | null; monat: number | null; angefragt: number | null } {
   const jm = jahrMonat(c);
   const nurJahr = !jm && c.monat === undefined && Number.isInteger(c.jahr) && (c.jahr as number) >= 2020 && (c.jahr as number) <= 2100
     ? (c.jahr as number) : null;
   const angefragt = Array.isArray(c.profile) ? c.profile.length
     : Array.isArray(c.saetze) ? c.saetze.length
-    : istUuid(c.erp_profil_id) ? 1 : null;
+    : istUuid(c.erp_profil_id) || istUuid(c.time_off_id) ? 1 : null;
   return { jahr: jm?.jahr ?? nurJahr, monat: jm?.monat ?? null, angefragt };
 }
 
@@ -207,6 +210,110 @@ export function pruefeSaetzeClaims(c: Record<string, unknown>): { ok: true; anfr
     out.push({ profileId, gueltigAb: o.gueltig_ab, kostenChfH: o.kosten_chf_h, nettoChfH: o.netto_chf_h });
   }
   return { ok: true, anfrage: out };
+}
+
+// ---------------------------------------------------------------------------
+// Abwesenheiten und Arztzeugnis (POST /api/flow/abwesenheiten, /api/flow/arztzeugnis; Migration 380)
+// ---------------------------------------------------------------------------
+
+/** Grösstes Arztzeugnis (wie Bucket «arztzeugnisse», Migration 378). */
+export const ARZTZEUGNIS_MAX_BYTES = 10 * 1024 * 1024;
+
+export interface AbwesenheitenAnfrage {
+  jahr: number;
+  monat: number;
+  /** ERP-Profil-IDs (klein geschrieben, eindeutig). */
+  profile: string[];
+  /** Erster und letzter Kalendertag des Monats (Ortszeit Zürich, YYYY-MM-DD). */
+  von: string;
+  bis: string;
+}
+
+/** Claims für /abwesenheiten: jahr, monat, profile (1–50) — wie /stempel, ohne Stempel-Bereich. */
+export function pruefeAbwesenheitenClaims(c: Record<string, unknown>): { ok: true; anfrage: AbwesenheitenAnfrage } | RegelFehler {
+  const jm = jahrMonat(c);
+  if (!jm) return fehler("monat_ungueltig", "jahr/monat fehlen oder sind ungültig.");
+  const p = pruefeProfilListe(c);
+  if (!p.ok) return p;
+  const letzter = new Date(Date.UTC(jm.jahr, jm.monat, 0)).getUTCDate();
+  const m = monatText(jm.jahr, jm.monat);
+  return { ok: true, anfrage: { ...jm, profile: p.profile, von: `${m}-01`, bis: `${m}-${String(letzter).padStart(2, "0")}` } };
+}
+
+/** Claim `time_off_id` für /arztzeugnis. */
+export function pruefeArztzeugnisClaims(c: Record<string, unknown>): { ok: true; anfrage: { timeOffId: string } } | RegelFehler {
+  if (!istUuid(c.time_off_id)) return fehler("abwesenheit_ungueltig", "time_off_id fehlt oder ist ungültig.");
+  return { ok: true, anfrage: { timeOffId: (c.time_off_id as string).toLowerCase() } };
+}
+
+/**
+ * Liegt das Arztzeugnis dort, wo /api/krank/[id]/arztzeugnis es ablegt
+ * (<user_id>/<time_off_id>/<datei>)? Schutz gegen einen Pfad, der auf das
+ * Zeugnis einer anderen Person zeigt.
+ */
+export function arztzeugnisPfadPasst(pfad: string, userId: string, timeOffId: string): boolean {
+  const teile = pfad.split("/");
+  return teile.length === 3 && teile[0].toLowerCase() === userId.toLowerCase()
+    && teile[1].toLowerCase() === timeOffId.toLowerCase() && teile[2].length > 0 && teile[2] !== "." && teile[2] !== "..";
+}
+
+export interface AbwesenheitZeile {
+  id: string;
+  user_id: string;
+  type: string;
+  status: string;
+  start_date: string;
+  end_date: string;
+  ende_offen: boolean | null;
+  created_at: string;
+  approved_at: string | null;
+  arztzeugnis_pfad: string | null;
+  arztzeugnis_hochgeladen_at: string | null;
+}
+
+export interface ArztzeugnisDaten {
+  dateiname: string;
+  mime: string;
+  groesse: number;
+  sha256: string;
+}
+
+export interface AbwesenheitFuerFlow {
+  id: string;
+  typ: string;
+  status: string;
+  von: string;
+  bis: string;
+  ende_offen: boolean;
+  gemeldet_at: string;
+  entschieden_at: string | null;
+  arztzeugnis: null | { id: string; hochgeladen_at: string | null; dateiname: string; mime: string; groesse: number; sha256: string };
+}
+
+/** Eine Abwesenheit für Trust flow — ohne Notizen, ohne Entscheid-Text, ohne Namen. */
+export function abwesenheitFuerFlow(z: AbwesenheitZeile, zeugnis: ArztzeugnisDaten | null): AbwesenheitFuerFlow {
+  return {
+    id: z.id,
+    typ: z.type,
+    status: z.status,
+    von: z.start_date,
+    bis: z.end_date,
+    ende_offen: z.ende_offen === true,
+    gemeldet_at: z.created_at,
+    entschieden_at: z.approved_at,
+    arztzeugnis: z.arztzeugnis_pfad && zeugnis
+      ? { id: z.id, hochgeladen_at: z.arztzeugnis_hochgeladen_at, ...zeugnis }
+      : null,
+  };
+}
+
+/** MIME-Typ aus der Dateiendung (für Zeugnisse vor Migration 380 ohne gespeicherte Angabe). */
+export function mimeAusEndung(pfad: string): string {
+  const e = (pfad.split(".").pop() ?? "").toLowerCase();
+  const je: Record<string, string> = {
+    pdf: "application/pdf", jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", webp: "image/webp", heic: "image/heic", heif: "image/heif",
+  };
+  return je[e] ?? "application/octet-stream";
 }
 
 // ---------------------------------------------------------------------------

@@ -91,7 +91,7 @@ if (schritt === "nachher") {
 
 if (schritt === "app") {
   const basis = (urlArg ?? (LOKAL ? "http://localhost:3100" : LIVE_APP)).replace(/\/$/, "");
-  for (const route of ["stempel", "vergleich"]) {
+  for (const route of ["stempel", "vergleich", "abwesenheiten", "arztzeugnis"]) {
     const r = await fetch(`${basis}/api/flow/${route}`, { method: "POST", headers: { "content-type": "application/jose" }, body: "a.b.c" });
     const ok = r.status === 401;
     console.log(`${ok ? "OK    " : "FEHLER"} POST /api/flow/${route} mit ungültigem Ausweis → ${r.status}${r.status === 503 ? " (FLOW_ABRUF_PUBLIC_KEY fehlt?)" : ""}`);

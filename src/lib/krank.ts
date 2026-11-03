@@ -53,3 +53,17 @@ export function arztzeugnisFehlt(
 export function krankLaeuft(k: { bis: string; endeOffen: boolean }, heute: string): boolean {
   return k.endeOffen || k.bis > heute;
 }
+
+/** Dateiname des Arztzeugnisses zum Speichern (Migration 380): ohne Pfad und
+ *  Steuerzeichen, höchstens 120 Zeichen, Endung passend zum Typ. Leer →
+ *  «arztzeugnis.<endung>». */
+export function arztzeugnisDateiname(original: string, endung: string): string {
+  const basis = (original.split(/[\\/]/).pop() ?? "")
+    .normalize("NFC")
+    .replace(/[\u0000-\u001f\u007f"<>|:*?]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  const ohneEndung = basis.replace(/\.[A-Za-z0-9]{1,5}$/, "").replace(/^\.+/, "").trim();
+  const kern = ohneEndung.slice(0, 120 - endung.length - 1).trim();
+  return `${kern || "arztzeugnis"}.${endung}`;
+}

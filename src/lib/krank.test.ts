@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   ARZTZEUGNIS_AB_TAG,
+  arztzeugnisDateiname,
   arztzeugnisFaelligAb,
   arztzeugnisFehlt,
   bisherigeTage,
@@ -53,5 +54,21 @@ describe("krank — Arztzeugnis ab dem 3. Kalendertag (AAB)", () => {
     expect(krankLaeuft({ bis: "2026-11-04", endeOffen: false }, "2026-11-03")).toBe(true);
     expect(krankLaeuft({ bis: "2026-11-03", endeOffen: false }, "2026-11-03")).toBe(false);
     expect(krankLaeuft({ bis: "2026-11-02", endeOffen: false }, "2026-11-03")).toBe(false);
+  });
+});
+
+describe("krank — Dateiname des Arztzeugnisses (Migration 380)", () => {
+  it("behält den Namen, Endung passend zum Typ", () => {
+    expect(arztzeugnisDateiname("Zeugnis Dr. Muster.PDF", "pdf")).toBe("Zeugnis Dr. Muster.pdf");
+    expect(arztzeugnisDateiname("IMG_2041.jpeg", "jpeg")).toBe("IMG_2041.jpeg");
+  });
+  it("ohne Pfad, Steuerzeichen und versteckte Namen; leer → arztzeugnis", () => {
+    expect(arztzeugnisDateiname("C:\\fakepath\\a\u0000b.pdf", "pdf")).toBe("ab.pdf");
+    expect(arztzeugnisDateiname("../../x.png", "png")).toBe("x.png");
+    expect(arztzeugnisDateiname("", "pdf")).toBe("arztzeugnis.pdf");
+    expect(arztzeugnisDateiname(".pdf", "pdf")).toBe("arztzeugnis.pdf");
+  });
+  it("höchstens 120 Zeichen", () => {
+    expect(arztzeugnisDateiname("x".repeat(500) + ".pdf", "pdf").length).toBe(120);
   });
 });

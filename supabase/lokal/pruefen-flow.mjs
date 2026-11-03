@@ -18,6 +18,10 @@
 //   F9 ohne FLOW_ABRUF_PUBLIC_KEY → 503 auf allen Routen
 //   F10 Lohnausweis aus Bexio (art «lohnausweis», 377): Ablage je Jahr, Fassungen, Antwort mit zustellung
 //   F11 Personal-Sätze /api/flow/saetze (aud «erp-saetze», 377): speichern, unverändert, ändern, unbekannte Person
+//   F12 Abwesenheiten /api/flow/abwesenheiten (aud «erp-abwesenheiten», 380): Monat, Felder, Arztzeugnis-Angaben
+//       (beim Hochladen gespeichert bzw. für ältere Zeugnisse nachgetragen), keine Notizen, fremder Pfad, Policy
+//   F13 Arztzeugnis /api/flow/arztzeugnis (aud «erp-arztzeugnis», 380): Datei, Übergabe einmal vermerkt, 404,
+//       Prüfsumme; legt Prüf-Abwesenheiten und Zeugnisse an und entfernt sie wieder (Zählprüfung)
 //
 // Aufruf: node supabase/lokal/pruefen-flow.mjs   (~2–3 min: wartet auf das Minuten-Fenster)
 // Meldet sich nur LOKAL ab (signOut({ scope: "local" })).
@@ -182,6 +186,18 @@ const speicherObjekte = (pid, monat) => Number(sql(`select count(*) from storage
 
 const zeit = (tag, hhmm) => `'${tag} ${hhmm}:00 Europe/Zurich'::timestamptz`;
 const aufraeumen = () => sql(`select set_config('lohn.notweg','an',true); delete from time_entries where description = '${TEST}';`);
+/** Prüf-Abwesenheiten (note «FLOW-TEST …») samt Arztzeugnissen entfernen. Entschiedene Abwesenheiten sind
+ *  durch einen Trigger nicht löschbar — nur hier, nur lokal, mit abgeschalteten Triggern. */
+async function aufraeumenAbwesenheiten() {
+  const ids = sql(`select coalesce(string_agg(id::text, ','), '') from time_off where note like '${TEST}%'`).split(",").filter(Boolean);
+  if (ids.length === 0) return;
+  const dateien = sql(`select coalesce(string_agg(name, ','), '') from storage.objects where bucket_id = 'arztzeugnisse' and (${ids.map((i) => `name like '%/${i}/%'`).join(" or ")})`).split(",").filter(Boolean);
+  if (dateien.length > 0) {
+    const { error } = await service.storage.from("arztzeugnisse").remove(dateien);
+    if (error) throw new Error(`Zeugnisse entfernen: ${error.message}`);
+  }
+  sql(`set session_replication_role = replica; delete from time_off where note like '${TEST}%'; set session_replication_role = origin;`);
+}
 
 let laufBisVorher = null;
 let wartungVorher = null;
@@ -194,6 +210,7 @@ try {
   wartungVorher = sql("select coalesce(array_to_string(bereiche, ','), '') from wartung where id = 'default'");
   ok(laufBisVorher === "2026-11-01", `lauf_bis = ${laufBisVorher} (ERP rechnet bis November 2026)`);
   aufraeumen();
+  await aufraeumenAbwesenheiten();
   // Lara hat ab Dezember keine Stempel: dort Prüffälle anlegen (Dezember ist noch nicht gesperrt).
   const s1 = sql(`insert into time_entries (user_id, clock_in, clock_out, description) values ('${ID.lara}', ${zeit("2026-12-05", "08:00")}, ${zeit("2026-12-05", "12:00")}, '${TEST}') returning id`);
   sql(`insert into time_entries (user_id, clock_in, clock_out, ueberlappung_altfall, description) values ('${ID.lara}', ${zeit("2026-12-05", "11:00")}, ${zeit("2026-12-05", "14:00")}, true, '${TEST}')`);
@@ -418,6 +435,107 @@ try {
   ok(sql(`select gruppe from flow_abrufe where aud = 'erp-saetze' order by empfangen_at desc limit 1`) === "ablage", "Protokoll: aud erp-saetze, Gruppe «ablage»");
   sql(`delete from personal_saetze where gueltig_ab = '${tag}'`);
 
+  titel("F12 Abwesenheiten /api/flow/abwesenheiten (aud «erp-abwesenheiten», 380)");
+  const abwVorher = Number(sql("select count(*) from time_off"));
+  const zeugnisVorher = Number(sql("select count(*) from storage.objects where bucket_id = 'arztzeugnisse'"));
+  const neuAbw = (pid, typ, status, von, bis, extra = "") => sql(`insert into time_off (user_id, type, status, start_date, end_date, note, approved_by_name, ende_offen) values ('${pid}', '${typ}', '${status}', '${von}', '${bis}', '${TEST} geheime Notiz', ${status === "genehmigt" ? "'Krankmeldung'" : "null"}, ${extra === "offen"}) returning id`).match(/[0-9a-f-]{36}/)[0];
+  const K1 = neuAbw(ID.lara, "krank", "genehmigt", "2026-11-28", "2026-12-03");          // über den Monatswechsel, mit Zeugnis (Upload)
+  const F1 = neuAbw(ID.lara, "ferien", "beantragt", "2026-12-20", "2026-12-22");         // ohne Zeugnis
+  const J1 = neuAbw(ID.lara, "ferien", "genehmigt", "2027-01-05", "2027-01-06");         // anderer Monat
+  const K2 = neuAbw(ID.noah, "krank", "genehmigt", "2026-12-10", "2026-12-11", "offen");  // Zeugnis vor 380 (ohne Angaben)
+  const K3 = neuAbw(ID.noah, "krank", "genehmigt", "2026-12-15", "2026-12-15");          // Pfad zeigt auf fremdes Zeugnis
+  ok(true, "Prüf-Abwesenheiten Lara/Noah angelegt (krank über Monatswechsel, Ferien, Januar, Altfall, fremder Pfad)");
+
+  const laraK = await login("lara.steiner@example.com");
+  const zeugnis1 = testPdf(`Arztzeugnis Test ${Date.now()}`);
+  const hochladen = async (id, pdf, name) => {
+    const fd = new FormData();
+    fd.append("datei", new Blob([pdf], { type: "application/pdf" }), name);
+    return laraK(`/api/krank/${id}/arztzeugnis`, { method: "POST", body: fd });
+  };
+  const up1 = await hochladen(K1, zeugnis1, "Zeugnis Dr. Test.pdf");
+  ok(up1.status === 200, `Lara lädt Arztzeugnis hoch → ${up1.status}`);
+  const meta1 = sql(`select arztzeugnis_dateiname || '|' || arztzeugnis_mime || '|' || arztzeugnis_groesse || '|' || arztzeugnis_sha256 || '|' || (arztzeugnis_an_flow_at is null) from time_off where id = '${K1}'`);
+  ok(meta1 === `Zeugnis Dr. Test.pdf|application/pdf|${zeugnis1.length}|${sha256(zeugnis1)}|true`, `beim Hochladen gespeichert: Dateiname, Typ, Grösse, sha256 (${meta1.split("|").slice(0, 3).join(", ")})`);
+
+  const altBytes = Buffer.from(`JPEG-Altfall ${Date.now()}`);
+  const altPfad = `${ID.noah}/${K2}/1730000000000.jpg`;
+  const { error: altErr } = await service.storage.from("arztzeugnisse").upload(altPfad, altBytes, { contentType: "image/jpeg" });
+  ok(!altErr, `Altfall-Zeugnis direkt im Bucket abgelegt ${altErr?.message ?? ""}`);
+  sql(`update time_off set arztzeugnis_pfad = '${altPfad}', arztzeugnis_hochgeladen_at = now() where id = '${K2}'`);
+  const laraPfad = sql(`select arztzeugnis_pfad from time_off where id = '${K1}'`);
+  sql(`update time_off set arztzeugnis_pfad = '${laraPfad}', arztzeugnis_hochgeladen_at = now() where id = '${K3}'`);
+
+  await platz(2);
+  const fremdeId = randomUUID();
+  const a12 = ausweis("erp-abwesenheiten", { jahr: 2026, monat: 12, profile: [ID.lara, fremdeId, ID.noah] });
+  const r12 = await flow("abwesenheiten", a12.token);
+  const lara12a = r12.json?.personen?.find((p) => p.erp_profil_id === ID.lara)?.abwesenheiten ?? [];
+  const noah12a = r12.json?.personen?.find((p) => p.erp_profil_id === ID.noah)?.abwesenheiten ?? [];
+  ok(r12.status === 200 && r12.json?.monat === "2026-12" && JSON.stringify((r12.json?.personen ?? []).map((p) => p.erp_profil_id)) === JSON.stringify([ID.lara, ID.noah]),
+    `→ ${r12.status} ${r12.json?.monat}; Personen Lara, Noah (unbekannte ID fällt weg)`);
+  const dbLara = Number(sql(`select count(*) from time_off where user_id = '${ID.lara}' and start_date <= '2026-12-31' and end_date >= '2026-12-01'`));
+  ok(lara12a.length === dbLara && lara12a.some((x) => x.id === K1) && lara12a.some((x) => x.id === F1) && !lara12a.some((x) => x.id === J1),
+    `Lara: ${lara12a.length} Abwesenheiten = DB (${dbLara}), krank über Monatswechsel und Ferien drin, Januar nicht`);
+  const k1 = lara12a.find((x) => x.id === K1);
+  ok(Object.keys(k1 ?? {}).join(",") === "id,typ,status,von,bis,ende_offen,gemeldet_at,entschieden_at,arztzeugnis", `Felder je Abwesenheit: ${Object.keys(k1 ?? {}).join(",")}`);
+  ok(k1?.typ === "krank" && k1?.status === "genehmigt" && k1?.von === "2026-11-28" && k1?.bis === "2026-12-03" && k1?.ende_offen === false && !Number.isNaN(Date.parse(k1?.gemeldet_at)),
+    `Krank Lara: ${k1?.typ} ${k1?.status} ${k1?.von}–${k1?.bis}`);
+  ok(JSON.stringify(k1?.arztzeugnis) === JSON.stringify({ id: K1, hochgeladen_at: k1?.arztzeugnis?.hochgeladen_at, dateiname: "Zeugnis Dr. Test.pdf", mime: "application/pdf", groesse: zeugnis1.length, sha256: sha256(zeugnis1) })
+    && !Number.isNaN(Date.parse(k1?.arztzeugnis?.hochgeladen_at)), "Arztzeugnis-Angaben: id, hochgeladen_at, dateiname, mime, groesse, sha256");
+  ok(lara12a.find((x) => x.id === F1)?.arztzeugnis === null, "Ferien ohne Zeugnis → arztzeugnis null");
+  ok(!/geheime Notiz|Krankmeldung|Lara|Steiner/.test(r12.text), "keine Notiz, kein Entscheid-Text, keine Namen in der Antwort");
+  const k2 = noah12a.find((x) => x.id === K2);
+  ok(k2?.ende_offen === true && k2?.arztzeugnis?.sha256 === sha256(altBytes) && k2?.arztzeugnis?.groesse === altBytes.length && k2?.arztzeugnis?.mime === "image/jpeg" && k2?.arztzeugnis?.dateiname === "arztzeugnis.jpg",
+    `Altfall (Zeugnis vor 380): Angaben aus der Datei berechnet (${k2?.arztzeugnis?.dateiname}, ${k2?.arztzeugnis?.mime}, ${k2?.arztzeugnis?.groesse} B)`);
+  ok(sql(`select arztzeugnis_sha256 from time_off where id = '${K2}'`) === sha256(altBytes), "… und in time_off nachgetragen");
+  ok(noah12a.find((x) => x.id === K3)?.arztzeugnis === null, "Pfad auf fremdes Zeugnis → arztzeugnis null");
+  ok(sql(`select status || '|' || gruppe || '|' || geliefert || '|' || angefragt || '|' || jahr || '|' || monat || '|' || antwort_sha256 from flow_abrufe where jti = '${a12.jti}'`) === `ok|abruf|2|3|2026|12|${sha256(r12.text)}`,
+    "Protokoll: ok, Gruppe «abruf», 2 Personen, 3 angefragt, Monat, sha256 der Antwort");
+  const r12b = await flow("abwesenheiten", ausweis("erp-abwesenheiten", { jahr: 2026, monat: 12, profile: Array.from({ length: 51 }, () => randomUUID()) }).token);
+  ok(r12b.status === 400 && r12b.json?.code === "profile_zu_viele", `51 Profil-IDs → ${r12b.status} ${r12b.json?.code}`);
+  const rls = await sitzungen[sitzungen.length - 1].from("time_off").update({ arztzeugnis_pfad: laraPfad }).eq("id", F1).select("id");
+  ok((rls.error || (rls.data ?? []).length === 0) && sql(`select arztzeugnis_pfad is null from time_off where id = '${F1}'`) === "t",
+    "Lara kann eigenem Antrag keinen Zeugnis-Pfad setzen (Policy 380)");
+
+  titel("F13 Arztzeugnis /api/flow/arztzeugnis (aud «erp-arztzeugnis», 380)");
+  await platz(8);
+  const zeugnisAbruf = (id) => { const a = ausweis("erp-arztzeugnis", { time_off_id: id }); return flow("arztzeugnis", a.token).then((r) => ({ ...r, jti: a.jti })); };
+  const r13 = await zeugnisAbruf(K1.toUpperCase());
+  const datei13 = Buffer.from(r13.json?.datei_base64 ?? "", "base64");
+  ok(r13.status === 200 && r13.json?.ok === true && sha256(datei13) === sha256(zeugnis1) && r13.json?.sha256 === sha256(zeugnis1)
+    && r13.json?.groesse === zeugnis1.length && r13.json?.mime === "application/pdf" && r13.json?.dateiname === "Zeugnis Dr. Test.pdf",
+    `Zeugnis Lara → ${r13.status}, Datei = Hochgeladenes (${datei13.length} B, ${r13.json?.dateiname})`);
+  ok(Object.keys(r13.json ?? {}).join(",") === "ok,mime,dateiname,sha256,groesse,datei_base64", `Antwort-Felder: ${Object.keys(r13.json ?? {}).join(",")}`);
+  const uebergabe1 = sql(`select coalesce(arztzeugnis_an_flow_at::text, '') from time_off where id = '${K1}'`);
+  ok(uebergabe1 !== "", `erste Übergabe vermerkt (arztzeugnis_an_flow_at ${uebergabe1})`);
+  ok(sql(`select status || '|' || gruppe || '|' || geliefert || '|' || angefragt || '|' || (jahr is null) from flow_abrufe where jti = '${r13.jti}'`) === "ok|abruf|1|1|true", "Protokoll: ok, Gruppe «abruf», 1 geliefert");
+  const r13b = await zeugnisAbruf(K1);
+  ok(r13b.status === 200 && sql(`select arztzeugnis_an_flow_at::text from time_off where id = '${K1}'`) === uebergabe1, "zweiter Abruf → 200, Übergabe-Zeitpunkt bleibt (einmal gesetzt)");
+  ok(sql(`select count(*) from storage.objects where bucket_id = 'arztzeugnisse' and name = '${laraPfad}'`) === "1", "nichts gelöscht (Datei bleibt im Bucket)");
+  const r13c = await zeugnisAbruf(K2);
+  ok(r13c.status === 200 && sha256(Buffer.from(r13c.json?.datei_base64 ?? "", "base64")) === sha256(altBytes), `Altfall-Zeugnis → ${r13c.status}, Prüfsumme stimmt`);
+  for (const [was, id, code] of [["fremder Pfad", K3, "kein_arztzeugnis"], ["ohne Zeugnis", F1, "kein_arztzeugnis"], ["unbekannte ID", randomUUID(), "abwesenheit_unbekannt"]]) {
+    const r = await zeugnisAbruf(id);
+    ok(r.status === 404 && r.json?.code === code && !r.json?.datei_base64, `${was} → ${r.status} ${r.json?.code}`);
+  }
+  const rUng = await flow("arztzeugnis", ausweis("erp-arztzeugnis", { time_off_id: "x" }).token);
+  ok(rUng.status === 400 && rUng.json?.code === "abwesenheit_ungueltig", `time_off_id ungültig → ${rUng.status} ${rUng.json?.code}`);
+  const rAudZ = await flow("arztzeugnis", ausweis("erp-abwesenheiten", { time_off_id: K1 }).token);
+  ok(rAudZ.status === 401, `Abwesenheiten-Ausweis an /arztzeugnis → ${rAudZ.status}`);
+  sql(`update time_off set arztzeugnis_sha256 = '${"f".repeat(64)}' where id = '${K1}'`);
+  const rTamp = await zeugnisAbruf(K1);
+  ok(rTamp.status === 500 && rTamp.json?.code === "fehler" && !rTamp.json?.datei_base64 && sql(`select status from flow_abrufe where jti = '${rTamp.jti}'`) === "fehler",
+    `Datei passt nicht zur gespeicherten Prüfsumme → ${rTamp.status}, nichts geliefert, Protokoll «fehler»`);
+  const zeugnis2 = testPdf(`Arztzeugnis neu ${Date.now()}`);
+  const up2 = await hochladen(K1, zeugnis2, "neu.pdf");
+  ok(up2.status === 200 && sql(`select (arztzeugnis_an_flow_at is null) || '|' || arztzeugnis_sha256 || '|' || arztzeugnis_dateiname from time_off where id = '${K1}'`) === `true|${sha256(zeugnis2)}|neu.pdf`,
+    "neues Zeugnis: Angaben neu, Übergabe zurückgesetzt");
+  await aufraeumenAbwesenheiten();
+  ok(Number(sql("select count(*) from time_off")) === abwVorher && Number(sql("select count(*) from storage.objects where bucket_id = 'arztzeugnisse'")) === zeugnisVorher,
+    `Prüf-Abwesenheiten und Zeugnisse entfernt (time_off ${abwVorher}, Zeugnisse ${zeugnisVorher} wie vorher)`);
+
+
   const lara = await login("lara.steiner@example.com");
   const meine = await lara("/api/hr/wage-documents");
   const dok = meine.json?.documents?.find((d) => d.id === r9d.json?.dokument_id);
@@ -443,7 +561,7 @@ try {
   setzeEnv(null);
   try {
     ok(await warteAufServer(503), "Dev-Server ohne Schlüssel");
-    for (const route of ["stempel", "vergleich"]) {
+    for (const route of ["stempel", "vergleich", "abwesenheiten", "arztzeugnis"]) {
       const r = await flow(route, ausweis(`erp-${route}`, monatsClaims(2026, 9, [ID.lara])).token);
       ok(r.status === 503 && r.json?.code === "nicht_eingerichtet", `/api/flow/${route} → ${r.status} ${r.json?.code}`);
     }
@@ -457,6 +575,7 @@ try {
   ok(false, `abgebrochen — ${e instanceof Error ? e.stack ?? e.message : String(e)}`);
 } finally {
   try { aufraeumen(); } catch (e) { console.log(`Aufräumen der Prüf-Stempel fehlgeschlagen: ${e.message}`); }
+  try { await aufraeumenAbwesenheiten(); } catch (e) { console.log(`Aufräumen der Prüf-Abwesenheiten fehlgeschlagen: ${e.message}`); }
   if (laufBisVorher) sql(`update lohn_einstellungen set lauf_bis = '${laufBisVorher}' where id = 'default'`);
   if (wartungVorher !== null && !wartungVorher.split(",").includes("lohn")
       && sql("select coalesce(array_to_string(bereiche, ','), '') from wartung where id = 'default'").split(",").includes("lohn")) {

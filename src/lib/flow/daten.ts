@@ -6,14 +6,25 @@ import { ladeStempelProbleme } from "@/lib/lohn/stempel-pruefung";
 import { ladeLohnEinstellungen, nachLaufBis } from "@/lib/lohn/zugriff";
 import { speichereBexioFassung } from "@/lib/lohn/fassung";
 import { ladeAktuelleWahl, meldeNeueAbrechnung } from "@/lib/lohn/zustellung";
+import { ARZTZEUGNIS_BUCKET } from "@/lib/krank-server";
+import { arztzeugnisDateiname } from "@/lib/krank";
+import { logError } from "@/lib/log";
 import type { Ausgefuehrt } from "./aufruf";
 import type { FlowAusweis } from "./ausweis";
 import {
+  abwesenheitFuerFlow,
+  ARZTZEUGNIS_MAX_BYTES,
+  arztzeugnisPfadPasst,
   interneProfile,
+  mimeAusEndung,
   monatText,
   nachtraeglichGeaendert,
   vergleichAusMomentaufnahme,
+  sha256Hex,
   zaehleUeberlappungen,
+  type AbwesenheitenAnfrage,
+  type AbwesenheitZeile,
+  type ArztzeugnisDaten,
   type AblageAnfrage,
   type MomentaufnahmeRoh,
   type MonatsAnfrage,
@@ -262,4 +273,135 @@ export async function saetzeSpeichern(admin: SupabaseClient, saetze: Satz[]): Pr
     if (error) throw new Error(`Personal-Sätze konnten nicht gespeichert werden: ${error.message}`);
   }
   return { ok: true, geliefert: neu.length, body: { ok: true, gespeichert: neu.length, unveraendert: saetze.length - neu.length } };
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/flow/abwesenheiten, /api/flow/arztzeugnis (Migration 380)
+// ---------------------------------------------------------------------------
+
+type ZeugnisZeile = AbwesenheitZeile & {
+  arztzeugnis_dateiname: string | null;
+  arztzeugnis_mime: string | null;
+  arztzeugnis_groesse: number | string | null;
+  arztzeugnis_sha256: string | null;
+};
+// Ohne note und decision_note (Freitext, evtl. Gesundheitsdaten) — sie verlassen das ERP nicht.
+const ABWESENHEIT_SPALTEN = "id, user_id, type, status, start_date, end_date, ende_offen, created_at, approved_at, " +
+  "arztzeugnis_pfad, arztzeugnis_hochgeladen_at, arztzeugnis_dateiname, arztzeugnis_mime, arztzeugnis_groesse, arztzeugnis_sha256";
+
+/** Arztzeugnis aus dem privaten Bucket (nur Server). */
+async function ladeZeugnisDatei(admin: SupabaseClient, pfad: string): Promise<{ bytes: Uint8Array; mime: string }> {
+  const { data, error } = await admin.storage.from(ARZTZEUGNIS_BUCKET).download(pfad);
+  if (error || !data) throw new Error(`Arztzeugnis konnte nicht geladen werden: ${error?.message ?? "keine Datei"}`);
+  return { bytes: new Uint8Array(await data.arrayBuffer()), mime: data.type };
+}
+
+/** Pfad des Zeugnisses, wenn er zur Abwesenheit passt (<user_id>/<time_off_id>/…); sonst null (laut im Log). */
+function zeugnisPfad(z: ZeugnisZeile): string | null {
+  if (!z.arztzeugnis_pfad) return null;
+  if (arztzeugnisPfadPasst(z.arztzeugnis_pfad, z.user_id, z.id)) return z.arztzeugnis_pfad;
+  logError("api.flow.arztzeugnis.pfad", new Error("Pfad des Arztzeugnisses passt nicht zur Abwesenheit"), { id: z.id });
+  return null;
+}
+
+/** Gespeicherte Angaben zur Datei (seit Migration 380 beim Hochladen gesetzt), sonst null. */
+function gespeicherteDaten(z: ZeugnisZeile): ArztzeugnisDaten | null {
+  if (!z.arztzeugnis_sha256 || z.arztzeugnis_groesse == null || !z.arztzeugnis_mime || !z.arztzeugnis_dateiname) return null;
+  return { dateiname: z.arztzeugnis_dateiname, mime: z.arztzeugnis_mime, groesse: Number(z.arztzeugnis_groesse), sha256: z.arztzeugnis_sha256 };
+}
+
+/** Angaben aus der Datei berechnen und nachtragen (Zeugnisse vor Migration 380) — nur solange es dieselbe Datei ist. */
+async function datenNachtragen(
+  admin: SupabaseClient,
+  z: ZeugnisZeile,
+  pfad: string,
+  datei: { bytes: Uint8Array; mime: string },
+): Promise<ArztzeugnisDaten> {
+  const endung = (pfad.split(".").pop() ?? "").toLowerCase() || "bin";
+  const mime = z.arztzeugnis_mime
+    ?? (datei.mime && datei.mime !== "application/octet-stream" ? datei.mime.split(";")[0].trim() : mimeAusEndung(pfad));
+  const daten: ArztzeugnisDaten = {
+    dateiname: z.arztzeugnis_dateiname ?? arztzeugnisDateiname("", endung),
+    mime,
+    groesse: datei.bytes.byteLength,
+    sha256: sha256Hex(datei.bytes),
+  };
+  const { error } = await admin.from("time_off")
+    .update({ arztzeugnis_dateiname: daten.dateiname, arztzeugnis_mime: daten.mime, arztzeugnis_groesse: daten.groesse, arztzeugnis_sha256: daten.sha256 })
+    .eq("id", z.id).eq("arztzeugnis_pfad", pfad).is("arztzeugnis_sha256", null);
+  if (error) throw new Error(`Angaben zum Arztzeugnis konnten nicht gespeichert werden: ${error.message}`);
+  return daten;
+}
+
+export async function abwesenheitenAntwort(admin: SupabaseClient, a: AbwesenheitenAnfrage): Promise<Ausgefuehrt> {
+  // Personen wie /stempel: jedes interne ERP-Profil aus `profile` (auch ausgetretene).
+  const personen = await nurInterne(admin, a.profile);
+  const zeilen: ZeugnisZeile[] = [];
+  for (const teil of inStuecken(personen)) {
+    // Alle Abwesenheiten, die den Monat berühren (start_date/end_date sind Zürcher Kalendertage).
+    zeilen.push(...(await ladeAlleSeiten<ZeugnisZeile>(
+      (x, y) => admin.from("time_off").select(ABWESENHEIT_SPALTEN).in("user_id", teil)
+        .lte("start_date", a.bis).gte("end_date", a.von).order("id").range(x, y) as unknown as PromiseLike<{ data: ZeugnisZeile[] | null; error: { message: string } | null }>,
+      "Abwesenheiten",
+    )));
+  }
+  const zeugnisse = new Map<string, ArztzeugnisDaten>();
+  for (const z of zeilen) {
+    const pfad = zeugnisPfad(z);
+    if (!pfad) continue;
+    zeugnisse.set(z.id, gespeicherteDaten(z) ?? (await datenNachtragen(admin, z, pfad, await ladeZeugnisDatei(admin, pfad))));
+  }
+  const liste = personen.map((id) => ({
+    erp_profil_id: id,
+    abwesenheiten: zeilen
+      .filter((z) => z.user_id === id)
+      .sort((x, y) => x.start_date.localeCompare(y.start_date) || x.end_date.localeCompare(y.end_date) || x.id.localeCompare(y.id))
+      .map((z) => abwesenheitFuerFlow(z, zeugnisse.get(z.id) ?? null)),
+  }));
+  return { ok: true, geliefert: liste.length, body: { monat: monatText(a.jahr, a.monat), personen: liste } };
+}
+
+export async function arztzeugnisAntwort(admin: SupabaseClient, a: { timeOffId: string }): Promise<Ausgefuehrt> {
+  const { data, error } = await admin.from("time_off").select(ABWESENHEIT_SPALTEN).eq("id", a.timeOffId).maybeSingle();
+  if (error) throw new Error(`Abwesenheit konnte nicht geladen werden: ${error.message}`);
+  const z = data as ZeugnisZeile | null;
+  if (!z || (await nurInterne(admin, [z.user_id])).length === 0) {
+    return ablehnen(404, "abwesenheit_unbekannt", "Keine Abwesenheit mit dieser ID.");
+  }
+  const pfad = zeugnisPfad(z);
+  if (!pfad) return ablehnen(404, "kein_arztzeugnis", "Zu dieser Abwesenheit liegt kein Arztzeugnis vor.");
+
+  const datei = await ladeZeugnisDatei(admin, pfad);
+  if (datei.bytes.byteLength === 0 || datei.bytes.byteLength > ARZTZEUGNIS_MAX_BYTES) {
+    throw new Error(`Arztzeugnis leer oder grösser als 10 MB (${datei.bytes.byteLength} Bytes).`);
+  }
+  const gespeichert = gespeicherteDaten(z);
+  let daten: ArztzeugnisDaten;
+  if (gespeichert) {
+    // Unversehrtheit: die Datei muss der beim Hochladen gemerkten Prüfsumme entsprechen.
+    if (sha256Hex(datei.bytes) !== gespeichert.sha256 || datei.bytes.byteLength !== gespeichert.groesse) {
+      throw new Error("Arztzeugnis weicht von der beim Hochladen gespeicherten Prüfsumme ab.");
+    }
+    daten = gespeichert;
+  } else {
+    daten = await datenNachtragen(admin, z, pfad, datei);
+  }
+
+  // Erste Übergabe an Trust flow merken (einmal je Datei; ein neues Zeugnis setzt sie zurück). Gelöscht wird nichts.
+  const { error: uErr } = await admin.from("time_off").update({ arztzeugnis_an_flow_at: new Date().toISOString() })
+    .eq("id", z.id).eq("arztzeugnis_pfad", pfad).is("arztzeugnis_an_flow_at", null);
+  if (uErr) throw new Error(`Übergabe konnte nicht vermerkt werden: ${uErr.message}`);
+
+  return {
+    ok: true,
+    geliefert: 1,
+    body: {
+      ok: true,
+      mime: daten.mime,
+      dateiname: daten.dateiname,
+      sha256: daten.sha256,
+      groesse: daten.groesse,
+      datei_base64: Buffer.from(datei.bytes).toString("base64"),
+    },
+  };
 }
