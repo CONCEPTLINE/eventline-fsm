@@ -250,7 +250,7 @@ export async function saetzeSpeichern(admin: SupabaseClient, saetze: Satz[]): Pr
   const gesamt = saetze.length;
   saetze = saetze.filter((s) => intern.has(s.profileId));
   if (saetze.length === 0) {
-    return { ok: true, geliefert: 0, body: { ok: true, gespeichert: 0, unveraendert: 0, unbekannt } };
+    return { ok: true, geliefert: 0, body: { ok: true, gespeichert: 0, unveraendert: 0, unbekannt, gesamt } };
   }
 
   type Zeile = { profile_id: string; gueltig_ab: string; kosten_chf_h: unknown; netto_chf_h: unknown };
