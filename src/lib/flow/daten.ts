@@ -237,7 +237,8 @@ export async function lohnabrechnungAblegen(
 // ---------------------------------------------------------------------------
 
 /** Rappen-genauer Vergleich (numeric(8,2) aus der DB kommt als Zahl oder Text). */
-const gleich = (x: unknown, y: number) => Math.round(Number(x) * 100) === Math.round(y * 100);
+const gleich = (x: unknown, y: number | null) =>
+  x === null || x === undefined || y === null ? (x ?? null) === y : Math.round(Number(x) * 100) === Math.round(y * 100);
 
 export async function saetzeSpeichern(admin: SupabaseClient, saetze: Satz[]): Promise<Ausgefuehrt> {
   const ids = [...new Set(saetze.map((s) => s.profileId))];

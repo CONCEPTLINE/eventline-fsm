@@ -234,6 +234,13 @@ describe("Personal-Sätze (/saetze)", () => {
     });
     expect(protokollKennzahlen({ saetze: [e(), e()] })).toEqual({ jahr: null, monat: null, angefragt: 2 });
   });
+  it("null = kein Stundensatz (Provisionslohn), Feld muss aber vorhanden sein", () => {
+    expect(pruefeSaetzeClaims({ saetze: [e({ kosten_chf_h: null, netto_chf_h: null })] })).toEqual({
+      ok: true,
+      anfrage: [{ profileId: P1, gueltigAb: "2026-12-01", kostenChfH: null, nettoChfH: null }],
+    });
+    expect(pruefeSaetzeClaims({ saetze: [{ erp_profil_id: P1, gueltig_ab: "2026-12-01", kosten_chf_h: null }] })).toMatchObject({ code: "satz_ungueltig" });
+  });
   it("1–50 Einträge", () => {
     expect(pruefeSaetzeClaims({})).toMatchObject({ code: "saetze_fehlen" });
     expect(pruefeSaetzeClaims({ saetze: [] })).toMatchObject({ code: "saetze_fehlen" });
@@ -248,6 +255,7 @@ describe("Personal-Sätze (/saetze)", () => {
     expect(pruefeSaetzeClaims({ saetze: [e({ kosten_chf_h: 1.005 })] })).toMatchObject({ code: "satz_ungueltig" });
     expect(pruefeSaetzeClaims({ saetze: [e({ netto_chf_h: "28.00" })] })).toMatchObject({ code: "satz_ungueltig" });
     expect(pruefeSaetzeClaims({ saetze: [e({ netto_chf_h: Number.NaN })] })).toMatchObject({ code: "satz_ungueltig" });
+    expect(pruefeSaetzeClaims({ saetze: [e({ netto_chf_h: undefined })] })).toMatchObject({ code: "satz_ungueltig" });
     expect(pruefeSaetzeClaims({ saetze: ["x"] })).toMatchObject({ code: "satz_ungueltig" });
     expect(pruefeSaetzeClaims({ saetze: [e(), e({ erp_profil_id: P1.toUpperCase(), kosten_chf_h: 50 })] })).toMatchObject({ code: "satz_doppelt" });
   });

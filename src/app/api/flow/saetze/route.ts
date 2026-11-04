@@ -3,7 +3,8 @@
 //
 // Körper: { "ausweis": "<JWS>" } — Ausweis wie A1 (EdDSA, 60 s, jti einmalig) mit
 //   saetze: [{ erp_profil_id, gueltig_ab: "YYYY-MM-DD", kosten_chf_h, netto_chf_h }]
-//   1–50 Einträge; Zahlen ≥ 0 mit höchstens 2 Nachkommastellen; je Person und
+//   1–50 Einträge; Zahlen ≥ 0 mit höchstens 2 Nachkommastellen oder null (kein
+//   Stundensatz, z. B. Provisionslohn; Migration 383); je Person und
 //   Datum höchstens einmal. Jede Person muss ein internes ERP-Profil sein
 //   (kein Partner-/Lieferanten-Zugang), sonst 422 und nichts wird gespeichert.
 // Speichern: je (Person, gueltig_ab) ein Eintrag — neu oder überschrieben, wenn

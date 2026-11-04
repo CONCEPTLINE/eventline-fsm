@@ -260,8 +260,9 @@ export interface Satz {
   profileId: string;
   /** YYYY-MM-DD */
   gueltigAb: string;
-  kostenChfH: number;
-  nettoChfH: number;
+  /** null = kein Stundensatz (z. B. reiner Provisionslohn). */
+  kostenChfH: number | null;
+  nettoChfH: number | null;
 }
 
 const istDatum = (v: unknown): v is string => {
@@ -274,6 +275,9 @@ const istDatum = (v: unknown): v is string => {
 /** Zahl ≥ 0 mit höchstens 2 Nachkommastellen (als JSON-Zahl). */
 const istSatz = (v: unknown): v is number =>
   typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= SATZ_MAX && Math.abs(Math.round(v * 100) - v * 100) < 1e-6;
+
+/** Satz oder ausdrücklich null (Feld muss vorhanden sein). */
+const istSatzOderNull = (v: unknown): v is number | null => v === null || istSatz(v);
 
 /** Claim `saetze`: 1–50 Einträge, je Person und Datum höchstens einmal. */
 export function pruefeSaetzeClaims(c: Record<string, unknown>): { ok: true; anfrage: Satz[] } | RegelFehler {
@@ -288,8 +292,8 @@ export function pruefeSaetzeClaims(c: Record<string, unknown>): { ok: true; anfr
     if (!o) return fehler("satz_ungueltig", `${nr} ist kein Objekt.`);
     if (!istUuid(o.erp_profil_id)) return fehler("person_ungueltig", `${nr}.erp_profil_id fehlt oder ist ungültig.`);
     if (!istDatum(o.gueltig_ab)) return fehler("datum_ungueltig", `${nr}.gueltig_ab (YYYY-MM-DD) fehlt oder ist ungültig.`);
-    if (!istSatz(o.kosten_chf_h)) return fehler("satz_ungueltig", `${nr}.kosten_chf_h: Zahl ≥ 0 mit höchstens 2 Nachkommastellen.`);
-    if (!istSatz(o.netto_chf_h)) return fehler("satz_ungueltig", `${nr}.netto_chf_h: Zahl ≥ 0 mit höchstens 2 Nachkommastellen.`);
+    if (!istSatzOderNull(o.kosten_chf_h)) return fehler("satz_ungueltig", `${nr}.kosten_chf_h: Zahl ≥ 0 mit höchstens 2 Nachkommastellen oder null.`);
+    if (!istSatzOderNull(o.netto_chf_h)) return fehler("satz_ungueltig", `${nr}.netto_chf_h: Zahl ≥ 0 mit höchstens 2 Nachkommastellen oder null.`);
     const profileId = (o.erp_profil_id as string).toLowerCase();
     const k = `${profileId}|${o.gueltig_ab}`;
     if (gesehen.has(k)) return fehler("satz_doppelt", `${nr}: Person und gueltig_ab kommen doppelt vor.`);
