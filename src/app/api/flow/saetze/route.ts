@@ -5,11 +5,12 @@
 //   saetze: [{ erp_profil_id, gueltig_ab: "YYYY-MM-DD", kosten_chf_h, netto_chf_h }]
 //   1–50 Einträge; Zahlen ≥ 0 mit höchstens 2 Nachkommastellen oder null (kein
 //   Stundensatz, z. B. Provisionslohn; Migration 383); je Person und
-//   Datum höchstens einmal. Jede Person muss ein internes ERP-Profil sein
-//   (kein Partner-/Lieferanten-Zugang), sonst 422 und nichts wird gespeichert.
+//   Datum höchstens einmal. Gespeichert werden nur Personen mit internem
+//   ERP-Profil (kein Partner-/Lieferanten-Zugang); die übrigen kommen in
+//   `unbekannt` zurück, die bekannten werden trotzdem gespeichert.
 // Speichern: je (Person, gueltig_ab) ein Eintrag — neu oder überschrieben, wenn
 // sich ein Satz geändert hat. Wiederholen ist sicher.
-// Antwort: { ok: true, gespeichert, unveraendert }.
+// Antwort: { ok: true, gespeichert, unveraendert, unbekannt: [erp_profil_id], gesamt }.
 // Die Sätze dienen nur Kostenrechnungen im ERP; der Lohn wird in Trust flow gerechnet.
 
 import { NextResponse } from "next/server";

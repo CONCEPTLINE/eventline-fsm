@@ -17,7 +17,7 @@
 //      Statusspalte «über Trust flow», Lohnlauf (Probe) erzeugt für Dezember nichts
 //   F9 ohne FLOW_ABRUF_PUBLIC_KEY → 503 auf allen Routen
 //   F10 Lohnausweis aus Bexio (art «lohnausweis», 377): Ablage je Jahr, Fassungen, Antwort mit zustellung
-//   F11 Personal-Sätze /api/flow/saetze (aud «erp-saetze», 377): speichern, unverändert, ändern, unbekannte Person
+//   F11 Personal-Sätze /api/flow/saetze (aud «erp-saetze», 377/383): speichern, unverändert, ändern, null, unbekannte Person
 //   F12 Abwesenheiten /api/flow/abwesenheiten (aud «erp-abwesenheiten», 380): Monat, Felder, Arztzeugnis-Angaben
 //       (beim Hochladen gespeichert bzw. für ältere Zeugnisse nachgetragen), keine Notizen, fremder Pfad, Policy
 //   F13 Arztzeugnis /api/flow/arztzeugnis (aud «erp-arztzeugnis», 380): signierter Link (60 s), Datei über den Link
@@ -432,8 +432,11 @@ try {
   ok(sa2.status === 200 && sa2.json?.gespeichert === 0 && sa2.json?.unveraendert === 1, `gleicher Satz nochmals → gespeichert ${sa2.json?.gespeichert}, unverändert ${sa2.json?.unveraendert}`);
   const sa3 = await saetze([{ erp_profil_id: ID.lara, gueltig_ab: tag, kosten_chf_h: 42, netto_chf_h: 28.5 }]);
   ok(sa3.status === 200 && sa3.json?.gespeichert === 1 && sql(`select kosten_chf_h::text from personal_saetze where profile_id = '${ID.lara}' and gueltig_ab = '${tag}'`) === "42.00", "geänderter Satz → überschrieben");
-  const sa4 = await saetze([{ erp_profil_id: randomUUID(), gueltig_ab: tag, kosten_chf_h: 1, netto_chf_h: 1 }]);
-  ok(sa4.status === 422 && sa4.json?.code === "person_unbekannt", `unbekannte Person → ${sa4.status} ${sa4.json?.code}`);
+  const fremd = randomUUID();
+  const sa4 = await saetze([{ erp_profil_id: fremd, gueltig_ab: tag, kosten_chf_h: 1, netto_chf_h: 1 }, { erp_profil_id: ID.noah, gueltig_ab: tag, kosten_chf_h: null, netto_chf_h: null }]);
+  ok(sa4.status === 200 && sa4.json?.gespeichert === 1 && sa4.json?.unbekannt?.[0] === fremd
+    && sql(`select coalesce(kosten_chf_h::text, 'null') from personal_saetze where profile_id = '${ID.noah}' and gueltig_ab = '${tag}'`) === "null",
+    `unbekannte Person zurückgemeldet, bekannte (null = Provisionslohn) gespeichert → ${sa4.status} ${JSON.stringify(sa4.json)}`);
   const sa5 = await saetze([{ erp_profil_id: ID.lara, gueltig_ab: tag, kosten_chf_h: 1.005, netto_chf_h: 1 }]);
   ok(sa5.status === 400 && sa5.json?.code === "satz_ungueltig", `drei Nachkommastellen → ${sa5.status} ${sa5.json?.code}`);
   ok(sql(`select gruppe from flow_abrufe where aud = 'erp-saetze' order by empfangen_at desc limit 1`) === "ablage", "Protokoll: aud erp-saetze, Gruppe «ablage»");
@@ -485,8 +488,8 @@ try {
   ok(Object.keys(k1 ?? {}).join(",") === "id,typ,status,von,bis,ende_offen,gemeldet_at,entschieden_at,arztzeugnis", `Felder je Abwesenheit: ${Object.keys(k1 ?? {}).join(",")}`);
   ok(k1?.typ === "krank" && k1?.status === "genehmigt" && k1?.von === "2026-11-28" && k1?.bis === "2026-12-03" && k1?.ende_offen === false && !Number.isNaN(Date.parse(k1?.gemeldet_at)),
     `Krank Lara: ${k1?.typ} ${k1?.status} ${k1?.von}–${k1?.bis}`);
-  ok(JSON.stringify(k1?.arztzeugnis) === JSON.stringify({ id: K1, hochgeladen_at: k1?.arztzeugnis?.hochgeladen_at, dateiname: "Zeugnis Dr. Test.pdf", mime: "application/pdf", groesse: zeugnis1.length, sha256: sha256(zeugnis1) })
-    && !Number.isNaN(Date.parse(k1?.arztzeugnis?.hochgeladen_at)), "Arztzeugnis-Angaben: id, hochgeladen_at, dateiname, mime, groesse, sha256");
+  ok(JSON.stringify(k1?.arztzeugnis) === JSON.stringify({ id: K1, hochgeladen_at: k1?.arztzeugnis?.hochgeladen_at, dateiname: "Zeugnis Dr. Test.pdf", mime: "application/pdf", groesse: zeugnis1.length, sha256: sha256(zeugnis1), an_flow_at: null, geloescht: false })
+    && !Number.isNaN(Date.parse(k1?.arztzeugnis?.hochgeladen_at)), `Arztzeugnis-Angaben: id, hochgeladen_at, dateiname, mime, groesse, sha256, an_flow_at, geloescht → ${JSON.stringify(k1?.arztzeugnis)}`);
   ok(lara12a.find((x) => x.id === F1)?.arztzeugnis === null, "Ferien ohne Zeugnis → arztzeugnis null");
   ok(!/geheime Notiz|Krankmeldung|Lara|Steiner/.test(r12.text), "keine Notiz, kein Entscheid-Text, keine Namen in der Antwort");
   const k2 = noah12a.find((x) => x.id === K2);

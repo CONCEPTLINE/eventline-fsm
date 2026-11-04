@@ -241,11 +241,16 @@ const gleich = (x: unknown, y: number | null) =>
   x === null || x === undefined || y === null ? (x ?? null) === y : Math.round(Number(x) * 100) === Math.round(y * 100);
 
 export async function saetzeSpeichern(admin: SupabaseClient, saetze: Satz[]): Promise<Ausgefuehrt> {
-  const ids = [...new Set(saetze.map((s) => s.profileId))];
-  const intern = new Set(await nurInterne(admin, ids));
-  const unbekannt = ids.filter((id) => !intern.has(id));
-  if (unbekannt.length > 0) {
-    return ablehnen(422, "person_unbekannt", `Keine Mitarbeiterin / kein Mitarbeiter mit diesen ERP-Profil-IDs: ${unbekannt.join(", ")}.`);
+  const alleIds = [...new Set(saetze.map((s) => s.profileId))];
+  const intern = new Set(await nurInterne(admin, alleIds));
+  // Unbekannte Personen (kein internes Profil) nicht speichern, aber zurückmelden;
+  // die bekannten werden trotzdem gespeichert (Backoffice-Wunsch 04.11.2026).
+  const unbekannt = alleIds.filter((id) => !intern.has(id));
+  const ids = alleIds.filter((id) => intern.has(id));
+  const gesamt = saetze.length;
+  saetze = saetze.filter((s) => intern.has(s.profileId));
+  if (saetze.length === 0) {
+    return { ok: true, geliefert: 0, body: { ok: true, gespeichert: 0, unveraendert: 0, unbekannt } };
   }
 
   type Zeile = { profile_id: string; gueltig_ab: string; kosten_chf_h: unknown; netto_chf_h: unknown };
@@ -277,7 +282,7 @@ export async function saetzeSpeichern(admin: SupabaseClient, saetze: Satz[]): Pr
     );
     if (error) throw new Error(`Personal-Sätze konnten nicht gespeichert werden: ${error.message}`);
   }
-  return { ok: true, geliefert: neu.length, body: { ok: true, gespeichert: neu.length, unveraendert: saetze.length - neu.length } };
+  return { ok: true, geliefert: neu.length, body: { ok: true, gespeichert: neu.length, unveraendert: saetze.length - neu.length, unbekannt, gesamt } };
 }
 
 // ---------------------------------------------------------------------------
