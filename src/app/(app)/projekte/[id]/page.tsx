@@ -271,28 +271,37 @@ export default function ProjektDetailPage() {
     })));
     setChildren((childrenRes.data ?? []) as Child[]);
 
-    // Members inkl. Stundenlohn fuer Kosten-Prognose (Admin).
+    // Members inkl. Kosten-Stundensatz (Trust flow) fuer die Kosten (Lohnrecht).
     const memberList = (membersRes.data ?? []).map((m) => ({
       user_id: m.user_id as string,
       joined_at: m.joined_at as string,
       member: Array.isArray(m.member) ? m.member[0] : m.member,
     }));
     const uids = memberList.map((m) => m.user_id);
-    // Stundenloehne nur noch ueber den Server (Lohn-Umbau Phase 1: Lohnrecht
-    // + vertrautes Geraet). 403 = kein Recht/Geraet → still keine Kosten.
+    // Stundensaetze nur ueber den Server (Lohnrecht + vertrautes Geraet).
+    // 403 = kein Recht/Geraet → still keine Kosten.
     const wageMap = new Map<string, number>();
+    const verlaufMap = new Map<string, { gueltig_ab: string; satz: number | null }[]>();
     if (uids.length > 0) {
       try {
         const res = await fetch(`/api/hr/stundensaetze?ids=${uids.join(",")}`, { cache: "no-store" });
         if (res.status !== 403) {
           const body = (await res.json().catch(() => null)) as
-            | { success?: boolean; error?: string; saetze?: Record<string, number> }
+            | {
+                success?: boolean;
+                error?: string;
+                saetze?: Record<string, number>;
+                verlauf?: Record<string, { gueltig_ab: string; kosten_chf_h: number | null }[]>;
+              }
             | null;
           if (!res.ok || !body?.success) throw new Error(body?.error ?? `HTTP ${res.status}`);
           for (const [id, chf] of Object.entries(body.saetze ?? {})) wageMap.set(id, Number(chf));
+          for (const [id, zeilen] of Object.entries(body.verlauf ?? {})) {
+            verlaufMap.set(id, zeilen.map((z) => ({ gueltig_ab: z.gueltig_ab, satz: z.kosten_chf_h })));
+          }
         }
       } catch (err) {
-        toast.error(`Stundenlöhne konnten nicht geladen werden: ${err instanceof Error ? err.message : String(err)}`);
+        toast.error(`Stundensätze konnten nicht geladen werden: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
     setMembers(memberList.map((m) => {
@@ -302,7 +311,8 @@ export default function ProjektDetailPage() {
         joined_at: m.joined_at,
         full_name: mem?.full_name ?? null,
         role: mem?.role ?? null,
-        hourly_wage_chf: wageMap.get(m.user_id) ?? null,
+        kosten_chf_h: wageMap.get(m.user_id) ?? null,
+        kosten_verlauf: verlaufMap.get(m.user_id) ?? [],
       };
     }));
     setAudit((auditRes.data ?? []).map((a) => ({ ...a, changer: Array.isArray(a.changer) ? a.changer[0] : a.changer })) as AuditEntry[]);

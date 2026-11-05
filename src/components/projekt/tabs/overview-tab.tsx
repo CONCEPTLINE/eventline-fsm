@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { satzAm, satzVerlauf } from "@/lib/personal-saetze";
 import type { Appointment, Member, Project, TimeEntry } from "../types";
 import { PORTAL_ROLLEN_IN } from "@/lib/roles";
 import { usePermissions } from "@/lib/use-permissions";
@@ -500,15 +501,32 @@ function TeamBudgetPanel({
           {canSeeKosten && members.length > 0 && (
             <div className="mt-2 text-[11px] text-muted-foreground/80 flex items-center gap-2 flex-wrap">
               {(() => {
+                // Kosten-Stundensaetze aus Trust flow (Ø = heute gueltig; Ist
+                // = Stunden × Satz am Stempel-Tag). Ohne Satz: nicht eingerechnet.
                 const nonAdminMembers = members.filter((m) => m.role !== "admin");
-                const wageMembers = nonAdminMembers.filter((m) => m.hourly_wage_chf != null);
-                if (wageMembers.length === 0) return <span className="italic">Kein Stundenlohn (ohne Admins) hinterlegt</span>;
-                const avg = wageMembers.reduce((a, m) => a + (m.hourly_wage_chf ?? 0), 0) / wageMembers.length;
+                const wageMembers = nonAdminMembers.filter((m) => m.kosten_chf_h != null);
+                const verlauf = satzVerlauf(nonAdminMembers.flatMap((m) => m.kosten_verlauf.map((z) => ({ profile_id: m.user_id, ...z }))));
+                const ohneSatz = new Set(nonAdminMembers.filter((m) => m.kosten_chf_h == null).map((m) => m.user_id));
+                const memberIds = new Set(nonAdminMembers.map((m) => m.user_id));
+                let actual = 0;
+                for (const e of entries) {
+                  if (!memberIds.has(e.user_id) || !e.minutes) continue;
+                  const satz = satzAm(verlauf, e.user_id, e.entry_date);
+                  if (satz === null) ohneSatz.add(e.user_id);
+                  else actual += (e.minutes / 60) * satz;
+                }
+                const ohneSatzHinweis = ohneSatz.size > 0 && (
+                  <span className="opacity-70" data-tooltip="Kein Stundensatz aus Trust flow (z. B. Provisionslohn) — nicht in den Kosten enthalten">
+                    ohne Satz: {ohneSatz.size} {ohneSatz.size === 1 ? "Person" : "Personen"}
+                  </span>
+                );
+                // Ganz ohne Satz (oder Saetze nicht geladen: Geraet nicht vertraut) — kein Zaehler.
+                if (wageMembers.length === 0) return <span className="italic">Kein Stundensatz (ohne Admins) hinterlegt</span>;
+                const avg = wageMembers.reduce((a, m) => a + (m.kosten_chf_h ?? 0), 0) / wageMembers.length;
                 const forecast = budgetH * avg;
-                const wageByUser = new Map(nonAdminMembers.map((m) => [m.user_id, m.hourly_wage_chf ?? 0]));
-                const actual = entries.reduce((a, e) => a + (e.minutes ?? 0) / 60 * (wageByUser.get(e.user_id) ?? 0), 0);
                 return <>
                   Kosten: <strong className="text-foreground/80">CHF {CHF.format(actual)}</strong> / {CHF.format(forecast)} <span className="opacity-70">(Ø {CHF.format(avg)}/h · {wageMembers.length} MA)</span>
+                  {ohneSatzHinweis}
                 </>;
               })()}
             </div>

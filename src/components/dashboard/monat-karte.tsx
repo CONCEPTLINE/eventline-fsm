@@ -1,7 +1,8 @@
 "use client";
 
 // Bereich «Mein Monat»: eigene Stunden bisher und die Prognose zum
-// Monatsende (inkl. Netto-CHF), darunter wie weit der Monat ist.
+// Monatsende mit «ca. CHF» (Stunden × Netto-Stundensatz aus Trust flow),
+// darunter wie weit der Monat ist. Ohne Stundensatz keine CHF-Zeile.
 
 import { Clock } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -22,7 +23,7 @@ export function MonatKarte({ daten }: { daten: MonatDaten }) {
         <Kachel
           label="Prognose Monatsende"
           wert={`${ganzzahl(daten.prognose_stunden)} h`}
-          unter={daten.prognose_chf != null ? `≈ CHF ${ganzzahl(daten.prognose_chf)}` : "Kein Lohn hinterlegt"}
+          unter={daten.prognose_chf != null ? `ca. CHF ${ganzzahl(daten.prognose_chf)}` : undefined}
         />
       </div>
       {/* mt-auto: Fusszeile unten, wenn die Karte im Raster hoeher ist als ihr Inhalt. */}

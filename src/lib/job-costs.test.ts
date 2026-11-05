@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { computeJobPlannedCosts } from "./job-costs";
 
-// Regression Zeitzonen-Waechter: der Lohn eines Termins gilt am ZUERICH-Tag
+// Regression Zeitzonen-Waechter: der Kosten-Satz eines Termins gilt am ZUERICH-Tag
 // von start_time (timestamptz), nicht am UTC-Tag. Frueher pickte
 // start_time.slice(0, 10) zwischen 00:00 und 02:00 Zuerich den Vortag —
 // am Tag einer Lohnerhoehung also den alten Lohn.
@@ -27,22 +27,18 @@ function fakeAdmin(tables: Record<string, unknown[]>): SupabaseClient {
   return { from: builder } as unknown as SupabaseClient;
 }
 
-/** Lohn-Zeile mit eigenen Sätzen 0 % → Vollkosten = Brutto (Rechnung bleibt lesbar).
- *  Sätze ausdrücklich gesetzt: fehlende Sätze sind seit Phase 2 ein Fehler. */
-function comp(effective_from: string, effective_to: string | null, hourly_wage_chf: number) {
-  return { profile_id: "u1", hourly_wage_chf, uses_standard_lohn: false, effective_from, effective_to, ahv_iv_eo_pct: 0, alv_pct: 0, nbu_pct: 0, bvg_pct: 0, ktg_pct: 0, quellensteuer_pct: 0, employer_ahv_pct: 0, employer_alv_pct: 0, employer_fak_pct: 0, employer_bu_pct: 0, employer_bvg_pct: 0, employer_verwaltung_pct: 0 };
+/** Kosten-Satz 30 → 40 CHF/h ab `wechsel` (YYYY-MM-DD), wie aus Trust flow. */
+function lohnWechsel(_vortag: string, wechsel: string) {
+  return [
+    { id: "s1", profile_id: "u1", gueltig_ab: "2026-01-01", kosten_chf_h: 30 },
+    { id: "s2", profile_id: "u1", gueltig_ab: wechsel, kosten_chf_h: 40 },
+  ];
 }
 
-/** Lohnerhoehung 30 → 40 CHF/h ab `wechsel` (YYYY-MM-DD). */
-function lohnWechsel(vortag: string, wechsel: string) {
-  return [comp("2026-01-01", vortag, 30), comp(wechsel, null, 40)];
-}
-
-async function kosten(startUtc: string, endUtc: string, comps: unknown[]) {
+async function kosten(startUtc: string, endUtc: string, saetze: unknown[], assigned = ["u1"]) {
   const admin = fakeAdmin({
-    job_appointments: [{ job_id: "j1", start_time: startUtc, end_time: endUtc, assigned_to: "u1" }],
-    employee_compensation: comps,
-    payroll_defaults: [{ effective_from: "2026-01-01", default_ahv_iv_eo_pct: 5.3, default_alv_pct: 1.1, default_nbu_pct: 1.45, default_bvg_pct: 0, default_ktg_pct: 0, default_quellensteuer_pct: 0, default_employer_ahv_pct: 5.3, default_employer_alv_pct: 1.1, default_employer_fak_pct: 1.35, default_employer_bu_pct: 0.5742, default_employer_bvg_pct: 0, default_employer_verwaltung_pct: 0.11, bvg_threshold_chf: 1890 }],
+    job_appointments: assigned.map((u) => ({ job_id: "j1", start_time: startUtc, end_time: endUtc, assigned_to: u })),
+    personal_saetze: saetze,
   });
   return (await computeJobPlannedCosts(admin, ["j1"])).get("j1");
 }
@@ -67,5 +63,18 @@ describe("computeJobPlannedCosts — Lohn am Zuerich-Tag", () => {
   it("Sommerzeit-Ende: 25.10.2026 00:30 MESZ (2026-10-24T22:30Z)", async () => {
     const r = await kosten("2026-10-24T22:30:00+00:00", "2026-10-24T23:30:00+00:00", lohnWechsel("2026-10-24", "2026-10-25"));
     expect(r?.vollkosten_chf).toBeCloseTo(40);
+  });
+});
+
+describe("computeJobPlannedCosts — Personen ohne Stundensatz", () => {
+  it("zaehlt Stunden, aber nicht als 0 CHF: ohne_satz_personen", async () => {
+    const saetze = [
+      ...lohnWechsel("2026-10-11", "2026-10-12"),
+      { id: "s3", profile_id: "u2", gueltig_ab: "2026-01-01", kosten_chf_h: null },
+    ];
+    const r = await kosten("2026-10-12T08:00:00+00:00", "2026-10-12T10:00:00+00:00", saetze, ["u1", "u2", "u3"]);
+    expect(r?.minutes).toBe(360);
+    expect(r?.vollkosten_chf).toBeCloseTo(80); // nur u1: 2 h × 40
+    expect(r?.ohne_satz_personen).toBe(2);     // u2 (Satz null), u3 (keine Zeile)
   });
 });

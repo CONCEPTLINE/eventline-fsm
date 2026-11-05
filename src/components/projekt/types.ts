@@ -85,7 +85,10 @@ export interface Member {
   joined_at: string;
   full_name: string | null;
   role: string | null;
-  hourly_wage_chf: number | null;
+  /** Kosten-CHF/h heute (Trust flow); null = kein Satz oder kein Lohnrecht. */
+  kosten_chf_h: number | null;
+  /** Kosten-Sätze ab Datum (nur mit Lohnrecht geladen) — für Stunden am Stempel-Tag. */
+  kosten_verlauf: { gueltig_ab: string; satz: number | null }[];
 }
 
 export interface AuditEntry {

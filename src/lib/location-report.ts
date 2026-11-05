@@ -6,8 +6,11 @@
  *   - Location-Kopf + Kontakte + Partner-User
  *   - Jobs im Zeitraum (vergangenheit) — status/typ, Kunde, Stunden
  *   - Stunden pro Mitarbeiter (aggregiert)
- *   - Personalkosten = Σ (Stunden × VollkostenProStunde) je Mitarbeiter
- *     Vollkosten/h = Brutto × (1 + AG-Anteil %/100)
+ *   - Personalkosten = Σ (Stunden × Kosten-CHF/h am Stempel-Tag) je Mitarbeiter
+ *     Kosten-CHF/h = kosten_chf_h aus Trust flow (personal_saetze, Lohn neu
+ *     Phase 1b; src/lib/personal-saetze.ts) — gleiche Basis wie die
+ *     Auftrags-Prognose (src/lib/job-costs.ts). Stunden ohne Satz fliessen
+ *     nicht in die Kosten ein und werden je Person/KPI ausgewiesen.
  *   - Pipeline (zukunft): geplante Jobs, offene Rentals, Calendar-Events
  *   - Monatsverlauf (historie 24m): Umsatz-Info leer (Bexio), Stunden + Anzahl-Jobs
  *
@@ -17,7 +20,7 @@
  */
 
 import { createAdminClient } from "@/lib/supabase/admin";
-import { effectivePcts, loadLohnDefaults, sumEmployerPct, type LohnPctSet, type PctComp } from "@/lib/employer-costs";
+import { ladeSatzVerlauf, satzAm } from "@/lib/personal-saetze";
 import { localDateIso } from "@/lib/swiss-time";
 
 export interface LocationReportPeriod {
@@ -36,6 +39,9 @@ export interface LocationReportKpis {
   jobs_planned_future: number;
   total_minutes: number;
   personal_vollkosten_chf: number;
+  /** Personen mit Stunden im Zeitraum, fuer die (teilweise) kein
+   *  Stundensatz vorliegt — deren Stunden ohne Satz sind NICHT in den Kosten. */
+  personen_ohne_satz: number;
   team_size: number;
   /** Umsatz aus Stunden × Verrechnungssatz (historisch pro Stempel-Datum).
    *  NULL wenn Location keine Tiers hat → UI blendet Umsatz/Marge aus. */
@@ -72,10 +78,11 @@ export interface LocationReportPerson {
   id: string;
   full_name: string;
   role: string | null;
-  hourly_wage_chf: number | null;
-  employer_pct_sum: number;
-  hourly_vollkosten_chf: number;
+  /** Kosten-CHF/h am Ende des Zeitraums (hoechstens heute); null = kein Satz. */
+  hourly_vollkosten_chf: number | null;
   minutes: number;
+  /** Davon Minuten ohne Stundensatz (nicht in personal_vollkosten_chf). */
+  minutes_ohne_satz: number;
   personal_vollkosten_chf: number;
 }
 
@@ -199,26 +206,6 @@ interface RawProfile {
   role: string | null;
 }
 
-interface RawCompensation {
-  profile_id: string;
-  hourly_wage_chf: number | null;
-  uses_standard_lohn: boolean | null;
-  effective_from: string | null;
-  effective_to: string | null;
-  ahv_iv_eo_pct: number | null;
-  alv_pct: number | null;
-  nbu_pct: number | null;
-  bvg_pct: number | null;
-  ktg_pct: number | null;
-  quellensteuer_pct: number | null;
-  employer_ahv_pct: number | null;
-  employer_alv_pct: number | null;
-  employer_fak_pct: number | null;
-  employer_bu_pct: number | null;
-  employer_bvg_pct: number | null;
-  employer_verwaltung_pct: number | null;
-}
-
 /** "YYYY-MM" aus einem Zuerich-Tag "YYYY-MM-DD" (nie aus einem timestamptz). */
 function fmtYm(dateIso: string): string {
   return dateIso.slice(0, 7);
@@ -228,32 +215,6 @@ function minutesBetween(from: string, to: string | null): number {
   const end = to ?? new Date().toISOString();
   const ms = new Date(end).getTime() - new Date(from).getTime();
   return Math.max(0, Math.round(ms / 60000));
-}
-
-/**
- * Effektive Compensation-Row fuer einen User zum Zeitpunkt `dateIso`.
- * Nimmt die Row wo effective_from <= dateIso <= (effective_to oder now).
- * Falls keine passende: die zuletzt aktive Row.
- */
-function pickCompForDate(
-  rows: RawCompensation[],
-  userId: string,
-  dateIso: string,
-): RawCompensation | null {
-  const forUser = rows.filter((r) => r.profile_id === userId);
-  if (forUser.length === 0) return null;
-  const match = forUser.find((r) => {
-    if (!r.effective_from) return false;
-    if (r.effective_from > dateIso) return false;
-    if (r.effective_to && r.effective_to < dateIso) return false;
-    return true;
-  });
-  if (match) return match;
-  // Fallback: neueste effective_from vor dateIso, sonst irgendeine.
-  const past = forUser
-    .filter((r) => r.effective_from && r.effective_from <= dateIso)
-    .sort((a, b) => (b.effective_from ?? "").localeCompare(a.effective_from ?? ""));
-  return past[0] ?? forUser[0] ?? null;
 }
 
 /**
@@ -298,7 +259,6 @@ export async function loadLocationReport(
     partnerRes,
     rentalsRes,
     eventsRes,
-    lohnDefaults,
   ] = await Promise.all([
     // Alle jobs in from..to (inkl. Pipeline: end_date>=from oder Zukunft)
     admin
@@ -336,7 +296,6 @@ export async function loadLocationReport(
       .gte("start_date", today + "T00:00:00Z")
       .order("start_date")
       .limit(50),
-    loadLohnDefaults(admin, today),
   ]);
 
   const rawJobs = (jobsRes.data ?? []) as unknown as Array<RawJob & { customer: { name: string } | { name: string }[] | null }>;
@@ -421,21 +380,19 @@ export async function loadLocationReport(
   const allEntries: RawTimeEntry[] = [...timeEntries, ...srAsEntries];
 
   // ------------------------------------------------------------------
-  // Compensation-Rows fuer alle beteiligten User (aktiv + historisch)
+  // Kosten-Stundensaetze (Trust flow) fuer alle beteiligten User. Bis
+  // zum spaetesten Tag des Zeitraums laden (Satz fuer die Personen-Liste
+  // am Zeitraum-Ende, hoechstens heute).
   // ------------------------------------------------------------------
   const userIds = Array.from(new Set(allEntries.map((t) => t.user_id)));
-  const [compsRes, profsRes] = await Promise.all([
-    userIds.length > 0
-      ? admin
-          .from("employee_compensation")
-          .select("profile_id, hourly_wage_chf, uses_standard_lohn, effective_from, effective_to, ahv_iv_eo_pct, alv_pct, nbu_pct, bvg_pct, ktg_pct, quellensteuer_pct, employer_ahv_pct, employer_alv_pct, employer_fak_pct, employer_bu_pct, employer_bvg_pct, employer_verwaltung_pct")
-          .in("profile_id", userIds)
-      : Promise.resolve({ data: [] as RawCompensation[] }),
+  const satzStichtag = to < today ? to : today;
+  const satzBis = allEntries.reduce((m, te) => { const d = entryDateIso(te); return d > m ? d : m; }, satzStichtag);
+  const [verlauf, profsRes] = await Promise.all([
+    ladeSatzVerlauf(admin, userIds, "kosten", satzBis),
     userIds.length > 0
       ? admin.from("profiles").select("id, full_name, role").in("id", userIds)
       : Promise.resolve({ data: [] as RawProfile[] }),
   ]);
-  const comps = (compsRes.data ?? []) as RawCompensation[];
   const profs = (profsRes.data ?? []) as RawProfile[];
   const profileById = new Map(profs.map((p) => [p.id, p]));
 
@@ -447,6 +404,7 @@ export async function loadLocationReport(
   const jobUmsatz = new Map<string, number>();          // pro Job
   const personMinutes = new Map<string, number>();
   const personKosten = new Map<string, number>();
+  const personMinutenOhneSatz = new Map<string, number>();
   // Tier-Aggregate: pro tier_id → minutes/umsatz/personalKosten
   interface TierAgg { minutes: number; umsatz: number; personalKosten: number; }
   const tierAggByTierId = new Map<string, TierAgg>();
@@ -463,7 +421,7 @@ export async function loadLocationReport(
     const mins = minutesBetween(te.clock_in, te.clock_out);
     if (mins <= 0) continue;
     // Zuerich-Tag des Einstempelns (time_entries.clock_in = timestamptz) —
-    // massgebend fuer Tier-Preis und Lohn-Historie (beides date-Spalten).
+    // massgebend fuer Tier-Preis und Stundensatz (beides date-Spalten).
     const dateIso = entryDateIso(te);
 
     // Tier + Preis picken. Fallback auf Default-Tier wenn te.rate_tier_id NULL.
@@ -474,16 +432,11 @@ export async function loadLocationReport(
       if (price !== null) umsatz = (price * mins) / 60;
     }
 
-    // Personalkosten (Vollkosten).
-    const comp = pickCompForDate(comps, te.user_id, dateIso);
-    const brutto = Number(comp?.hourly_wage_chf ?? 0);
-    let personalKosten = 0;
-    if (brutto > 0) {
-      const pctSet: LohnPctSet = effectivePcts(comp as PctComp, lohnDefaults);
-      const employerPctSum = sumEmployerPct(pctSet);
-      const hourlyVoll = brutto * (1 + employerPctSum / 100);
-      personalKosten = (hourlyVoll * mins) / 60;
-    }
+    // Personalkosten: Kosten-Satz am Stempel-Tag. Ohne Satz → nicht in die
+    // Kosten, aber als «ohne Satz» je Person gezaehlt (nie still 0 CHF).
+    const satz = satzAm(verlauf, te.user_id, dateIso);
+    const personalKosten = satz === null ? 0 : (satz * mins) / 60;
+    if (satz === null) personMinutenOhneSatz.set(te.user_id, (personMinutenOhneSatz.get(te.user_id) ?? 0) + mins);
 
     // In Job-Buckets aggregieren.
     jobMinutes.set(te.job_id, (jobMinutes.get(te.job_id) ?? 0) + mins);
@@ -505,21 +458,13 @@ export async function loadLocationReport(
   // ------------------------------------------------------------------
   const people: LocationReportPerson[] = userIds.map((uid) => {
     const profile = profileById.get(uid);
-    const latestComp = comps
-      .filter((c) => c.profile_id === uid)
-      .sort((a, b) => (b.effective_from ?? "").localeCompare(a.effective_from ?? ""))[0];
-    const brutto = Number(latestComp?.hourly_wage_chf ?? 0);
-    const pctSet = effectivePcts(latestComp as PctComp | undefined, lohnDefaults);
-    const employerPctSum = sumEmployerPct(pctSet);
-    const hourlyVoll = brutto > 0 ? brutto * (1 + employerPctSum / 100) : 0;
     return {
       id: uid,
       full_name: profile?.full_name ?? "Unbekannt",
       role: profile?.role ?? null,
-      hourly_wage_chf: brutto || null,
-      employer_pct_sum: employerPctSum,
-      hourly_vollkosten_chf: hourlyVoll,
+      hourly_vollkosten_chf: satzAm(verlauf, uid, satzStichtag),
       minutes: personMinutes.get(uid) ?? 0,
+      minutes_ohne_satz: personMinutenOhneSatz.get(uid) ?? 0,
       personal_vollkosten_chf: personKosten.get(uid) ?? 0,
     };
   }).sort((a, b) => b.minutes - a.minutes);
@@ -571,6 +516,7 @@ export async function loadLocationReport(
     jobs_planned_future: jobs.filter((j) => toZurichDate(j.start_date) > today && j.status !== "storniert").length,
     total_minutes: totalMinutes,
     personal_vollkosten_chf: totalPersonalVollkosten,
+    personen_ohne_satz: Array.from(personMinutenOhneSatz.values()).filter((m) => m > 0).length,
     team_size: teamSize,
     umsatz_chf: totalUmsatz,
     marge_chf: totalUmsatz !== null ? totalUmsatz - totalPersonalVollkosten : null,

@@ -95,6 +95,11 @@ function fmtChfCompact(v: number): string {
   });
 }
 
+/** Hinweis bei Personen ohne Stundensatz (Trust flow) — deren Stunden fehlen in den Kosten. */
+function ohneSatzText(n: number): string {
+  return `ohne Satz: ${n} ${n === 1 ? "Person" : "Personen"} (nicht eingerechnet)`;
+}
+
 function fmtHours(mins: number): string {
   const h = mins / 60;
   return h.toLocaleString("de-CH", {
@@ -532,7 +537,8 @@ export default async function LocationReportPage({ params, searchParams }: Props
                   <span className="r-kpi-label">Personal-Vollkosten</span>
                 </div>
                 <p className="r-kpi-value">CHF <span>{fmtChf(kpis.personal_vollkosten_chf)}</span></p>
-                <p className="r-kpi-hint">Brutto × (1 + AG-Anteil %)</p>
+                <p className="r-kpi-hint">Stunden × Kosten-Satz (Trust flow)</p>
+                {kpis.personen_ohne_satz > 0 && <p className="r-kpi-hint">{ohneSatzText(kpis.personen_ohne_satz)}</p>}
               </div>
               <div className="r-kpi r-kpi-primary">
                 <div className="flex items-center gap-2">
@@ -551,7 +557,8 @@ export default async function LocationReportPage({ params, searchParams }: Props
                   <span className="r-kpi-label">Personal-Vollkosten</span>
                 </div>
                 <p className="r-kpi-value">CHF <span>{fmtChf(kpis.personal_vollkosten_chf)}</span></p>
-                <p className="r-kpi-hint">Brutto-Lohn × (1 + AG-Anteil %) · alle gearbeiteten Stunden im Zeitraum</p>
+                <p className="r-kpi-hint">Stunden × Kosten-Satz (Trust flow) · alle gearbeiteten Stunden im Zeitraum</p>
+                {kpis.personen_ohne_satz > 0 && <p className="r-kpi-hint">{ohneSatzText(kpis.personen_ohne_satz)}</p>}
               </div>
               <div className="r-kpi r-kpi-primary">
                 <div className="flex items-center gap-2">
@@ -822,10 +829,21 @@ export default async function LocationReportPage({ params, searchParams }: Props
                       <tr key={p.id}>
                         <td style={{ fontWeight: 500 }}>{p.full_name}</td>
                         <td className="num">{fmtHours(p.minutes)}</td>
-                        <td className="num" style={{ color: p.hourly_vollkosten_chf > 0 ? "var(--foreground)" : "var(--muted-foreground)" }}>
-                          {p.hourly_vollkosten_chf > 0 ? fmtChf(p.hourly_vollkosten_chf) : "—"}
+                        <td className="num" style={{ color: p.hourly_vollkosten_chf !== null ? "var(--foreground)" : "var(--muted-foreground)" }}>
+                          {p.hourly_vollkosten_chf !== null ? fmtChf(p.hourly_vollkosten_chf) : "ohne Satz"}
                         </td>
-                        <td className="num" style={{ fontWeight: 600 }}>{fmtChf(p.personal_vollkosten_chf)}</td>
+                        <td className="num" style={{ fontWeight: 600 }}>
+                          {p.minutes_ohne_satz >= p.minutes ? (
+                            <span style={{ fontWeight: 400, color: "var(--muted-foreground)" }}>—</span>
+                          ) : (
+                            <>
+                              {fmtChf(p.personal_vollkosten_chf)}
+                              {p.minutes_ohne_satz > 0 && (
+                                <span style={{ fontWeight: 400, color: "var(--muted-foreground)" }}> *</span>
+                              )}
+                            </>
+                          )}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -970,8 +988,9 @@ export default async function LocationReportPage({ params, searchParams }: Props
               </div>
             </div>
             <p className="text-[9px] text-muted-foreground mt-2">
-              Vollkosten = Brutto-Stundenlohn × (1 + Summe Arbeitgeber-Anteil %) je Mitarbeiter zum
-              Zeitpunkt der Stempelung. AG-Anteile: AHV/IV/EO, ALV, FAK, BU, BVG, Verwaltung.
+              Vollkosten = gearbeitete Stunden × Kosten-Stundensatz je Mitarbeiter aus Trust flow (Lohn inkl.
+              Ferien-/Feiertagszuschlag und Arbeitgeber-Beiträge), gültig am Tag der Stempelung. Stunden ohne
+              Stundensatz (z. B. Provisionslohn) sind nicht eingerechnet{kpis.personen_ohne_satz > 0 ? " (* = teilweise ohne Satz)" : ""}.
             </p>
           </div>
         </div>

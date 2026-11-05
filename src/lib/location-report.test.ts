@@ -30,8 +30,8 @@ vi.mock("@/lib/supabase/admin", () => ({
 
 import { loadLocationReport } from "./location-report";
 
-/** Wechsel am Tag `wechsel`: Lohn 30 → 40 CHF/h (ohne AG-Anteile), Preis 100 → 120 CHF/h. */
-function setup(vortag: string, wechsel: string, entries: { time?: unknown[]; reports?: unknown[] }) {
+/** Wechsel am Tag `wechsel`: Kosten-Satz 30 → 40 CHF/h (Trust flow), Preis 100 → 120 CHF/h. */
+function setup(_vortag: string, wechsel: string, entries: { time?: unknown[]; reports?: unknown[] }) {
   for (const k of Object.keys(tables)) delete tables[k];
   Object.assign(tables, {
     locations: [{ id: "loc1", name: "Test", customer: null }],
@@ -43,12 +43,10 @@ function setup(vortag: string, wechsel: string, entries: { time?: unknown[]; rep
       { tier_id: "t1", chf_per_hour: 100, effective_from: "2026-01-01", effective_to: wechsel },
       { tier_id: "t1", chf_per_hour: 120, effective_from: wechsel, effective_to: null },
     ],
-    employee_compensation: [
-      { profile_id: "u1", hourly_wage_chf: 30, uses_standard_lohn: false, effective_from: "2026-01-01", effective_to: vortag, ahv_iv_eo_pct: 0, alv_pct: 0, nbu_pct: 0, bvg_pct: 0, ktg_pct: 0, quellensteuer_pct: 0, employer_ahv_pct: 0, employer_alv_pct: 0, employer_fak_pct: 0, employer_bu_pct: 0, employer_bvg_pct: 0, employer_verwaltung_pct: 0 },
-      { profile_id: "u1", hourly_wage_chf: 40, uses_standard_lohn: false, effective_from: wechsel, effective_to: null, ahv_iv_eo_pct: 0, alv_pct: 0, nbu_pct: 0, bvg_pct: 0, ktg_pct: 0, quellensteuer_pct: 0, employer_ahv_pct: 0, employer_alv_pct: 0, employer_fak_pct: 0, employer_bu_pct: 0, employer_bvg_pct: 0, employer_verwaltung_pct: 0 },
+    personal_saetze: [
+      { id: "s1", profile_id: "u1", gueltig_ab: "2026-01-01", kosten_chf_h: 30 },
+      { id: "s2", profile_id: "u1", gueltig_ab: wechsel, kosten_chf_h: 40 },
     ],
-    // Firmensätze: seit Phase 2 Pflicht (keine eingebauten Ersatzsätze).
-    payroll_defaults: [{ effective_from: "2026-01-01", default_ahv_iv_eo_pct: 5.3, default_alv_pct: 1.1, default_nbu_pct: 1.45, default_bvg_pct: 0, default_ktg_pct: 0, default_quellensteuer_pct: 0, default_employer_ahv_pct: 5.3, default_employer_alv_pct: 1.1, default_employer_fak_pct: 1.35, default_employer_bu_pct: 0.5742, default_employer_bvg_pct: 0, default_employer_verwaltung_pct: 0.11, bvg_threshold_chf: 1890 }],
     profiles: [{ id: "u1", full_name: "Test Person", role: "techniker" }],
   });
 }
@@ -102,5 +100,23 @@ describe("loadLocationReport — Stempel am Zuerich-Tag", () => {
     expect(r?.kpis.personal_vollkosten_chf).toBeCloseTo(30); // Lohn vom 31.10.
     expect(r?.kpis.umsatz_chf).toBeCloseTo(100);
     expect(r?.months.find((m) => m.ym === "2026-10")?.minutes).toBe(60);
+  });
+});
+
+describe("loadLocationReport — Personen ohne Stundensatz", () => {
+  it("Stunden zaehlen, Kosten nicht; Person als «ohne Satz» ausgewiesen", async () => {
+    setup("2026-10-11", "2026-10-12", {
+      time: [
+        stempel("2026-10-12T08:00:00+00:00", "2026-10-12T09:00:00+00:00"),
+        { ...stempel("2026-10-12T08:00:00+00:00", "2026-10-12T10:00:00+00:00"), user_id: "u2" },
+      ],
+    });
+    const r = await loadLocationReport("loc1", "2026-01-01", "2026-12-31");
+    expect(r?.kpis.total_minutes).toBe(180);
+    expect(r?.kpis.personal_vollkosten_chf).toBeCloseTo(40); // nur u1
+    expect(r?.kpis.personen_ohne_satz).toBe(1);
+    const u2 = r?.people.find((p) => p.id === "u2");
+    expect(u2?.hourly_vollkosten_chf).toBeNull();
+    expect(u2?.minutes_ohne_satz).toBe(120);
   });
 });

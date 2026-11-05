@@ -1,12 +1,13 @@
 // GET /api/admin/job-costs?ids=<uuid,uuid,...>
 //
 // Kosten-PROGNOSE pro Auftrag: geplante Termine mit
-// zugewiesener Person × deren Voll-CHF/h zum Termin-Datum. Angezeigt
-// als gruene Pill "~ CHF X" im Header der Termine-Sektion
-// (PlannedCostBadge in job-cost-card.tsx).
+// zugewiesener Person × deren Kosten-CHF/h (Trust flow, personal_saetze)
+// zum Termin-Datum. Angezeigt als gruene Pill "~ CHF X" im Header der
+// Termine-Sektion (PlannedCostBadge in job-cost-card.tsx); Personen ohne
+// Stundensatz zaehlen nicht mit und kommen als `planned_ohne_satz` zurueck.
 //
-// Permission: Lohnrecht (lohn:manage) + vertrautes Geraet — die Vollkosten
-// entstehen aus den Stundenloehnen (Lohndaten). Lohn-Umbau Phase 1 «ueberall
+// Permission: Lohnrecht (lohn:manage) + vertrautes Geraet — die Kosten
+// entstehen aus den Stundensaetzen (Lohndaten). Lohn-Umbau Phase 1 «ueberall
 // Lohnrecht plus Geraet einheitlich» (vorher abrechnung:edit ohne Geraet).
 // Ohne Recht/Geraet: 403 → job-cost-card blendet die Pille aus.
 //
@@ -41,11 +42,12 @@ export async function GET(request: Request) {
 
   try {
     const plannedMap = await computeJobPlannedCosts(admin, ids);
-    const costs: Record<string, { planned_minutes: number; planned_vollkosten_chf: number }> = {};
+    const costs: Record<string, { planned_minutes: number; planned_vollkosten_chf: number; planned_ohne_satz: number }> = {};
     for (const [id, planned] of plannedMap) {
       costs[id] = {
         planned_minutes: planned.minutes,
         planned_vollkosten_chf: Math.round(planned.vollkosten_chf * 100) / 100,
+        planned_ohne_satz: planned.ohne_satz_personen,
       };
     }
     return NextResponse.json({ success: true, costs });

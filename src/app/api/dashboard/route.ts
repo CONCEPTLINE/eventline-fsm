@@ -13,8 +13,9 @@
 // liest mit dem Client des eingeloggten Users (RLS) — abgehakt wird im
 // Client wie auf /todos.
 //
-// Sensible Zahlen (Lohn-Prognose in «Mein Monat»): Admin-Client, aber STRIKT
-// profile_id == effektiver User — kein Fremd-Lohn-Leak moeglich.
+// Sensible Zahlen («ca. CHF» in «Mein Monat», Netto-Satz aus Trust flow):
+// Admin-Client, aber STRIKT profile_id == effektiver User — kein Fremd-Lohn-
+// Leak moeglich.
 
 import { NextResponse } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -22,10 +23,8 @@ import { requireUser } from "@/lib/api-auth";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { cachedRoles } from "@/lib/cached";
-import { todayLocalIso, localDateIso } from "@/lib/swiss-time";
-import { jeLokalerStunde, lohnzeileAm, type Stempel } from "@/lib/lohn/kern";
-import { bereichMitVormonaten, ladeLohnPersonen, monatKey, rechneMonate } from "@/lib/lohn/daten";
-import { termineAlsStempel } from "@/lib/lohn/prognose";
+import { todayLocalIso, forEachMinuteSegment } from "@/lib/swiss-time";
+import { chfAusMinuten, ladeSatzVerlauf, satzAm } from "@/lib/personal-saetze";
 import { hasPermission } from "@/lib/permissions";
 import { darfAbwesenheitsgrundSehen } from "@/lib/abwesenheit-sichtbarkeit";
 import { istIntern } from "@/lib/roles";
@@ -192,20 +191,53 @@ function safeUtcMsFromLocalDate(iso: string, subtractDays = 2): number {
   return Date.UTC(y, m - 1, d) - subtractDays * 24 * 3600 * 1000;
 }
 
-/** «Mein Monat»: Stunden bisher und Netto-Prognose (Ist + noch kommende
- *  Termine) — gerechnet vom Rechenkern wie die Lohnabrechnung
- *  (src/lib/lohn/daten.ts, src/lib/lohn/prognose.ts). Admin-Client, aber
- *  STRIKT nur die eigene Person (profile_id == userId). */
+/** Minuten je Zuerich-Tag im Monat `monthPrefix` (YYYY-MM). Ueberlappende
+ *  Intervalle zaehlen nur einmal (Doppelstempel, Termin waehrend Stempel). */
+function minutenJeTagImMonat(intervalle: { start: number; ende: number }[], monthPrefix: string): Map<string, number> {
+  const sortiert = intervalle.filter((i) => i.ende > i.start).sort((a, b) => a.start - b.start);
+  const vereinigt: { start: number; ende: number }[] = [];
+  for (const i of sortiert) {
+    const letzte = vereinigt[vereinigt.length - 1];
+    if (letzte && i.start <= letzte.ende) letzte.ende = Math.max(letzte.ende, i.ende);
+    else vereinigt.push({ ...i });
+  }
+  const jeTag = new Map<string, number>();
+  for (const i of vereinigt) {
+    forEachMinuteSegment(i.start, i.ende, (tag, _h, min) => {
+      if (tag.startsWith(monthPrefix)) jeTag.set(tag, (jeTag.get(tag) ?? 0) + min);
+    });
+  }
+  return jeTag;
+}
+
+const summe = (m: Map<string, number>) => Array.from(m.values()).reduce((s, v) => s + v, 0);
+
+/** «Mein Monat»: Stunden bisher und Prognose (Ist + noch kommende Termine)
+ *  mit «ca. CHF» = Stunden je Tag × Netto-Stundensatz aus Trust flow am
+ *  jeweiligen Tag (personal_saetze, Lohn neu Phase 1b). Keine Lohnlogik im
+ *  ERP — der Satz enthaelt Zuschlaege und Abzuege schon. Ohne Satz → null
+ *  (die Karte zeigt dann keine CHF-Zeile). Admin-Client, aber STRIKT nur
+ *  die eigene Person (profile_id == userId). */
 async function ladeMeinMonat(userId: string): Promise<MonatDaten> {
   const admin = createAdminClient();
   const today = todayLocalIso(); // YYYY-MM-DD (Zurich)
   const monthPrefix = today.slice(0, 7);
   const [y, m] = monthPrefix.split("-").map(Number);
+  const tageImMonat = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  const monatsLetzter = `${monthPrefix}-${String(tageImMonat).padStart(2, "0")}`;
   const fetchFromIso = new Date(safeUtcMsFromLocalDate(`${monthPrefix}-01`, 2)).toISOString();
   const monthEndSafeIso = new Date(Date.UTC(y, m, 3)).toISOString();
 
-  const [personen, apptsRes] = await Promise.all([
-    ladeLohnPersonen(admin, [userId], bereichMitVormonaten([{ jahr: y, monat: m }])),
+  const [stempelRes, apptsRes, verlauf] = await Promise.all([
+    // Eigene abgeschlossene Stempel (offene zaehlen erst mit dem Ausstempeln).
+    admin
+      .from("time_entries")
+      .select("clock_in, clock_out")
+      .eq("user_id", userId)
+      .not("clock_out", "is", null)
+      .gte("clock_in", fetchFromIso)
+      .lt("clock_in", monthEndSafeIso)
+      .limit(5000),
     // Eigene Termine im Monat (Prognose) — stornierte/gelöschte Aufträge zählen nicht.
     admin
       .from("job_appointments")
@@ -213,44 +245,33 @@ async function ladeMeinMonat(userId: string): Promise<MonatDaten> {
       .eq("assigned_to", userId)
       .gte("start_time", fetchFromIso)
       .lt("start_time", monthEndSafeIso),
+    ladeSatzVerlauf(admin, [userId], "netto", monatsLetzter),
   ]);
+  if (stempelRes.error) throw new Error(stempelRes.error.message);
   if (apptsRes.error) throw new Error(apptsRes.error.message);
+
+  const ist = ((stempelRes.data ?? []) as { clock_in: string; clock_out: string }[])
+    .map((s) => ({ start: new Date(s.clock_in).getTime(), ende: new Date(s.clock_out).getTime() }));
+  // Nur noch kommende Termine (ab jetzt) mit Endzeit — Vergangenes zaehlt als Stempel.
+  const jetzt = Date.now();
   type Appt = { start_time: string; end_time: string | null; job: { status: string | null; is_deleted: boolean | null } | null };
-  const plan = termineAlsStempel(
-    ((apptsRes.data ?? []) as unknown as Appt[]).filter(
-      (a) => !(a.job && (a.job.status === "storniert" || a.job.is_deleted === true)) && localDateIso(new Date(a.start_time)).startsWith(monthPrefix),
-    ),
-    Date.now(),
-  );
-  const p = personen.get(userId);
-  const monate = [{ jahr: y, monat: m }];
-  const [ist, mitPlan] = await Promise.all([
-    rechneMonate(admin, [userId], monate, { personen }),
-    rechneMonate(admin, [userId], monate, { personen, zusatzStempel: new Map([[userId, plan]]) }),
-  ]);
-  const k = monatKey(y, m);
-  const rIst = ist.ergebnisse.get(userId)?.get(k);
-  const rPlan = mitPlan.ergebnisse.get(userId)?.get(k);
-  // Ohne Lohnzeile (z. B. Inhaber) rechnet der Kern nicht — Stunden trotzdem zeigen.
-  const minutenOhneKern = (extra: Stempel[]) => {
-    let n = 0;
-    for (const s of [...(p?.stempel ?? []), ...extra]) {
-      if (!s.ende) continue;
-      jeLokalerStunde(new Date(s.start).getTime(), new Date(s.ende).getTime(), (d, _h, min) => { if (d.startsWith(monthPrefix)) n += min; });
-    }
-    return n;
-  };
-  const istMin = rIst?.ok ? rIst.ergebnis.mengen.minuten : minutenOhneKern([]);
-  const planMin = rPlan?.ok ? rPlan.ergebnis.mengen.minuten : minutenOhneKern(plan);
-  const zeileHeute = p ? lohnzeileAm(p.lohnzeilen, today) : null;
-  const prognoseChf = zeileHeute && !zeileHeute.ohneLohn && rPlan?.ok ? rPlan.ergebnis.netto : null;
+  const plan = ((apptsRes.data ?? []) as unknown as Appt[])
+    .filter((a) => !(a.job && (a.job.status === "storniert" || a.job.is_deleted === true)) && a.end_time)
+    .map((a) => ({ start: new Date(a.start_time).getTime(), ende: new Date(a.end_time as string).getTime() }))
+    .filter((a) => a.start >= jetzt);
+
+  const istJeTag = minutenJeTagImMonat(ist, monthPrefix);
+  const planJeTag = minutenJeTagImMonat([...ist, ...plan], monthPrefix);
+  const geld = chfAusMinuten(verlauf, userId, planJeTag);
+  // Kein Satz heute und keine Minute mit Satz → keine CHF-Zeile (nie «0 CHF»).
+  const prognoseChf = satzAm(verlauf, userId, today) === null && geld.minutenMitSatz === 0 ? null : geld.chf;
 
   return {
     monat: monthPrefix,
     tag: Number(today.slice(8, 10)),
-    tage_im_monat: new Date(Date.UTC(y, m, 0)).getUTCDate(),
-    stunden: Math.round((istMin / 60) * 100) / 100,
-    prognose_stunden: Math.round((planMin / 60) * 100) / 100,
+    tage_im_monat: tageImMonat,
+    stunden: Math.round((summe(istJeTag) / 60) * 100) / 100,
+    prognose_stunden: Math.round((summe(planJeTag) / 60) * 100) / 100,
     prognose_chf: prognoseChf,
   };
 }
@@ -294,7 +315,7 @@ export async function GET() {
       : new Set();
     const teamSicht: "team" | "alle" = scope === "team" ? "team" : "alle";
     // «Ansicht als» zeigt keine Lohndaten der angesehenen Person (Lohn-Umbau
-    // Phase 1) — «Mein Monat» entfaellt dann ganz.
+    // Phase 1) — «Mein Monat» entfaellt dann ganz (Netto-Satz bleibt privat).
     if (auth.isImpersonating) sichtbar.delete("monat");
 
     const [kennzahlen, aufmerksamkeit, todos, personen, naechste, naechster, monat] = await Promise.all([

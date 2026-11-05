@@ -74,7 +74,7 @@ export interface MonatDaten {
   stunden: number;
   /** Bisher + noch geplante Einsaetze bis Monatsende. */
   prognose_stunden: number;
-  /** Netto-Prognose in CHF; null = kein Lohn hinterlegt (lohnbefreit oder ohne Stundensatz). */
+  /** «ca. CHF»: Prognose-Stunden je Tag × Netto-Stundensatz aus Trust flow; null = kein Stundensatz. */
   prognose_chf: number | null;
 }
 

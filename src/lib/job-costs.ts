@@ -1,36 +1,30 @@
-// Personal-Kosten-PROGNOSE pro Auftrag — fuer die Admin-Badge im
-// Termine-Header (PlannedCostBadge): geplante Termine × Voll-CHF/h.
+// Personal-Kosten-PROGNOSE pro Auftrag — fuer die Badge im Termine-Header
+// (PlannedCostBadge): geplante Termine × Kosten-Stundensatz der Person.
 //
-// Vollkosten-Formel wie in src/lib/location-report.ts (dort Kommentar-
-// Querverweis): Brutto-Stundenlohn zum jeweiligen Datum × (1 + Summe
-// Arbeitgeber-Anteil %). Lohn-Historie via effective_from/to, AG-Anteile
-// via employee_compensation-Overrides bzw. payroll_defaults.
-//
-// Aenderungen an dieser Formel IMMER auch in location-report.ts pruefen
-// (und umgekehrt) — Prognose und Standort-Rapport muessen dieselbe
-// Kosten-Basis nutzen.
+// Kosten-Stundensatz = kosten_chf_h aus Trust flow (personal_saetze, Lohn
+// neu Phase 1b; src/lib/personal-saetze.ts) am Zuerich-Tag des Termins —
+// dieselbe Basis wie der Standort-Rapport (src/lib/location-report.ts).
+// Aenderungen hier IMMER auch dort pruefen (und umgekehrt).
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import {
-  effectivePcts,
-  loadLohnDefaults,
-  sumEmployerPct,
-  type LohnPctSet,
-  type PctComp,
-} from "@/lib/employer-costs";
+import { ladeSatzVerlauf, satzAm } from "@/lib/personal-saetze";
 import { localDateIso } from "@/lib/swiss-time";
 
 export interface JobCost {
+  /** Alle geplanten Minuten mit zugewiesener Person. */
   minutes: number;
+  /** Kosten der Minuten MIT Stundensatz. */
   vollkosten_chf: number;
+  /** Personen mit geplanten Minuten ohne Stundensatz (nicht in den Kosten). */
+  ohne_satz_personen: number;
 }
 
 /**
  * PROGNOSE-Kosten aus geplanten Terminen: pro job_appointment (eine Row
- * je zugewiesener Person) Dauer × Voll-CHF/h der Person zum Termin-Datum.
- * Zukuenftige Termine rechnen dank Lohn-Historie automatisch mit einer
- * bereits GEPLANTEN Lohnerhoehung (effective_from in der Zukunft).
- * Termine ohne Zuweisung fliessen nicht ein (weder Stunden noch Kosten).
+ * je zugewiesener Person) Dauer × Kosten-CHF/h der Person zum Termin-Datum.
+ * Ein ab einem spaeteren Datum geltender Satz greift automatisch fuer
+ * spaetere Termine. Termine ohne Zuweisung fliessen nicht ein. Personen
+ * ohne Satz an dem Tag zaehlen in `ohne_satz_personen`, nie als 0 CHF.
  */
 export async function computeJobPlannedCosts(
   admin: SupabaseClient,
@@ -39,66 +33,41 @@ export async function computeJobPlannedCosts(
   const result = new Map<string, JobCost>();
   if (jobIds.length === 0) return result;
 
-  const [apptRes, lohnDefaults] = await Promise.all([
-    admin
-      .from("job_appointments")
-      .select("job_id, start_time, end_time, assigned_to")
-      .in("job_id", jobIds)
-      .not("assigned_to", "is", null),
-    loadLohnDefaults(admin),
-  ]);
+  const apptRes = await admin
+    .from("job_appointments")
+    .select("job_id, start_time, end_time, assigned_to")
+    .in("job_id", jobIds)
+    .not("assigned_to", "is", null);
   if (apptRes.error) throw new Error(apptRes.error.message);
-  const appts = (apptRes.data ?? []) as { job_id: string; start_time: string; end_time: string; assigned_to: string }[];
+  const appts = ((apptRes.data ?? []) as { job_id: string; start_time: string; end_time: string | null; assigned_to: string }[])
+    .map((a) => ({ ...a, mins: minutesBetween(a.start_time, a.end_time), tag: localDateIso(new Date(a.start_time)) }))
+    .filter((a) => a.mins > 0);
+  if (appts.length === 0) return result;
 
-  const userIds = Array.from(new Set(appts.map((a) => a.assigned_to)));
-  let comps: RawComp[] = [];
-  if (userIds.length > 0) {
-    const { data, error } = await admin
-      .from("employee_compensation")
-      .select("profile_id, hourly_wage_chf, uses_standard_lohn, effective_from, effective_to, ahv_iv_eo_pct, alv_pct, nbu_pct, bvg_pct, ktg_pct, quellensteuer_pct, employer_ahv_pct, employer_alv_pct, employer_fak_pct, employer_bu_pct, employer_bvg_pct, employer_verwaltung_pct")
-      .in("profile_id", userIds);
-    if (error) throw new Error(error.message);
-    comps = (data ?? []) as RawComp[];
-  }
+  const bis = appts.reduce((m, a) => (a.tag > m ? a.tag : m), appts[0].tag);
+  const verlauf = await ladeSatzVerlauf(admin, appts.map((a) => a.assigned_to), "kosten", bis);
 
+  const ohneSatz = new Map<string, Set<string>>();
   for (const a of appts) {
-    const mins = minutesBetween(a.start_time, a.end_time);
-    if (mins <= 0) continue;
-    const cur = result.get(a.job_id) ?? { minutes: 0, vollkosten_chf: 0 };
-    cur.minutes += mins;
-    // Lohn-Gueltigkeit (date-Spalten) am Zuerich-Tag des Termins pruefen —
-    // start_time ist timestamptz, ein UTC-Slice laege 00:00–02:00 einen Tag zurueck.
-    const comp = pickCompForDate(comps, a.assigned_to, localDateIso(new Date(a.start_time)));
-    const brutto = Number(comp?.hourly_wage_chf ?? 0);
-    if (brutto > 0) {
-      const pctSet: LohnPctSet = effectivePcts(comp as PctComp, lohnDefaults);
-      const hourlyVoll = brutto * (1 + sumEmployerPct(pctSet) / 100);
-      cur.vollkosten_chf += (hourlyVoll * mins) / 60;
+    const cur = result.get(a.job_id) ?? { minutes: 0, vollkosten_chf: 0, ohne_satz_personen: 0 };
+    cur.minutes += a.mins;
+    // Satz am Zuerich-Tag des Termins — start_time ist timestamptz, ein
+    // UTC-Slice laege 00:00–02:00 einen Tag zurueck.
+    const satz = satzAm(verlauf, a.assigned_to, a.tag);
+    if (satz === null) {
+      const s = ohneSatz.get(a.job_id) ?? new Set<string>();
+      s.add(a.assigned_to);
+      ohneSatz.set(a.job_id, s);
+    } else {
+      cur.vollkosten_chf += (satz * a.mins) / 60;
     }
     result.set(a.job_id, cur);
   }
-
+  for (const [jobId, s] of ohneSatz) {
+    const cur = result.get(jobId);
+    if (cur) cur.ohne_satz_personen = s.size;
+  }
   return result;
-}
-
-interface RawComp {
-  profile_id: string;
-  hourly_wage_chf: number | null;
-  uses_standard_lohn: boolean | null;
-  effective_from: string | null;
-  effective_to: string | null;
-  ahv_iv_eo_pct: number | null;
-  alv_pct: number | null;
-  nbu_pct: number | null;
-  bvg_pct: number | null;
-  ktg_pct: number | null;
-  quellensteuer_pct: number | null;
-  employer_ahv_pct: number | null;
-  employer_alv_pct: number | null;
-  employer_fak_pct: number | null;
-  employer_bu_pct: number | null;
-  employer_bvg_pct: number | null;
-  employer_verwaltung_pct: number | null;
 }
 
 function minutesBetween(from: string, to: string | null): number {
@@ -113,23 +82,6 @@ function minutesBetween(from: string, to: string | null): number {
   if (!to) return 0;
   const ms = new Date(to).getTime() - new Date(from).getTime();
   return Math.max(0, Math.round(ms / 60000));
-}
-
-/** Comp-Row die zum Datum galt; Fallback: juengste davor, sonst irgendeine. */
-function pickCompForDate(rows: RawComp[], userId: string, dateIso: string): RawComp | null {
-  const forUser = rows.filter((r) => r.profile_id === userId);
-  if (forUser.length === 0) return null;
-  const match = forUser.find((r) => {
-    if (!r.effective_from) return false;
-    if (r.effective_from > dateIso) return false;
-    if (r.effective_to && r.effective_to < dateIso) return false;
-    return true;
-  });
-  if (match) return match;
-  const past = forUser
-    .filter((r) => r.effective_from && r.effective_from <= dateIso)
-    .sort((a, b) => (b.effective_from ?? "").localeCompare(a.effective_from ?? ""));
-  return past[0] ?? forUser[0] ?? null;
 }
 
 // (computeJobPersonnelCosts — Ist-Kosten pro Auftrag — wurde 2026-09-08
