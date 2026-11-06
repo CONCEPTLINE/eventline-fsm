@@ -24,7 +24,7 @@ import { PdfPopup } from "@/components/pdf-popup";
 import { DocFolderList, istDateiDrag } from "@/components/ui/doc-folder-list";
 import {
   Paperclip, FileText, Loader2, Trash2, Eye, Download, History,
-  ArrowLeft, ArrowRight, Link2, Plus, ExternalLink,
+  ArrowLeft, ArrowRight, Link2, Plus, ExternalLink, Files, FolderOpen,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { formatDateFull } from "@/lib/format";
@@ -259,6 +259,17 @@ function ProjectDocuments({ projectId, isAdmin, canUpload, nurLesen }: {
               if (!uploading && e.dataTransfer.files.length > 0) handleFiles(e.dataTransfer.files);
             } : undefined}
           >
+        {!loading && folders.length > 0 && (
+          <div className="flex items-center gap-1.5 min-w-0">
+            {activeFolder === null
+              ? <Files className="h-4 w-4 shrink-0 text-muted-foreground" />
+              : <FolderOpen className="h-4 w-4 shrink-0 text-amber-500 dark:text-amber-400" />}
+            <span className="text-sm font-semibold truncate">
+              {activeFolder === null ? "Alle Dokumente" : activeFolder === "" ? "Hauptordner" : activeFolder}
+            </span>
+            <span className="text-xs text-muted-foreground shrink-0">· {visibleDocs.length}</span>
+          </div>
+        )}
         {canUpload && (
           <label
             className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl border border-dashed text-sm transition-colors cursor-pointer"

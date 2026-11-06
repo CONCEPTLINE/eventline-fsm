@@ -82,11 +82,16 @@ export function DocFolderList({
                 setDropZiel(null);
                 if (e.dataTransfer.files.length > 0) onDropFiles!(z.wert ?? "", e.dataTransfer.files);
               } : undefined}
-              className="flex items-center gap-1 rounded-lg pl-1.5 pr-1 py-1 transition-colors"
+              aria-current={gewaehlt ? "true" : undefined}
+              className="flex items-center gap-1 rounded-lg pl-2 pr-1 py-1.5 transition-colors"
               style={{
+                // Gewählt: Akzent-Strich links + getönter Grund (hell/dunkel gut sichtbar).
                 background: istDrop
-                  ? "color-mix(in srgb, var(--accent) 14%, transparent)"
-                  : gewaehlt ? "var(--muted)" : hover === z.key ? "color-mix(in srgb, var(--muted) 60%, transparent)" : undefined,
+                  ? "color-mix(in srgb, var(--accent) 16%, transparent)"
+                  : gewaehlt
+                  ? "color-mix(in srgb, var(--accent) 13%, transparent)"
+                  : hover === z.key ? "color-mix(in srgb, var(--muted) 70%, transparent)" : undefined,
+                boxShadow: gewaehlt ? "inset 3px 0 0 var(--accent)" : undefined,
                 outline: istDrop ? "1px dashed var(--accent)" : undefined,
               }}
             >
@@ -97,7 +102,7 @@ export function DocFolderList({
                 className="flex items-center gap-1.5 min-w-0 flex-1 text-left"
               >
                 <Icon className={`h-4 w-4 shrink-0 ${z.wert === null ? "text-muted-foreground" : "text-amber-500 dark:text-amber-400"}`} />
-                <span className={`truncate text-sm ${gewaehlt ? "font-medium" : ""}`}>{z.name}</span>
+                <span className={`truncate text-sm ${gewaehlt ? "font-semibold text-foreground" : "text-foreground/80"}`}>{z.name}</span>
               </button>
               {z.ordner && z.count === 0 && onDelete && canCreate && hover === z.key ? (
                 <button
@@ -110,7 +115,12 @@ export function DocFolderList({
                   <X className="h-3.5 w-3.5" />
                 </button>
               ) : (
-                <span className="text-[10px] text-muted-foreground tabular-nums shrink-0 px-1">{z.count}</span>
+                <span
+                  className={`text-[10px] tabular-nums shrink-0 px-1 ${gewaehlt ? "font-semibold" : "text-muted-foreground"}`}
+                  style={gewaehlt ? { color: "var(--accent)" } : undefined}
+                >
+                  {z.count}
+                </span>
               )}
             </li>
           );
