@@ -24,8 +24,10 @@ import {
 import { PdfPopup } from "@/components/pdf-popup";
 import {
   Paperclip, FileText, Loader2, Trash2, Eye, Download, History,
-  ArrowLeft, ArrowRight,
+  ArrowLeft, ArrowRight, Link2, Plus, ExternalLink,
 } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { formatDateFull } from "@/lib/format";
 import { toast } from "sonner";
 import { deleteRow, updateRow } from "@/lib/db-mutations";
 import { validateFileList } from "@/lib/file-upload";
@@ -259,6 +261,180 @@ function ProjectDocuments({ projectId, isAdmin, canUpload, nurLesen }: {
 }
 
 /* ============================================================
+   LINKS (Migration 385)
+   ============================================================ */
+
+interface LinkRow {
+  id: string;
+  titel: string;
+  url: string;
+  created_at: string;
+  created_by: string | null;
+  ersteller?: { full_name: string | null } | null;
+}
+
+/** Eingabe zu einer http(s)-Adresse machen; ohne Schema → https://. null = ungültig. */
+function normalisiereUrl(roh: string): string | null {
+  const t = roh.trim();
+  if (!t || /\s/.test(t)) return null;
+  const mitSchema = /^[a-z][a-z0-9+.-]*:/i.test(t) ? t : `https://${t}`;
+  try {
+    const u = new URL(mitSchema);
+    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+    if (!u.hostname.includes(".") && u.hostname !== "localhost") return null;
+    return u.toString();
+  } catch {
+    return null;
+  }
+}
+
+function hostVon(url: string): string {
+  try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return url; }
+}
+
+function ProjectLinks({ projectId, isAdmin, canEdit, nurLesen }: {
+  projectId: string;
+  isAdmin: boolean;
+  canEdit: boolean;
+  /** Archiviertes Projekt: nur lesen. */
+  nurLesen: boolean;
+}) {
+  const supabase = createClient();
+  const { confirm, ConfirmModalElement } = useConfirm();
+  const [links, setLinks] = useState<LinkRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [me, setMe] = useState<string | null>(null);
+  const [formOffen, setFormOffen] = useState(false);
+  const [titel, setTitel] = useState("");
+  const [url, setUrl] = useState("");
+  const [saving, setSaving] = useState(false);
+  const darfAnlegen = canEdit && !nurLesen;
+
+  const load = useCallback(async () => {
+    const { data: { user } } = await supabase.auth.getUser();
+    setMe(user?.id ?? null);
+    const { data, error } = await supabase
+      .from("project_links")
+      .select("id, titel, url, created_at, created_by, ersteller:profiles!project_links_created_by_fkey(full_name)")
+      .eq("project_id", projectId)
+      .order("created_at", { ascending: false });
+    if (error) toast.error("Links konnten nicht geladen werden: " + error.message);
+    setLinks((data ?? []).map((l) => ({ ...l, ersteller: Array.isArray(l.ersteller) ? l.ersteller[0] : l.ersteller })) as LinkRow[]);
+    setLoading(false);
+  }, [supabase, projectId]);
+
+  // queueMicrotask: kein synchroner setState im Effekt (react-hooks/set-state-in-effect).
+  useEffect(() => { queueMicrotask(() => { void load(); }); }, [load]);
+
+  function schliessen() {
+    setFormOffen(false);
+    setTitel("");
+    setUrl("");
+  }
+
+  async function speichern() {
+    const t = titel.trim();
+    const u = normalisiereUrl(url);
+    if (!t) { toast.error("Bitte einen Titel eingeben."); return; }
+    if (!u) { toast.error("Bitte eine gültige Adresse eingeben (z. B. https://…)."); return; }
+    setSaving(true);
+    const { error } = await supabase.from("project_links").insert({ project_id: projectId, titel: t, url: u, created_by: me });
+    setSaving(false);
+    if (error) { toast.error("Link konnte nicht gespeichert werden: " + error.message); return; }
+    toast.success("Link hinzugefügt");
+    schliessen();
+    load();
+  }
+
+  async function loeschen(l: LinkRow) {
+    const ok = await confirm({
+      title: "Link entfernen?",
+      message: `«${l.titel}» wird aus dem Projekt entfernt.`,
+      confirmLabel: "Entfernen",
+      variant: "red",
+    });
+    if (!ok) return;
+    const result = await deleteRow("project_links", l.id);
+    if (!result.ok) { toast.error("Entfernen fehlgeschlagen: " + (result.error ?? "Unbekannter Fehler")); return; }
+    toast.success("Link entfernt");
+    load();
+  }
+
+  return (
+    <Card>
+      <CardContent className="p-4 space-y-2">
+        <div className="flex items-center gap-2">
+          <Link2 className="h-4 w-4 text-muted-foreground" />
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground flex-1">Links ({links.length})</p>
+          {darfAnlegen && !formOffen && (
+            <button onClick={() => setFormOffen(true)} className="kasten kasten-muted !py-1 !px-2">
+              <Plus className="h-3.5 w-3.5" /> Link
+            </button>
+          )}
+        </div>
+        {formOffen && (
+          <div className="flex flex-col sm:flex-row gap-2">
+            <Input
+              autoFocus
+              value={titel}
+              onChange={(e) => setTitel(e.target.value)}
+              placeholder="Titel"
+              maxLength={200}
+              className="h-8 text-sm sm:w-56"
+            />
+            <Input
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); speichern(); } }}
+              placeholder="https://…"
+              inputMode="url"
+              className="h-8 text-sm flex-1"
+            />
+            <div className="flex gap-2 shrink-0">
+              <button onClick={speichern} disabled={saving} className="kasten kasten-green">
+                {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
+                {saving ? "Speichert…" : "Hinzufügen"}
+              </button>
+              <button onClick={schliessen} disabled={saving} className="kasten kasten-muted">Abbrechen</button>
+            </div>
+          </div>
+        )}
+        {loading ? (
+          <p className="text-xs text-muted-foreground italic">Lädt…</p>
+        ) : links.length === 0 ? (
+          !formOffen && <p className="text-xs text-muted-foreground italic">Keine Links.</p>
+        ) : (
+          <div className="space-y-1">
+            {links.map((l) => (
+              <div key={l.id} className="flex items-center gap-2 px-3 py-2 rounded-lg bg-muted/20 text-sm">
+                <Link2 className="h-4 w-4 text-muted-foreground shrink-0" />
+                <a href={l.url} target="_blank" rel="noopener noreferrer" className="flex-1 min-w-0 hover:underline">
+                  <span className="block truncate">{l.titel}</span>
+                  <span className="block text-[10px] text-muted-foreground truncate">
+                    {hostVon(l.url)} · {l.ersteller?.full_name ?? "—"} · {formatDateFull(l.created_at)}
+                  </span>
+                </a>
+                <div className="flex items-center gap-1 shrink-0">
+                  <a href={l.url} target="_blank" rel="noopener noreferrer" className="kasten kasten-blue !py-1 !px-2" data-tooltip="Öffnen" aria-label="Öffnen">
+                    <ExternalLink className="h-3.5 w-3.5" />
+                  </a>
+                  {!nurLesen && (isAdmin || me === l.created_by) && (
+                    <button onClick={() => loeschen(l)} className="kasten kasten-red !py-1 !px-2" data-tooltip="Entfernen" aria-label="Entfernen">
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        {ConfirmModalElement}
+      </CardContent>
+    </Card>
+  );
+}
+
+/* ============================================================
    HISTORY
    ============================================================ */
 
@@ -378,6 +554,7 @@ export function DocsHistoryTab({
     <div className="space-y-4">
       <LiveDocsSection projectId={project.id} canEdit={canEdit} />
       <ProjectDocuments projectId={project.id} isAdmin={isAdmin} canUpload={canEdit} nurLesen={nurLesen} />
+      <ProjectLinks projectId={project.id} isAdmin={isAdmin} canEdit={canEdit} nurLesen={nurLesen} />
       <HistoryCard project={project} children_={children_} audit={audit} />
     </div>
   );
