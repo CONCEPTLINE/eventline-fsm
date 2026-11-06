@@ -13,7 +13,6 @@ import { createClient } from "@/lib/supabase/client";
 import { Card, CardContent } from "@/components/ui/card";
 import { useConfirm } from "@/components/ui/use-confirm";
 import {
-  DocFolderBar,
   DocFolderMove,
   DocFolderTag,
   collectFolders,
@@ -22,6 +21,7 @@ import {
   type ActiveFolder,
 } from "@/components/ui/doc-folders";
 import { PdfPopup } from "@/components/pdf-popup";
+import { DocFolderList, istDateiDrag } from "@/components/ui/doc-folder-list";
 import {
   Paperclip, FileText, Loader2, Trash2, Eye, Download, History,
   ArrowLeft, ArrowRight, Link2, Plus, ExternalLink,
@@ -68,12 +68,28 @@ function ProjectDocuments({ projectId, isAdmin, canUpload, nurLesen }: {
   const [previewDoc, setPreviewDoc] = useState<{ url: string; title: string } | null>(null);
 
   // Ordner (eine Ebene, Attribut pro Dokument — siehe doc-folders.tsx).
-  const [activeFolder, setActiveFolder] = useState<ActiveFolder>(null);
-  const [extraFolders, setExtraFolders] = useState<string[]>([]);
+  // Leere Ordner sind seit Migration 386 in project_doc_ordner gespeichert.
+  // Gewaehlter Ordner steht in der URL (?ordner=, «-» = Hauptordner) und
+  // ueberlebt so einen Reload.
+  const [activeFolder, setActiveFolderState] = useState<ActiveFolder>(() => {
+    if (typeof window === "undefined") return null;
+    const v = new URLSearchParams(window.location.search).get("ordner");
+    return v === null ? null : v === "-" ? "" : v;
+  });
+  const setActiveFolder = useCallback((next: ActiveFolder) => {
+    setActiveFolderState(next);
+    const url = new URL(window.location.href);
+    if (next === null) url.searchParams.delete("ordner");
+    else url.searchParams.set("ordner", next === "" ? "-" : next);
+    window.history.replaceState(window.history.state, "", url.toString());
+  }, []);
+  const [gespeicherteOrdner, setGespeicherteOrdner] = useState<{ id: string; name: string }[]>([]);
+  const [ordnerGeladen, setOrdnerGeladen] = useState(false);
+  const [dropAktiv, setDropAktiv] = useState(false);
 
   const folders = useMemo(
-    () => collectFolders(docs.map((d) => d.folder), extraFolders),
-    [docs, extraFolders],
+    () => collectFolders(docs.map((d) => d.folder), gespeicherteOrdner.map((o) => o.name)),
+    [docs, gespeicherteOrdner],
   );
   const mainCount = useMemo(() => docs.filter((d) => !d.folder).length, [docs]);
   const visibleDocs = useMemo(
@@ -82,10 +98,10 @@ function ProjectDocuments({ projectId, isAdmin, canUpload, nurLesen }: {
   );
 
   useEffect(() => {
-    if (activeFolder && !folders.some((f) => f.name === activeFolder)) {
+    if (!loading && ordnerGeladen && activeFolder && !folders.some((f) => f.name === activeFolder)) {
       setActiveFolder(null);
     }
-  }, [activeFolder, folders]);
+  }, [activeFolder, folders, loading, ordnerGeladen, setActiveFolder]);
 
   async function previewDocInBrowser(doc: DocRow) {
     const { data, error } = await supabase.storage.from("documents").createSignedUrl(doc.storage_path, 3600);
@@ -112,12 +128,19 @@ function ProjectDocuments({ projectId, isAdmin, canUpload, nurLesen }: {
       .eq("project_id", projectId)
       .order("created_at", { ascending: false });
     setDocs((data ?? []).map((d) => ({ ...d, uploader: Array.isArray(d.uploader) ? d.uploader[0] : d.uploader })) as DocRow[]);
+    const { data: ordner, error: ordnerErr } = await supabase
+      .from("project_doc_ordner")
+      .select("id, name")
+      .eq("project_id", projectId);
+    if (ordnerErr) toast.error("Ordner konnten nicht geladen werden: " + ordnerErr.message);
+    setGespeicherteOrdner((ordner ?? []) as { id: string; name: string }[]);
+    setOrdnerGeladen(true);
     setLoading(false);
   }, [supabase, projectId]);
 
   useEffect(() => { load(); }, [load]);
 
-  async function handleFiles(files: FileList | null) {
+  async function handleFiles(files: FileList | null, ziel?: string) {
     if (!files || files.length === 0) return;
     const validated = validateFileList(files);
     if (!validated) return;
@@ -136,8 +159,9 @@ function ProjectDocuments({ projectId, isAdmin, canUpload, nurLesen }: {
         const { error } = await supabase.from("documents").insert({
           name: file.name, storage_path: path, file_size: file.size, mime_type: file.type,
           project_id: projectId, uploaded_by: user.id,
-          // Upload landet im aktiven Ordner (bei "Alle" → Hauptordner).
-          folder: folderForUpload(activeFolder),
+          // Upload landet im Ziel-Ordner (auf Ordner gezogen) bzw. im aktiven
+          // Ordner (bei "Alle" → Hauptordner). "" = Hauptordner.
+          folder: ziel !== undefined ? (ziel || null) : folderForUpload(activeFolder),
         });
         if (error) fail++; else ok++;
       } catch { fail++; }
@@ -146,6 +170,32 @@ function ProjectDocuments({ projectId, isAdmin, canUpload, nurLesen }: {
     if (ok > 0) toast.success(`${ok} Datei(en) hochgeladen`);
     if (fail > 0) toast.error(`${fail} Datei(en) fehlgeschlagen`);
     load();
+  }
+
+  async function ordnerAnlegen(name: string) {
+    const { data, error } = await supabase.from("project_doc_ordner").insert({ project_id: projectId, name, created_by: me }).select("id, name").single();
+    if (error || !data) { toast.error("Ordner konnte nicht angelegt werden: " + (error?.message ?? "?")); return; }
+    setGespeicherteOrdner((prev) => [...prev, data as { id: string; name: string }]);
+    setActiveFolder(name);
+  }
+
+  async function ordnerLoeschen(name: string) {
+    if (docs.some((d) => d.folder === name)) { toast.error("Der Ordner ist nicht leer."); return; }
+    const ok = await confirm({
+      title: "Ordner löschen?",
+      message: `Der leere Ordner «${name}» wird entfernt.`,
+      confirmLabel: "Löschen",
+      variant: "red",
+    });
+    if (!ok) return;
+    const eintrag = gespeicherteOrdner.find((o) => o.name === name);
+    if (eintrag) {
+      const result = await deleteRow("project_doc_ordner", eintrag.id);
+      if (!result.ok) { toast.error("Löschen fehlgeschlagen: " + (result.error ?? "Unbekannter Fehler")); return; }
+    }
+    setGespeicherteOrdner((prev) => prev.filter((o) => o.name !== name));
+    if (activeFolder === name) setActiveFolder(null);
+    toast.success("Ordner gelöscht");
   }
 
   async function moveDoc(doc: DocRow, folder: string | null) {
@@ -182,26 +232,50 @@ function ProjectDocuments({ projectId, isAdmin, canUpload, nurLesen }: {
           <Paperclip className="h-4 w-4 text-muted-foreground" />
           <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground flex-1">Dokumente ({docs.length})</p>
         </div>
+        <div className="flex flex-col md:flex-row gap-4">
+          {!loading && (folders.length > 0 || canUpload) && (
+            <div className="md:w-64 shrink-0 md:border-r md:border-border md:pr-4">
+              <DocFolderList
+                folders={folders}
+                mainCount={mainCount}
+                totalCount={docs.length}
+                active={activeFolder}
+                onSelect={setActiveFolder}
+                onCreate={ordnerAnlegen}
+                onDelete={ordnerLoeschen}
+                onDropFiles={(folder, files) => handleFiles(files, folder)}
+                canCreate={canUpload}
+              />
+            </div>
+          )}
+          <div
+            className="flex-1 min-w-0 space-y-2 rounded-xl transition-colors"
+            onDragOver={canUpload ? (e) => { if (!istDateiDrag(e)) return; e.preventDefault(); setDropAktiv(true); } : undefined}
+            onDragLeave={canUpload ? (e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDropAktiv(false); } : undefined}
+            onDrop={canUpload ? (e) => {
+              if (!istDateiDrag(e)) return;
+              e.preventDefault();
+              setDropAktiv(false);
+              if (!uploading && e.dataTransfer.files.length > 0) handleFiles(e.dataTransfer.files);
+            } : undefined}
+          >
         {canUpload && (
-          <label className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl border border-dashed bg-muted/20 text-sm text-muted-foreground hover:bg-muted/30 hover:text-foreground transition-colors cursor-pointer">
+          <label
+            className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl border border-dashed text-sm transition-colors cursor-pointer"
+            style={{
+              background: dropAktiv ? "color-mix(in srgb, var(--accent) 10%, transparent)" : "color-mix(in srgb, var(--muted) 20%, transparent)",
+              borderColor: dropAktiv ? "var(--accent)" : undefined,
+              color: dropAktiv ? "var(--foreground)" : "var(--muted-foreground)",
+            }}
+          >
             {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Paperclip className="h-4 w-4" />}
-            {uploading ? "Lädt hoch…" : "Dateien auswählen…"}
+            {uploading
+              ? "Lädt hoch…"
+              : dropAktiv
+              ? `Loslassen zum Hochladen${activeFolder ? ` in «${activeFolder}»` : ""}`
+              : `Dateien hierher ziehen oder auswählen…${activeFolder ? ` (in «${activeFolder}»)` : ""}`}
             <input type="file" multiple className="sr-only" disabled={uploading} onChange={(e) => { handleFiles(e.target.files); e.target.value = ""; }} />
           </label>
-        )}
-        {!loading && (
-          <DocFolderBar
-            folders={folders}
-            mainCount={mainCount}
-            totalCount={docs.length}
-            active={activeFolder}
-            onSelect={setActiveFolder}
-            onCreate={(name) => {
-              setExtraFolders((prev) => (prev.includes(name) ? prev : [...prev, name]));
-              setActiveFolder(name);
-            }}
-            canCreate={canUpload}
-          />
         )}
         {loading ? (
           <p className="text-xs text-muted-foreground italic">Lädt…</p>
@@ -251,6 +325,8 @@ function ProjectDocuments({ projectId, isAdmin, canUpload, nurLesen }: {
             ))}
           </div>
         )}
+          </div>
+        </div>
         {ConfirmModalElement}
         {previewDoc && (
           <PdfPopup url={previewDoc.url} title={previewDoc.title} onClose={() => setPreviewDoc(null)} />

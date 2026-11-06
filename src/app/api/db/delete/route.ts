@@ -28,6 +28,7 @@ const ALLOWED_TABLES = new Set([
   "email_templates",
   "vertrieb_raeume",
   "project_links",
+  "project_doc_ordner",
 ]);
 
 export async function POST(req: NextRequest) {

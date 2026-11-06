@@ -65,6 +65,48 @@ export function collectFolders(
     .sort((a, b) => a.name.localeCompare(b.name, "de"));
 }
 
+/**
+ * Eingabe aus dem «Neuer Ordner»-Dialog pruefen. Liefert den bereinigten
+ * Namen oder null (mit Toast). Gibt es den Ordner schon, wird er ausgewaehlt.
+ */
+export function ordnerNamePruefen(
+  raw: string | null,
+  folders: { name: string }[],
+  onSelect: (next: ActiveFolder) => void,
+): string | null {
+  if (raw === null) return null;
+  const name = raw.replace(/\s+/g, " ").trim();
+  if (!name) return null;
+  // usePrompt laesst Enter am disabled-Button vorbei — Laenge hier hart gaten
+  // (die Standort-API validiert das folder-Feld ebenfalls).
+  if (name.length > 40) {
+    toast.error("Ordnername zu lang (max. 40 Zeichen)");
+    return null;
+  }
+  const lower = name.toLowerCase();
+  if (lower === "alle" || lower === "hauptordner") {
+    toast.error("Dieser Name ist reserviert");
+    return null;
+  }
+  const existing = folders.find((f) => f.name.toLowerCase() === lower);
+  if (existing) {
+    onSelect(existing.name);
+    toast(`Ordner «${existing.name}» gibt es schon — ausgewählt`);
+    return null;
+  }
+  return name;
+}
+
+/** Prompt-Optionen fuer «Neuer Ordner» — app-weit gleich. */
+export const NEUER_ORDNER_PROMPT = {
+  title: "Neuer Ordner",
+  label: "Wie soll der Ordner heissen?",
+  placeholder: "z.B. Pläne, Verträge, Fotos",
+  confirmLabel: "Anlegen",
+  variant: "blue",
+  maxLength: 40,
+} as const;
+
 function ChipCount({ n }: { n: number }) {
   return <span className="text-[10px] opacity-60 tabular-nums">{n}</span>;
 }
@@ -108,27 +150,8 @@ export function DocFolderBar({
       variant: "blue",
       maxLength: 40,
     });
-    if (raw === null) return;
-    const name = raw.replace(/\s+/g, " ").trim();
-    if (!name) return;
-    // usePrompt laesst Enter am disabled-Button vorbei — Laenge hier hart gaten
-    // (die Standort-API validiert das folder-Feld ebenfalls).
-    if (name.length > 40) {
-      toast.error("Ordnername zu lang (max. 40 Zeichen)");
-      return;
-    }
-    const lower = name.toLowerCase();
-    if (lower === "alle" || lower === "hauptordner") {
-      toast.error("Dieser Name ist reserviert");
-      return;
-    }
-    const existing = folders.find((f) => f.name.toLowerCase() === lower);
-    if (existing) {
-      onSelect(existing.name);
-      toast(`Ordner «${existing.name}» gibt es schon — ausgewählt`);
-      return;
-    }
-    onCreate(name);
+    const name = ordnerNamePruefen(raw, folders, onSelect);
+    if (name) onCreate(name);
   }
 
   return (
