@@ -232,7 +232,7 @@ export async function GET(request: NextRequest) {
   // client-seitig (kleine Datenmenge — Projekte sind viel weniger als Jobs).
   const { data: projAppts, error: projErr } = await supabase
     .from("project_appointments")
-    .select("id, title, description, start_time, end_time, assigned_to, project:projects(id, project_number, title, status, is_deleted, assigned_to, created_by)");
+    .select("id, title, description, start_time, end_time, assigned_to, project:projects(id, project_number, title, status, is_deleted, assigned_to, created_by, versteckt)");
   if (projErr) return voruebergehendNichtVerfuegbar("project_appointments", projErr);
   const { data: myMemberships, error: memberErr } = !isAdmin
     ? await supabase.from("project_members").select("project_id").eq("user_id", userId)
@@ -240,7 +240,13 @@ export async function GET(request: NextRequest) {
   const { data: myParticipations, error: partErr } = !isAdmin
     ? await supabase.from("project_appointment_participants").select("appointment_id").eq("profile_id", userId)
     : { data: [] as { appointment_id: string }[], error: null };
-  if (memberErr || partErr) return voruebergehendNichtVerfuegbar("Projekt-Teilnahmen", memberErr ?? partErr);
+  // Versteckte Projekte (Migration 384): nur Admins und eingeladene Personen —
+  // Projektleitung, Mitgliedschaft oder Termin-Zuteilung reichen nicht.
+  const { data: myFreigaben, error: freigabeErr } = !isAdmin
+    ? await supabase.from("project_freigaben").select("project_id").eq("user_id", userId)
+    : { data: [] as { project_id: string }[], error: null };
+  if (memberErr || partErr || freigabeErr) return voruebergehendNichtVerfuegbar("Projekt-Teilnahmen", memberErr ?? partErr ?? freigabeErr);
+  const myFreigabeProjectIds = new Set((myFreigaben ?? []).map((f) => f.project_id as string));
   const myMemberProjectIds = new Set((myMemberships ?? []).map((m) => m.project_id as string));
   const myParticipationIds = new Set((myParticipations ?? []).map((p) => p.appointment_id as string));
 
@@ -257,6 +263,7 @@ export async function GET(request: NextRequest) {
       || proj.assigned_to === userId
       || proj.created_by === userId;
     if (!visible) continue;
+    if (proj.versteckt && !(isAdmin || myFreigabeProjectIds.has(proj.id as string))) continue;
 
     const start = new Date(a.start_time);
     const end = icsEnde(start, a.end_time ? new Date(a.end_time) : null);

@@ -18,7 +18,7 @@ import { createClient } from "@/lib/supabase/client";
 import { Input } from "@/components/ui/input";
 import { BackButton } from "@/components/ui/back-button";
 import { SearchableSelect } from "@/components/searchable-select";
-import { Loader2, Save, Target, StickyNote } from "lucide-react";
+import { Loader2, Save, Target, StickyNote, EyeOff } from "lucide-react";
 import { toast } from "sonner";
 import { usePermissions } from "@/lib/use-permissions";
 import { formatProjectNumber } from "@/lib/projekte-format";
@@ -32,11 +32,14 @@ function NeuesProjektInner() {
   const supabase = createClient();
   const search = useSearchParams();
   const parentId = search.get("parent");
-  const { can } = usePermissions();
+  const { can, role } = usePermissions();
   // "isAdmin" = wer direkt anlegen darf (Status=genehmigt, Budget setzen,
   // Members zuteilen); ohne die Berechtigung wird das Projekt als Entwurf
   // gespeichert und braucht danach eine Genehmigung.
   const isAdmin = can("projekte:approve");
+  // Verstecken darf nur die Rolle admin (Migration 384, Trigger) — nicht
+  // dasselbe wie isAdmin oben.
+  const istAdmin = role === "admin";
 
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -51,6 +54,11 @@ function NeuesProjektInner() {
   // project_members inserted -> sofort eingeloggt, koennen sofort stempeln.
   const [memberIds, setMemberIds] = useState<Set<string>>(new Set());
   const [parent, setParent] = useState<ParentInfo | null>(null);
+  // Versteckt (nur Admins): sichtbar nur fuer Admins und eingeladene
+  // Personen (project_freigaben). Projektleitung (≠ Ersteller) und Mitglieder
+  // werden beim Speichern automatisch mit eingeladen.
+  const [versteckt, setVersteckt] = useState(false);
+  const [freigabeIds, setFreigabeIds] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     (async () => {
@@ -102,6 +110,8 @@ function NeuesProjektInner() {
       assigned_to: isAdmin && assignedTo ? assignedTo : user.id,
       parent_project_id: parent?.id ?? null,
     };
+    const alsVersteckt = istAdmin && versteckt;
+    if (alsVersteckt) payload.versteckt = true;
     if (isAdmin) {
       payload.status = "genehmigt";
       payload.budget_hours = h;
@@ -134,9 +144,33 @@ function NeuesProjektInner() {
         toast.error("Members konnten nicht komplett zugeteilt werden: " + memErr.message);
       }
     }
+    // Versteckt: Eingeladene + Projektleitung (≠ ich) + Mitglieder einladen,
+    // sonst sehen Projektleitung/Mitglieder das Projekt nicht.
+    if (alsVersteckt) {
+      const einladen = new Set<string>(freigabeIds);
+      const finalAssignee = isAdmin && assignedTo ? assignedTo : user.id;
+      if (finalAssignee !== user.id) einladen.add(finalAssignee);
+      if (payload.status === "genehmigt") for (const uid of memberIds) einladen.add(uid);
+      if (einladen.size > 0) {
+        const einladungRows = Array.from(einladen).map((uid) => ({ project_id: data.id, user_id: uid }));
+        const { error: fgErr } = await supabase.from("project_freigaben")
+          .upsert(einladungRows, { onConflict: "project_id,user_id", ignoreDuplicates: true });
+        if (fgErr) {
+          toast.error("Einladungen konnten nicht gespeichert werden: " + fgErr.message);
+        }
+      }
+    }
     setSaving(false);
     toast.success(isAdmin ? "Projekt angelegt" : "Als Entwurf gespeichert — jetzt einreichen zur Genehmigung");
     router.push(`/projekte/${data.id}`);
+  }
+
+  function toggleFreigabe(uid: string) {
+    setFreigabeIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(uid)) next.delete(uid); else next.add(uid);
+      return next;
+    });
   }
 
   function toggleMember(uid: string) {
@@ -231,6 +265,59 @@ function NeuesProjektInner() {
               </p>
             </div>
           </>
+        )}
+
+        {istAdmin && (
+          <div className="space-y-2">
+            <button
+              type="button"
+              role="switch"
+              aria-checked={versteckt}
+              onClick={() => setVersteckt(!versteckt)}
+              className="flex items-center gap-2.5 text-sm"
+            >
+              <span className={`inline-flex h-5 w-9 items-center rounded-full transition-colors ${versteckt ? "bg-red-500" : "bg-foreground/20 dark:bg-foreground/30"}`}>
+                <span className={`inline-block h-4 w-4 rounded-full bg-white shadow transform transition-transform ${versteckt ? "translate-x-4" : "translate-x-0.5"}`} />
+              </span>
+              <EyeOff className="h-3.5 w-3.5 text-muted-foreground" />
+              Versteckt
+            </button>
+            <p className="text-[10px] text-muted-foreground/70 ml-1">
+              Nur Admins und eingeladene Personen sehen das Projekt.
+            </p>
+
+            {versteckt && (
+              <div className="space-y-1">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  Einladen ({freigabeIds.size} ausgewählt)
+                </p>
+                <div className="rounded-lg border border-border max-h-48 overflow-y-auto divide-y divide-border/40">
+                  {assignees.length === 0 ? (
+                    <p className="p-3 text-xs text-muted-foreground italic">Keine Mitarbeiter verfügbar.</p>
+                  ) : assignees.map((a) => {
+                    const checked = freigabeIds.has(a.id);
+                    return (
+                      <label
+                        key={a.id}
+                        className={`flex items-center gap-2 px-3 py-1.5 cursor-pointer text-sm transition-colors ${checked ? "bg-emerald-500/[0.08]" : "hover:bg-muted/40"}`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => toggleFreigabe(a.id)}
+                          className="h-3.5 w-3.5 accent-emerald-500"
+                        />
+                        <span className="flex-1">{a.full_name ?? "—"}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+                <p className="text-[10px] text-muted-foreground/70 ml-1">
+                  Verantwortliche Person und Mitglieder werden automatisch eingeladen.
+                </p>
+              </div>
+            )}
+          </div>
         )}
 
         <div className="space-y-1">

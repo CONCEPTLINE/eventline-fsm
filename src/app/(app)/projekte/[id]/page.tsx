@@ -30,7 +30,7 @@ import { Loading } from "@/components/ui/spinner";
 import { useConfirm } from "@/components/ui/use-confirm";
 import {
   CheckCircle2, XCircle, Loader2, Trash2, Edit3, Ban, ArrowLeft, ArrowRight,
-  Send, LayoutGrid, Clock, FolderOpen, MoreVertical,
+  Send, LayoutGrid, Clock, FolderOpen, MoreVertical, EyeOff, Eye,
 } from "lucide-react";
 import { toast } from "sonner";
 import { PROJECT_STATUS_LABEL, formatProjectNumber, progressPct } from "@/lib/projekte-format";
@@ -44,7 +44,7 @@ import {
   DecisionModal, CancelModal, CloseModal, AppointmentModal, AppointmentNotesModal,
 } from "@/components/projekt/modals";
 import type {
-  Appointment, AppointmentParticipant, AuditEntry, Child, Member, Project, TimeEntry,
+  Appointment, AppointmentParticipant, AuditEntry, Child, Freigabe, Member, Project, TimeEntry,
 } from "@/components/projekt/types";
 import { useBreadcrumbs } from "@/components/shell/breadcrumbs";
 
@@ -64,6 +64,9 @@ export default function ProjektDetailPage() {
   // jetzt via projekte:approve (Admin passt automatisch durch).
   const isAdmin = can("projekte:approve");
   const isTeamlead = isAdmin;
+  // Verstecken + Freigaben pflegen darf nur die Rolle admin (Migration 384)
+  // — nicht dasselbe wie isAdmin oben (projekte:approve).
+  const istAdmin = role === "admin";
   const { confirm, ConfirmModalElement } = useConfirm();
 
   const [project, setProject] = useState<Project | null>(null);
@@ -75,6 +78,8 @@ export default function ProjektDetailPage() {
   const [children, setChildren] = useState<Child[]>([]);
   const [members, setMembers] = useState<Member[]>([]);
   const [audit, setAudit] = useState<AuditEntry[]>([]);
+  const [freigaben, setFreigaben] = useState<Freigabe[]>([]);
+  const [verstecktBusy, setVerstecktBusy] = useState(false);
   const [me, setMe] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [decisionOpen, setDecisionOpen] = useState<"approve" | "reject" | "edit-budget" | null>(null);
@@ -153,7 +158,7 @@ export default function ProjektDetailPage() {
         parent: Array.isArray(p.parent) ? p.parent[0] : p.parent,
       } as Project);
     }
-    const [entriesRes, usedRes, apptsRes, childrenRes, membersRes, auditRes] = await Promise.all([
+    const [entriesRes, usedRes, apptsRes, childrenRes, membersRes, auditRes, freigabenRes] = await Promise.all([
       // Konsolidierung Migration 212: Projekt-Stempel liegen jetzt in
       // time_entries (Spalte project_id). entry_date + minutes werden nicht
       // mehr gespeichert, sondern aus clock_in / clock_out abgeleitet
@@ -197,7 +202,21 @@ export default function ProjektDetailPage() {
         .select("id, kind, old_value, new_value, reason, created_at, changer:profiles!project_audit_changed_by_fkey(full_name)")
         .eq("project_id", projectId)
         .order("created_at", { ascending: false }),
+      // Einladungen fuer versteckte Projekte (Migration 384; RLS: nur wer das
+      // Projekt sehen darf).
+      supabase
+        .from("project_freigaben")
+        .select("user_id, created_at, person:profiles!project_freigaben_user_id_fkey(full_name)")
+        .eq("project_id", projectId)
+        .order("created_at", { ascending: true }),
     ]);
+    if (freigabenRes.error) {
+      toast.error("Einladungen konnten nicht geladen werden: " + freigabenRes.error.message);
+    }
+    setFreigaben((freigabenRes.data ?? []).map((f) => {
+      const person = (Array.isArray(f.person) ? f.person[0] : f.person) as { full_name: string | null } | null;
+      return { user_id: f.user_id as string, full_name: person?.full_name ?? null };
+    }));
     // entry_date + minutes hier ableiten: entry_date = lokaler Tag (ZRH)
     // des clock_in im ISO-Format YYYY-MM-DD (sv-SE liefert genau das);
     // minutes = ceil((clock_out - clock_in) / 60000). Offene Stempel
@@ -390,6 +409,26 @@ export default function ProjektDetailPage() {
     router.push("/projekte");
   }
 
+  // Admin: Projekt verstecken bzw. wieder fuer alle sichtbar machen.
+  async function setzeVersteckt(neu: boolean) {
+    if (!project) return;
+    if (neu) {
+      const ok = await confirm({
+        title: "Projekt verstecken?",
+        message: "Das Projekt verschwindet für alle ausser Admins und eingeladene Personen. Mitglieder und die Projektleitung sehen es danach nur, wenn sie eingeladen werden.",
+        confirmLabel: "Verstecken",
+        variant: "blue",
+      });
+      if (!ok) return;
+    }
+    setVerstecktBusy(true);
+    const { error } = await supabase.from("projects").update({ versteckt: neu }).eq("id", project.id);
+    setVerstecktBusy(false);
+    if (error) { toast.error((neu ? "Verstecken" : "Sichtbar machen") + " fehlgeschlagen: " + error.message); return; }
+    toast.success(neu ? "Projekt ist versteckt" : "Projekt ist für alle sichtbar");
+    load();
+  }
+
   const tabs: { key: Tab; label: string; icon: React.ReactNode }[] = [
     { key: "uebersicht", label: "Übersicht",          icon: <LayoutGrid className="h-4 w-4" /> },
     { key: "zeit",       label: "Zeit & Stempel",      icon: <Clock className="h-4 w-4" /> },
@@ -415,6 +454,11 @@ export default function ProjektDetailPage() {
               <span className={`inline-flex px-1.5 py-0.5 text-[10px] font-semibold rounded-full ${status.color}`}>
                 {status.label}
               </span>
+              {project.versteckt && (
+                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-semibold rounded-full bg-slate-100 text-slate-700 dark:bg-slate-500/20 dark:text-slate-300">
+                  <EyeOff className="h-3 w-3" /> Versteckt
+                </span>
+              )}
               {project.completion_success === true && (
                 <span className="inline-flex px-1.5 py-0.5 text-[10px] font-semibold rounded-full bg-green-100 text-green-700 dark:bg-green-500/20 dark:text-green-300">
                   Erfolgreich
@@ -473,6 +517,8 @@ export default function ProjektDetailPage() {
           me={me}
           isMember={isMember}
           isAdmin={isAdmin}
+          istAdmin={istAdmin}
+          freigaben={freigaben}
           canJoin={canJoin}
           canEdit={canEditText}
           canAddAppt={canAddAppt}
@@ -516,7 +562,7 @@ export default function ProjektDetailPage() {
             Aktionen (Ablehnen einer Genehmigungsanfrage, Stornieren).
           - Stornieren wandert in ein Overflow-Menu (MoreVertical), sonst
             liegen zwei rote Buttons parallel zu einer positiven Aktion. */}
-      {(canApprove || canClose || canCancel || canSubmitDraft) && (
+      {(canApprove || canClose || canCancel || canSubmitDraft || istAdmin) && (
         <div className="sticky bottom-2 z-10 bg-card border rounded-xl p-2 flex gap-2 flex-wrap shadow-sm">
           <div className="text-[10px] text-muted-foreground/70 self-center px-1">Aktionen:</div>
           {canSubmitDraft && (
@@ -552,7 +598,7 @@ export default function ProjektDetailPage() {
               </button>
             </>
           )}
-          {canCancel && (
+          {(canCancel || istAdmin) && (
             <div className="relative ml-auto" ref={overflowRef}>
               <button
                 type="button"
@@ -563,25 +609,42 @@ export default function ProjektDetailPage() {
                 aria-expanded={overflowOpen}
                 aria-haspopup="menu"
               >
-                <MoreVertical className="h-3.5 w-3.5" />
+                {verstecktBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <MoreVertical className="h-3.5 w-3.5" />}
               </button>
               {overflowOpen && (
                 <div
                   role="menu"
                   className="absolute right-0 bottom-[calc(100%+6px)] z-40 min-w-[180px] rounded-xl border border-border bg-card shadow-lg p-1"
                 >
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      setOverflowOpen(false);
-                      setCancelOpen(true);
-                    }}
-                    className="w-full flex items-center gap-2 px-3 py-2 text-sm rounded-lg text-red-600 dark:text-red-400 hover:bg-red-500/10 transition-colors"
-                  >
-                    <Ban className="h-4 w-4" />
-                    Stornieren
-                  </button>
+                  {istAdmin && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      disabled={verstecktBusy}
+                      onClick={() => {
+                        setOverflowOpen(false);
+                        setzeVersteckt(!project.versteckt);
+                      }}
+                      className="w-full flex items-center gap-2 px-3 py-2 text-sm rounded-lg hover:bg-muted transition-colors"
+                    >
+                      {project.versteckt ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
+                      {project.versteckt ? "Für alle sichtbar machen" : "Verstecken"}
+                    </button>
+                  )}
+                  {canCancel && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setOverflowOpen(false);
+                        setCancelOpen(true);
+                      }}
+                      className="w-full flex items-center gap-2 px-3 py-2 text-sm rounded-lg text-red-600 dark:text-red-400 hover:bg-red-500/10 transition-colors"
+                    >
+                      <Ban className="h-4 w-4" />
+                      Stornieren
+                    </button>
+                  )}
                 </div>
               )}
             </div>

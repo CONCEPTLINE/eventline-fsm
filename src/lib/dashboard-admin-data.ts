@@ -443,7 +443,7 @@ export async function ladeTeamStatus(
     (() => {
       let q = admin
         .from("time_entries")
-        .select("user_id, clock_in, description, job:jobs(job_number, title), project:projects(project_number, title)")
+        .select("user_id, clock_in, description, job:jobs(job_number, title), project:projects(project_number, title, versteckt)")
         .is("clock_out", null);
       if (ids) q = q.in("user_id", ids);
       return q;
@@ -482,7 +482,7 @@ export async function ladeTeamStatus(
     clock_in: string;
     description: string | null;
     job: { job_number: number | null; title: string } | { job_number: number | null; title: string }[] | null;
-    project: { project_number: number | null; title: string } | { project_number: number | null; title: string }[] | null;
+    project: { project_number: number | null; title: string; versteckt: boolean } | { project_number: number | null; title: string; versteckt: boolean }[] | null;
   };
   const one = <T,>(v: T | T[] | null): T | null => (Array.isArray(v) ? v[0] ?? null : v);
   const openByUser = new Map<string, OpenEntryRow>();
@@ -505,6 +505,8 @@ export async function ladeTeamStatus(
       const project = one(open.project);
       const context_label = job
         ? `INT-${job.job_number ?? "…"} · ${job.title}`
+        : project?.versteckt
+        ? "Projekt" // verstecktes Projekt (Migration 384): weder Name noch Nummer
         : project
         ? `PROJ-${project.project_number ?? "…"} · ${project.title}`
         : open.description || "Andere Arbeit";

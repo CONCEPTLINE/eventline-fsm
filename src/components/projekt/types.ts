@@ -27,6 +27,8 @@ export interface Project {
   completion_success: boolean | null;
   completion_note: string | null;
   parent_project_id: string | null;
+  /** Versteckt (Migration 384): nur Admins, Projektleitung, Freigegebene, Mitglieder. */
+  versteckt: boolean;
   created_at: string;
   assignee?: { full_name: string | null } | null;
   approver?: { full_name: string | null } | null;
@@ -99,4 +101,10 @@ export interface AuditEntry {
   reason: string | null;
   created_at: string;
   changer?: { full_name: string | null } | null;
+}
+
+/** Freigabe eines versteckten Projekts (project_freigaben, Migration 384). */
+export interface Freigabe {
+  user_id: string;
+  full_name: string | null;
 }

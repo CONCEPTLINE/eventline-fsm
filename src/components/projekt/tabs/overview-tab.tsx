@@ -15,12 +15,12 @@ import { Modal } from "@/components/ui/modal";
 import { useConfirm } from "@/components/ui/use-confirm";
 import {
   Clock, Loader2, Trash2, Edit3, FileText, Target, StickyNote, Calendar as CalIcon,
-  Plus, LogIn, LogOut, MessageSquare, Save,
+  Plus, LogIn, LogOut, MessageSquare, Save, EyeOff, X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { satzAm, satzVerlauf } from "@/lib/personal-saetze";
-import type { Appointment, Member, Project, TimeEntry } from "../types";
+import type { Appointment, Freigabe, Member, Project, TimeEntry } from "../types";
 import { PORTAL_ROLLEN_IN } from "@/lib/roles";
 import { usePermissions } from "@/lib/use-permissions";
 import { useStempel, stempelErfolgText, projektStempel } from "@/lib/use-stempel";
@@ -471,8 +471,14 @@ function TeamBudgetPanel({
   async function addMember(uid: string) {
     setBusy(true);
     const { error } = await supabase.from("project_members").insert({ project_id: project.id, user_id: uid });
+    if (error) { setBusy(false); toast.error("Hinzufügen fehlgeschlagen: " + error.message); return; }
+    // Versteckt: Mitglieder sehen das Projekt nur eingeladen (Migration 384).
+    if (project.versteckt) {
+      const { error: fgErr } = await supabase.from("project_freigaben")
+        .upsert({ project_id: project.id, user_id: uid }, { onConflict: "project_id,user_id", ignoreDuplicates: true });
+      if (fgErr) toast.error("Einladen fehlgeschlagen: " + fgErr.message);
+    }
     setBusy(false);
-    if (error) { toast.error("Hinzufügen fehlgeschlagen: " + error.message); return; }
     toast.success("Mitglied hinzugefügt"); setAddOpen(false); onDone();
   }
 
@@ -628,11 +634,131 @@ function TeamBudgetPanel({
 }
 
 /* ============================================================
+   EINGELADEN (versteckte Projekte, Migration 384)
+   ============================================================ */
+
+function FreigabenCard({ projectId, freigaben, istAdmin, onDone }: {
+  projectId: string;
+  freigaben: Freigabe[];
+  istAdmin: boolean;
+  onDone: () => void;
+}) {
+  const supabase = createClient();
+  const [addOpen, setAddOpen] = useState(false);
+  const [available, setAvailable] = useState<{ id: string; full_name: string | null }[]>([]);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const { confirm, ConfirmModalElement } = useConfirm();
+
+  useEffect(() => {
+    if (!addOpen) return;
+    (async () => {
+      const { data, error } = await supabase.from("profiles").select("id, full_name")
+        .not("role", "in", PORTAL_ROLLEN_IN).eq("is_active", true).order("full_name");
+      if (error) { toast.error("Personen konnten nicht geladen werden: " + error.message); return; }
+      const schon = new Set(freigaben.map((f) => f.user_id));
+      setAvailable((data ?? []).filter((p) => !schon.has(p.id as string)) as { id: string; full_name: string | null }[]);
+    })();
+  }, [addOpen, supabase, freigaben]);
+
+  async function freigeben(uid: string) {
+    setBusyId(uid);
+    const { error } = await supabase.from("project_freigaben").insert({ project_id: projectId, user_id: uid });
+    setBusyId(null);
+    if (error) { toast.error("Einladen fehlgeschlagen: " + error.message); return; }
+    toast.success("Eingeladen"); setAddOpen(false); onDone();
+  }
+
+  async function entfernen(f: Freigabe) {
+    const ok = await confirm({
+      title: "Einladung entfernen?",
+      message: `${f.full_name ?? "Diese Person"} sieht das Projekt danach nicht mehr.`,
+      confirmLabel: "Entfernen",
+      variant: "red",
+    });
+    if (!ok) return;
+    setBusyId(f.user_id);
+    // deleteRow() kennt nur Tabellen mit id-Spalte; project_freigaben hat
+    // einen zusammengesetzten Schluessel (project_id, user_id).
+    // eslint-disable-next-line no-restricted-syntax
+    const { error, count } = await supabase.from("project_freigaben")
+      .delete({ count: "exact" })
+      .eq("project_id", projectId).eq("user_id", f.user_id);
+    setBusyId(null);
+    if (error || count !== 1) { toast.error("Entfernen fehlgeschlagen" + (error ? ": " + error.message : "")); return; }
+    toast.success("Einladung entfernt"); onDone();
+  }
+
+  return (
+    <div className="rounded-xl border bg-card p-4">
+      <div className="flex items-center justify-between">
+        <p className="text-[11px] uppercase tracking-wide text-muted-foreground font-medium flex items-center gap-1.5">
+          <EyeOff className="h-3.5 w-3.5" /> Eingeladen
+        </p>
+        {istAdmin && (
+          <button onClick={() => setAddOpen(true)} className="icon-btn p-1 rounded hover:bg-muted transition-colors" data-tooltip="Person einladen">
+            <Plus className="h-3.5 w-3.5" />
+          </button>
+        )}
+      </div>
+      <div className="mt-1.5 flex items-center gap-1.5 flex-wrap min-h-8">
+        {freigaben.length > 0 ? freigaben.map((f) => (
+          <span key={f.user_id} className="relative">
+            <span
+              data-tooltip={f.full_name ?? "?"}
+              className="h-8 w-8 rounded-full flex items-center justify-center text-[11px] font-bold ring-2 cursor-default bg-red-500/10 text-red-700 dark:text-red-300 ring-transparent"
+            >
+              {(f.full_name ?? "?").charAt(0).toUpperCase()}
+            </span>
+            {istAdmin && (
+              <button
+                onClick={() => entfernen(f)}
+                disabled={busyId === f.user_id}
+                className="absolute -top-1 -right-1 h-4 w-4 rounded-full border border-border bg-card text-muted-foreground flex items-center justify-center"
+                data-tooltip={`Einladung für ${f.full_name ?? "?"} entfernen`}
+                aria-label={`Einladung für ${f.full_name ?? "?"} entfernen`}
+              >
+                {busyId === f.user_id ? <Loader2 className="h-2.5 w-2.5 animate-spin" /> : <X className="h-2.5 w-2.5" />}
+              </button>
+            )}
+          </span>
+        )) : <span className="text-sm text-muted-foreground/60">Noch niemand eingeladen.</span>}
+      </div>
+      <p className="mt-1.5 text-[11px] text-muted-foreground">Admins sehen es immer.</p>
+
+      {ConfirmModalElement}
+      {addOpen && (
+        <Modal open onClose={() => setAddOpen(false)} title="Person einladen" size="md">
+          <p className="text-xs text-muted-foreground mb-3">Sieht das versteckte Projekt danach in der Liste.</p>
+          {available.length === 0 ? (
+            <p className="text-sm text-muted-foreground italic">Alle Mitarbeiter sind bereits eingeladen.</p>
+          ) : (
+            <div className="max-h-72 overflow-y-auto space-y-1">
+              {available.map((a) => (
+                <button
+                  key={a.id}
+                  onClick={() => freigeben(a.id)}
+                  disabled={busyId !== null}
+                  className="w-full flex items-center gap-2 p-2 rounded-lg border border-border hover:border-emerald-300 hover:bg-emerald-50/40 dark:hover:bg-emerald-500/10 transition-colors text-left"
+                >
+                  <span className="h-6 w-6 rounded-full bg-foreground/10 flex items-center justify-center text-[10px] font-bold">{(a.full_name?.[0] ?? "?").toUpperCase()}</span>
+                  <span className="text-sm flex-1">{a.full_name ?? "—"}</span>
+                  {busyId === a.id ? <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" /> : <Plus className="h-3.5 w-3.5 text-muted-foreground" />}
+                </button>
+              ))}
+            </div>
+          )}
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+/* ============================================================
    OVERVIEW TAB (Export)
    ============================================================ */
 
 export function OverviewTab({
-  project, members, entries, appts, openEntry, me, isMember, isAdmin, canJoin,
+  project, members, entries, appts, openEntry, me, isMember, isAdmin, istAdmin, freigaben, canJoin,
   canEdit, canAddAppt, usedMin, pct, onReload, onOpenAppt, onOpenApptNotes,
 }: {
   project: Project;
@@ -643,6 +769,9 @@ export function OverviewTab({
   me: string | null;
   isMember: boolean;
   isAdmin: boolean;
+  /** Rolle admin (nicht projekte:approve): pflegt Einladungen versteckter Projekte. */
+  istAdmin: boolean;
+  freigaben: Freigabe[];
   canJoin: boolean;
   canEdit: boolean;
   canAddAppt: boolean;
@@ -668,6 +797,10 @@ export function OverviewTab({
           pct={pct}
           onDone={onReload}
         />
+      )}
+
+      {project.versteckt && (
+        <FreigabenCard projectId={project.id} freigaben={freigaben} istAdmin={istAdmin} onDone={onReload} />
       )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-start">

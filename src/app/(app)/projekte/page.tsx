@@ -12,7 +12,7 @@ import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { usePermissions } from "@/lib/use-permissions";
 import { Loading } from "@/components/ui/spinner";
-import { Plus, Archive, FolderKanban } from "lucide-react";
+import { Plus, Archive, FolderKanban, EyeOff } from "lucide-react";
 import { EmptyState } from "@/components/ui/empty-state";
 import {
   formatHours, progressPct, progressColorClass, PROJECT_STATUS_LABEL,
@@ -35,6 +35,8 @@ interface ProjectRow {
   created_at: string;
   goal_date: string | null;
   completion_success: boolean | null;
+  /** Versteckt (Migration 384): nur Admins, Projektleitung, Freigegebene, Mitglieder. */
+  versteckt: boolean;
   /** Storno/Ablehnung: Datum, Person, Begruendung (Tooltip am Status). */
   approved_at: string | null;
   decision_note: string | null;
@@ -73,7 +75,7 @@ export default function ProjektePage() {
       .select(`
         id, project_number, title, status, proposed_hours, budget_hours,
         assigned_to, created_at, goal_date, completion_success,
-        approved_at, decision_note,
+        approved_at, decision_note, versteckt,
         assignee:profiles!projects_assigned_to_fkey(full_name),
         approver:profiles!projects_approved_by_fkey(full_name)
       `)
@@ -315,6 +317,11 @@ function ProjectCard({ p }: { p: ProjectRow }) {
 
       {/* Titel */}
       <h3 className="text-sm font-semibold leading-snug line-clamp-2">
+        {p.versteckt && (
+          <span data-tooltip="Versteckt" className="relative z-[1] inline-flex align-[-2px] mr-1 text-muted-foreground">
+            <EyeOff className="h-3.5 w-3.5" />
+          </span>
+        )}
         {p.title}
       </h3>
 
