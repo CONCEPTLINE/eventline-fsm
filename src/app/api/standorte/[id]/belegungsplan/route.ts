@@ -1,66 +1,81 @@
 // GET /api/standorte/[id]/belegungsplan?start=ISO&end=ISO — interner
-// Belegungsplan eines Standorts (Recht locations:view, Admin immer).
+// Kalender eines Standorts (Recht locations:view, Admin immer). end ist
+// exklusiv; Zeitraum hoechstens KALENDER_ZEITRAUM_MAX_TAGE.
 //
-// Antwort { success, eintraege: KalenderEintrag[], darfEintragen }
-// (src/lib/standort-kalender.ts): alle nicht geloeschten, nicht stornierten
-// Auftraege am Standort — «anfrage», wenn aus einer Partner-Anfrage
-// entstanden, sonst «auftrag», Link /auftraege/<id> — plus die eigenen
-// Termine des Standorts (standort_termine). darfEintragen = Standort hat
-// den Kalender (partner_kalender) UND locations:edit.
+// Antwort { success, eintraege, uebernahmen, verfuegbarkeit, darfEintragen }
+// (KalenderAntwort, src/lib/standort-kalender.ts): alle nicht geloeschten,
+// nicht stornierten Auftraege am Standort — «anfrage», wenn aus einer
+// Partner-Anfrage entstanden, sonst «auftrag», Link /auftraege/<id> — plus
+// eigene Termine/Programm-Termine (standort_termine), aufgeloeste
+// Veranstaltungen (standort_serien), «EVENTLINE uebernimmt»
+// (standort_uebernahmen) und die Verfuegbarkeit mit vollen Namen und
+// Gruenden (src/lib/standort-verfuegbarkeit.ts). darfEintragen = Standort hat
+// den Kalender (partner_kalender) UND locations:edit. Auftraege mit
+// Vermietungs-Ablauf tragen `ablauf: { schritt, verborgen }` (nur hier, nie in
+// der Partner-Antwort).
 //
-// Auftraege, Termin-Zuteilungen und Standort-Termine laufen ueber den RLS-
-// Client des Nutzers: wer Auftraege nicht sehen darf (jobs_select), sieht
-// sie auch hier nicht. Nur Personen-Namen und die Partner-Konten des
-// Standorts (fuer die Regel «Partner-Anfrage») kommen vom Admin-Client.
+// Auftraege, Zuteilungen, Termine, Serien, Uebernahmen und die Einteilung
+// (standort_mitarbeiter) laufen ueber den RLS-Client des Nutzers. Nur
+// Personen-Namen, die Partner-Konten des Standorts (Regel «Partner-Anfrage»)
+// und die Grundlagen der Verfuegbarkeit (Abwesenheiten, Einsaetze) kommen vom
+// Admin-Client.
 
 import { NextRequest, NextResponse } from "next/server";
-import { requirePermission } from "@/lib/api-auth";
-import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { interneNamen } from "@/lib/partner-portal-server";
 import {
+  ablaufStandLaden,
   internKalenderEintraege,
   istIsoDatum,
   kalenderJobsLaden,
   kalenderSortieren,
   kalenderTermineLaden,
   kalenderZuteilungenLaden,
+  KALENDER_ZEITRAUM_MAX_TAGE,
+  serieAufloesen,
+  serienLaden,
   terminKalenderEintraege,
+  uebernahmenLaden,
+  zeitraumTage,
+  type KalenderAntwort,
 } from "@/lib/standort-kalender";
-import { isUuid } from "@/lib/search-escape";
+import { aktivePersonen, standortMitarbeiterIds, verfuegbarkeitBerechnen } from "@/lib/standort-verfuegbarkeit";
 import { logError } from "@/lib/log";
-
-const fehler = (error: string, status: number) => NextResponse.json({ success: false, error }, { status });
+import { internFehler, internKalenderGate } from "../kalender-gate";
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const auth = await requirePermission("locations:view");
-  if (auth.error) return auth.error;
   const { id: roh } = await params;
-  if (!isUuid(roh)) return fehler("Ungültige ID", 400);
-  const standortId = roh.toLowerCase();
-
   const start = req.nextUrl.searchParams.get("start");
   const end = req.nextUrl.searchParams.get("end");
+  const k = await internKalenderGate(roh, "locations:view");
+  if (k.antwort) return k.antwort;
+  const { supabase, standort } = k;
+  const standortId = standort.id;
+
   // start/end landen im .or()-Filter — nur echte ISO-Daten zulassen.
-  if (!istIsoDatum(start) || !istIsoDatum(end)) return fehler("start und end muessen ISO-Daten sein", 400);
+  if (!istIsoDatum(start) || !istIsoDatum(end)) return internFehler("start und end muessen ISO-Daten sein", 400);
+  const zr = zeitraumTage(start, end);
+  if (!zr) return internFehler(`Ungültiger Zeitraum (höchstens ${KALENDER_ZEITRAUM_MAX_TAGE} Tage)`, 400);
 
   try {
-    const supabase = await createClient();
     const admin = createAdminClient();
-    const [standortRes, rechtRes] = await Promise.all([
-      supabase.from("locations").select("id, partner_kalender").eq("id", standortId).maybeSingle(),
+    const [rechtRes, grundRes] = await Promise.all([
       supabase.rpc("has_permission", { perm: "locations:edit" }),
+      // Abwesenheitsgrund (Ferien/Krank …) nur fuer Berechtigte (Migration 379).
+      supabase.rpc("darf_abwesenheitsgrund_sehen"),
     ]);
-    if (standortRes.error) throw standortRes.error;
     if (rechtRes.error) throw rechtRes.error;
-    if (!standortRes.data) return fehler("Standort nicht gefunden", 404);
-    const kalender = (standortRes.data as { partner_kalender: boolean | null }).partner_kalender === true;
     const darfBearbeiten = rechtRes.data === true;
-    const darfEintragen = kalender && darfBearbeiten;
+    // Fehler = sicher: dann nur «abwesend».
+    const grundSichtbar = !grundRes.error && grundRes.data === true;
+    const darfEintragen = standort.partner_kalender && darfBearbeiten;
 
-    const [jobs, termine, partnerRes] = await Promise.all([
+    const [jobs, termine, serien, uebernahmen, mitarbeiterIds, partnerRes] = await Promise.all([
       kalenderJobsLaden(supabase, standortId, start, end),
       kalenderTermineLaden(supabase, standortId, start, end),
+      serienLaden(supabase, standortId, zr.vonTag, zr.bisTag),
+      uebernahmenLaden(supabase, standortId, zr.vonTag, zr.bisTag),
+      standortMitarbeiterIds(supabase, standortId),
       admin.from("profiles").select("id, partner_location_id").eq("role", "partner"),
     ]);
     if (partnerRes.error) throw partnerRes.error;
@@ -72,16 +87,28 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     };
 
     const sichtbar = jobs.filter((j) => j.status !== "storniert").map((j) => j.id);
-    const zuteilungen = await kalenderZuteilungenLaden(supabase, sichtbar);
-    const namen = await interneNamen(admin, zuteilungen.map((t) => t.assigned_to));
-
-    const eintraege = kalenderSortieren([
-      ...internKalenderEintraege(jobs, partnerTeam, zuteilungen, namen),
-      ...terminKalenderEintraege(termine, darfBearbeiten),
+    const [zuteilungen, personen, ablaeufe] = await Promise.all([
+      kalenderZuteilungenLaden(supabase, sichtbar),
+      aktivePersonen(admin, mitarbeiterIds),
+      ablaufStandLaden(supabase, sichtbar),
     ]);
-    return NextResponse.json({ success: true, eintraege, darfEintragen });
+    const [namen, verfuegbarkeit] = await Promise.all([
+      interneNamen(admin, zuteilungen.map((t) => t.assigned_to)),
+      verfuegbarkeitBerechnen(admin, standortId, personen, zr.vonTag, zr.bisTag, { partnersicht: false, grundSichtbar }),
+    ]);
+
+    const antwort: KalenderAntwort = {
+      eintraege: kalenderSortieren([
+        ...internKalenderEintraege(jobs, partnerTeam, zuteilungen, namen).map((e) => ({ ...e, ablauf: ablaeufe.get(e.id) ?? null })),
+        ...terminKalenderEintraege(termine, darfBearbeiten),
+        ...serien.flatMap((s) => serieAufloesen(s, zr.vonTag, zr.bisTag, darfBearbeiten)),
+      ]),
+      uebernahmen,
+      verfuegbarkeit,
+    };
+    return NextResponse.json({ success: true, ...antwort, darfEintragen });
   } catch (e) {
     logError("api.standorte.belegungsplan", e, { standortId });
-    return fehler("Belegungsplan konnte nicht geladen werden", 500);
+    return internFehler("Belegungsplan konnte nicht geladen werden", 500);
   }
 }

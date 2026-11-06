@@ -29,7 +29,7 @@ import { createClient } from "@/lib/supabase/client";
 import { tabelleAbonnieren } from "@/lib/realtime";
 import { JOB_STATUS } from "@/lib/constants";
 import type { JobStatus } from "@/types";
-import { CheckCircle, XCircle, Info, FileText, Upload, Loader2, Wrench, Wine } from "lucide-react";
+import { CheckCircle, XCircle, Info, FileText, Upload, Loader2, Wrench, Wine, ListChecks } from "lucide-react";
 import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
 import { localDateIso } from "@/lib/swiss-time";
@@ -72,6 +72,7 @@ import { DocsHistoryTab } from "@/components/auftrag/tabs/docs-history-tab";
 import { TechnikTab } from "@/components/auftrag/technik/technik-tab";
 import { CateringTab } from "@/components/auftrag/catering/catering-tab";
 import { useAuftragData } from "@/components/auftrag/tabs/use-auftrag-data";
+import { AblaufTab } from "@/components/auftrag/ablauf/ablauf-tab";
 
 export default function AuftragDetailPage() {
   // Weiche (Mobile-Overhaul): am Handy (< md) die Feldansicht ohne Tabs
@@ -108,6 +109,7 @@ function AuftragDetailDesktop() {
     setDocuments,
     notesText,
     setNotesText,
+    hatAblauf,
     loadAll,
   } = useAuftragData(jobId, { isAdmin, permsReady });
 
@@ -180,23 +182,33 @@ function AuftragDetailDesktop() {
   // Permission: wer NICHT auftraege:edit hat, ist ausfuehrende Rolle und
   // arbeitet primaer am Rapport. Vorher: hardcoded Rollen-Slugs — jetzt
   // permission-driven, damit neue Rollen ohne Code-Aenderung greifen.
+  //
+  // Auftraege MIT Ablauf (Zeile in auftrag_ablauf, Vermietung Etappe 2) haben
+  // nur drei Reiter: Ablauf · Rapport & Abschluss · Dokumente & Historie.
+  // Ungueltige ?tab= fallen dort auf «ablauf» zurueck. Ohne Ablauf bleibt
+  // alles wie bisher.
+  const mitAblauf = hatAblauf === true;
   const urlTab = searchParams.get("tab") as TabKey | null;
-  const isValidTab = urlTab === "uebersicht" || urlTab === "technik" || urlTab === "catering" || urlTab === "rapport" || urlTab === "dokumente";
+  const isValidTab = mitAblauf
+    ? urlTab === "ablauf" || urlTab === "rapport" || urlTab === "dokumente"
+    : urlTab === "uebersicht" || urlTab === "technik" || urlTab === "catering" || urlTab === "rapport" || urlTab === "dokumente";
   const canEditJob = can("auftraege:edit");
   const roleDefault: TabKey = useMemo(
-    () => (canEditJob ? "uebersicht" : "rapport"),
-    [canEditJob],
+    () => (canEditJob ? (mitAblauf ? "ablauf" : "uebersicht") : "rapport"),
+    [canEditJob, mitAblauf],
   );
   const activeTab: TabKey = isValidTab ? (urlTab as TabKey) : roleDefault;
 
   // Sobald die Rolle geladen ist und die URL noch keinen tab-Param hat,
   // den rollenbasierten Default reinschreiben — teilbar + reload-persistent.
+  // Erst wenn feststeht, ob der Auftrag einen Ablauf hat (sonst kurz der
+  // falsche Default in der URL).
   useEffect(() => {
-    if (!permsReady || isValidTab) return;
+    if (!permsReady || hatAblauf === null || isValidTab) return;
     const params = new URLSearchParams(searchParams.toString());
     params.set("tab", roleDefault);
     router.replace(`/auftraege/${jobId}?${params.toString()}`, { scroll: false });
-  }, [permsReady, isValidTab, roleDefault, jobId, router, searchParams]);
+  }, [permsReady, hatAblauf, isValidTab, roleDefault, jobId, router, searchParams]);
 
   function selectTab(next: TabKey) {
     const params = new URLSearchParams(searchParams.toString());
@@ -369,13 +381,19 @@ function AuftragDetailDesktop() {
   ];
   const availableActions = statusActions.filter((a) => a.from.includes(job.status));
 
-  const tabs: { key: TabKey; label: string; icon: React.ReactNode; badge?: number }[] = [
-    { key: "uebersicht", label: "Übersicht", icon: <Info className="h-4 w-4" /> },
-    { key: "technik", label: "Technik", icon: <Wrench className="h-4 w-4" />, badge: technikOffen > 0 ? technikOffen : undefined },
-    ...(isAdmin ? [{ key: "catering" as TabKey, label: "Catering", icon: <Wine className="h-4 w-4" /> }] : []),
-    { key: "rapport", label: "Rapport & Abschluss", icon: <FileText className="h-4 w-4" /> },
-    { key: "dokumente", label: "Dokumente & Historie", icon: <Upload className="h-4 w-4" /> },
-  ];
+  const tabs: { key: TabKey; label: string; icon: React.ReactNode; badge?: number }[] = mitAblauf
+    ? [
+        { key: "ablauf", label: "Ablauf", icon: <ListChecks className="h-4 w-4" /> },
+        { key: "rapport", label: "Rapport & Abschluss", icon: <FileText className="h-4 w-4" /> },
+        { key: "dokumente", label: "Dokumente & Historie", icon: <Upload className="h-4 w-4" /> },
+      ]
+    : [
+        { key: "uebersicht", label: "Übersicht", icon: <Info className="h-4 w-4" /> },
+        { key: "technik", label: "Technik", icon: <Wrench className="h-4 w-4" />, badge: technikOffen > 0 ? technikOffen : undefined },
+        ...(isAdmin ? [{ key: "catering" as TabKey, label: "Catering", icon: <Wine className="h-4 w-4" /> }] : []),
+        { key: "rapport", label: "Rapport & Abschluss", icon: <FileText className="h-4 w-4" /> },
+        { key: "dokumente", label: "Dokumente & Historie", icon: <Upload className="h-4 w-4" /> },
+      ];
 
   return (
     <div className="max-w-5xl mx-auto page-enter">
@@ -429,6 +447,20 @@ function AuftragDetailDesktop() {
 
       {/* Tab-Body: bei abgeschlossenen/stornierten Auftraegen visuell zurueckgenommen. */}
       <div className={nurLesen ? "opacity-80 grayscale" : undefined}>
+        {activeTab === "ablauf" && mitAblauf && (
+          <AblaufTab
+            jobId={jobId}
+            job={job}
+            canEdit={darfBearbeiten}
+            documents={documents}
+            notesText={notesText}
+            setNotesText={setNotesText}
+            canFinish={canFinish}
+            finishBlockReason={finishBlockReason}
+            onAbschliessen={() => updateStatus("abgeschlossen")}
+            onReload={loadAll}
+          />
+        )}
         {activeTab === "uebersicht" && (
           <OverviewTab
             jobId={jobId}

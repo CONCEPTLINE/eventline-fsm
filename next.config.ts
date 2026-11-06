@@ -114,6 +114,8 @@ const nextConfig: NextConfig = {
     "/api/hr/lohnausweis": ["src/lib/lohn/vorlagen/**/*"],
     "/api/hr/**": ["public/logo-gmbh-black.png"],
     "/api/cron/auto-lohnabrechnung": ["public/logo-gmbh-black.png"],
+    // Vermietungs-Ablauf: Vertragskopf (barakuba-Logo) + Mail-Anhänge (Infoblatt, Checkliste, Poller-Merkblatt).
+    "/api/jobs/\\[id\\]/ablauf/**": ["src/lib/ablauf/unterlagen/**/*.pdf"],
   },
   // Ablage (NAS) und Technik leben seit 24.10.2026 in Trust one — alte Lesezeichen und Mail-Links dorthin leiten.
   async redirects() {

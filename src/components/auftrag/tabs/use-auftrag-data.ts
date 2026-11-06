@@ -62,6 +62,10 @@ export function useAuftragData(
   // nur die Handy-Feldansicht aus (Cache-Stand bzw. «Erneut versuchen») —
   // der Desktop ignoriert ihn, dort bleibt alles wie bisher (kein Toast).
   const [fehler, setFehler] = useState<string | null>(null);
+  // Hat der Auftrag einen Ablauf (Zeile in auftrag_ablauf, Etappe 2
+  // Vermietung)? null = noch nicht geladen. Schaltet in der Detailseite die
+  // Reiter auf «Ablauf · Rapport & Abschluss · Dokumente & Historie» um.
+  const [hatAblauf, setHatAblauf] = useState<boolean | null>(null);
 
   // Notizen — State + Autosave (Debounce 800ms).
   const [notesText, setNotesText] = useState("");
@@ -75,7 +79,7 @@ export function useAuftragData(
   }, [notesText, savedText]);
 
   const loadAll = useCallback(async () => {
-    const [jobRes, apptRes, docRes, profRes, repRes, auditRes] = await Promise.all([
+    const [jobRes, apptRes, docRes, profRes, repRes, auditRes, ablaufRes] = await Promise.all([
       supabase
         .from("jobs")
         .select(
@@ -113,6 +117,8 @@ export function useAuftragData(
       isAdmin
         ? supabase.rpc("get_job_hours_audit", { p_job_id: id })
         : Promise.resolve({ data: null }),
+      // Schlanker Ablauf-Check: nur ob eine Zeile existiert (1:1 zu jobs).
+      supabase.from("auftrag_ablauf").select("job_id").eq("job_id", id).maybeSingle(),
     ]);
     if (jobRes.data) {
       setJob(jobRes.data as unknown as JobDetailWithRelations);
@@ -140,6 +146,11 @@ export function useAuftragData(
     if (profRes.data) setProfiles(profRes.data as Profile[]);
     if (repRes.data) setReports(repRes.data as unknown as ReportWithCreator[]);
     setAudit(isAdmin ? ((auditRes.data as AuditRow[] | null) ?? []) : []);
+    // Fehler beim ersten Laden (z. B. kein Leserecht) = kein Ablauf → Seite wie bisher.
+    // Fehler beim Nachladen (z. B. Netz kurz weg): bisherigen Wert behalten, sonst
+    // verschwände der Ablauf-Reiter samt ungespeicherter Eingaben.
+    if (!ablaufRes.error) setHatAblauf(!!ablaufRes.data);
+    else setHatAblauf((alt) => alt ?? false);
     // Erster Fehler der Kernabfragen (supabase-js wirft nicht — auch ein
     // Netzausfall kommt als error zurueck). Die Audit-RPC ist admin-only
     // Nebendaten und macht das Laden nicht zum Fehlschlag.
@@ -267,6 +278,7 @@ export function useAuftragData(
     reports,
     audit,
     fehler,
+    hatAblauf,
     setDocuments,
     notesText,
     setNotesText,

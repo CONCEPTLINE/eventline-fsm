@@ -1,67 +1,88 @@
 "use client";
 
 /**
- * Location-Detail, Tab «Belegungsplan» — derselbe Kalender wie im
- * Partnerportal (Termine des Partners, Partner-Anfragen, EVENTLINE-
- * Auftraege). Nur sichtbar an Standorten mit partner_kalender = true
- * (page.tsx). Ob Termine eingetragen/bearbeitet werden duerfen, sagt die
- * API (`darfEintragen`/`bearbeitbar`, Admin bzw. locations:edit);
- * archivierte Locations sind hier zusaetzlich nur lesbar.
+ * Location-Detail, Tab «Kalender» (URL-Key bleibt ?tab=belegungsplan) —
+ * derselbe Kalender wie im Partnerportal (eigene Eintraege des Partners,
+ * Partner-Anfragen, EVENTLINE-Auftraege, Uebernahme-Zeitraeume), dazu die
+ * Verfuegbarkeit EVENTLINE mit Namen und Gruenden. Nur sichtbar an
+ * Standorten mit partner_kalender = true (page.tsx). Ob eingetragen/
+ * bearbeitet werden darf, sagt die API (`darfEintragen`/`bearbeitbar`,
+ * Admin bzw. locations:edit); archivierte Locations sind hier zusaetzlich
+ * nur lesbar.
  */
 
-import { useCallback } from "react";
-import type { KalenderEintrag, TerminEingabeKalender } from "@/lib/standort-kalender";
-import {
-  BelegungsplanKalender,
-  type KalenderAktion,
-  type KalenderLadeErgebnis,
-  type KalenderSpeicherErgebnis,
-} from "@/components/belegungsplan/belegungsplan-kalender";
-
-type Antwort<T> = { ok: true; daten: T } | { ok: false; fehler: string | null };
-
-/** GET ohne `body`, sonst POST mit JSON; Antwortform { success, error, … }. */
-async function api<T>(url: string, body?: unknown): Promise<Antwort<T>> {
-  try {
-    const res = await fetch(
-      url,
-      body === undefined
-        ? undefined
-        : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) },
-    );
-    const json = (await res.json().catch(() => null)) as ({ success?: boolean; error?: string } & T) | null;
-    if (!res.ok || !json?.success) return { ok: false, fehler: json?.error ?? null };
-    return { ok: true, daten: json };
-  } catch {
-    return { ok: false, fehler: "Netzwerkfehler" };
-  }
-}
+import { useEffect, useMemo, useState } from "react";
+import { toast } from "sonner";
+import { createClient } from "@/lib/supabase/client";
+import { PrefetchLink } from "@/components/shell/prefetch-link";
+import { BelegungsplanKalender } from "@/components/belegungsplan/belegungsplan-kalender";
+import { kalenderApi, type KalenderApi } from "@/components/belegungsplan/kalender-api";
 
 export function BelegungsplanTab({ locationId, nurLesen }: { locationId: string; nurLesen: boolean }) {
-  const laden = useCallback(
-    async (start: string, end: string): Promise<KalenderLadeErgebnis> => {
-      const r = await api<{ eintraege: KalenderEintrag[]; darfEintragen: boolean }>(
-        `/api/standorte/${locationId}/belegungsplan?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`,
-      );
-      if (!r.ok) return { ok: false, fehler: r.fehler };
-      const eintraege = r.daten.eintraege ?? [];
-      return {
-        ok: true,
-        // Archiv = nur lesen (src/lib/archiv.ts): nichts eintragen/bearbeiten.
-        eintraege: nurLesen ? eintraege.map((e) => ({ ...e, bearbeitbar: false })) : eintraege,
-        darfEintragen: !nurLesen && r.daten.darfEintragen === true,
-      };
-    },
-    [locationId, nurLesen],
+  const api = useMemo<KalenderApi>(() => {
+    const basis = kalenderApi(`/api/standorte/${locationId}`);
+    if (!nurLesen) return basis;
+    // Archiv = nur lesen (src/lib/archiv.ts): nichts eintragen/bearbeiten.
+    return {
+      ...basis,
+      async laden(start, end) {
+        const r = await basis.laden(start, end);
+        if (!r.ok) return r;
+        return {
+          ok: true,
+          darfEintragen: false,
+          antwort: { ...r.antwort, eintraege: r.antwort.eintraege.map((e) => ({ ...e, bearbeitbar: false })) },
+        };
+      },
+    };
+  }, [locationId, nurLesen]);
+
+  // Wer bei dieser Location eingeteilt ist (standort_mitarbeiter) — fuer die
+  // Kopfzeile der Verfuegbarkeit. Bearbeitet wird in «Übersicht».
+  const [ortName, setOrtName] = useState<string | null>(null);
+  const [eingeteilt, setEingeteilt] = useState<string[] | null>(null);
+  useEffect(() => {
+    let ab = false;
+    (async () => {
+      try {
+        const supabase = createClient();
+        const [res, ort] = await Promise.all([
+          fetch(`/api/standorte/${locationId}/mitarbeiter`, { cache: "no-store" }),
+          supabase.from("locations").select("name").eq("id", locationId).maybeSingle(),
+        ]);
+        const json = await res.json().catch(() => null);
+        if (!res.ok || !Array.isArray(json?.profileIds)) throw new Error(json?.error ?? "laden");
+        const ids = json.profileIds as string[];
+        let namen: string[] = [];
+        if (ids.length > 0) {
+          const { data, error } = await supabase.from("profiles").select("full_name").in("id", ids).order("full_name");
+          if (error) throw error;
+          namen = ((data ?? []) as { full_name: string | null }[]).map((p) => p.full_name ?? "").filter(Boolean);
+        }
+        if (ab) return;
+        setOrtName((ort.data as { name: string | null } | null)?.name ?? null);
+        setEingeteilt(namen);
+      } catch (err) {
+        if (ab) return;
+        console.error("standort-kalender.eingeteilt", err);
+        toast.error("Eingeteilte Mitarbeiter konnten nicht geladen werden");
+      }
+    })();
+    return () => { ab = true; };
+  }, [locationId]);
+
+  const bei = ortName ? ` bei ${ortName}` : "";
+  const hinweis = eingeteilt === null ? null : (
+    <>
+      {eingeteilt.length > 0
+        ? `Eingeteilt${bei}: ${eingeteilt.join(", ")} · alle übrigen Tage: mindestens zwei Personen frei`
+        : `${ortName ? `Bei ${ortName}` : "Hier"} ist niemand eingeteilt — ohne Einteilung keine Angabe`}
+      {" · "}
+      <PrefetchLink href={`/standorte/${locationId}?tab=uebersicht`} className="underline underline-offset-2 text-foreground/70">
+        Einteilung ändern
+      </PrefetchLink>
+    </>
   );
 
-  const speichern = useCallback(
-    async (aktion: KalenderAktion, id?: string, eingabe?: TerminEingabeKalender): Promise<KalenderSpeicherErgebnis> => {
-      const r = await api<{ id?: string }>(`/api/standorte/${locationId}/kalender-termine`, { aktion, id, ...eingabe });
-      return r.ok ? { ok: true, id: r.daten.id } : { ok: false, fehler: r.fehler };
-    },
-    [locationId],
-  );
-
-  return <BelegungsplanKalender laden={laden} speichern={speichern} modus="intern" />;
+  return <BelegungsplanKalender api={api} modus="intern" ortName={ortName} einteilungHinweis={hinweis} />;
 }

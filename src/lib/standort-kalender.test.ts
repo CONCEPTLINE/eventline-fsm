@@ -9,6 +9,8 @@ import {
   terminKalenderEintraege,
   kalenderSortieren,
   terminAktionAusfuehren,
+  zeitenZuIso,
+  serieEingabePruefen,
   type KalenderJob,
 } from "@/lib/standort-kalender";
 
@@ -126,6 +128,7 @@ describe("partnerKalenderEintraege — ohne Kalender: fremde nur «belegt»", ()
       id: "eigen-1", art: "anfrage", titel: "Hochzeit", kunde: "Familie Meier", status: "offen",
       start: "2026-11-13T23:00:00+00:00", ende: null, ganztaegig: false, notiz: null,
       zugewiesen: ["Dario", "Leo"], link: "/partner/anfragen/eigen-1", bearbeitbar: false,
+      serieId: null, serienTag: null, wiederkehrend: false, quelleId: null, serie: null,
     });
   });
   it("fremde nur Zeitraum mit kuenstlicher ID — kein Titel, Status, Kunde", () => {
@@ -177,6 +180,7 @@ describe("terminKalenderEintraege + kalenderSortieren", () => {
       id: "t-1", art: "termin", titel: "Ruhetag", kunde: "Basil", status: null,
       start: "2026-11-01T23:00:00+00:00", ende: "2026-11-02T22:59:00+00:00", ganztaegig: true, notiz: null,
       zugewiesen: [], link: null, bearbeitbar: true,
+      serieId: null, serienTag: null, wiederkehrend: false, quelleId: null, serie: null,
     });
     expect(terminKalenderEintraege(termine, false).every((t) => !t.bearbeitbar)).toBe(true);
   });
@@ -190,12 +194,16 @@ describe("terminKalenderEintraege + kalenderSortieren", () => {
 });
 
 // Minimaler Supabase-Ersatz: zeichnet die Kette auf und liefert ein festes Ergebnis.
-function fakeDb(ergebnis: { data?: unknown; error?: unknown; count?: number | null }) {
+function fakeDb(
+  ergebnis: { data?: unknown; error?: unknown; count?: number | null },
+  zeile: { quelle: string | null; ausgeblendet: boolean } | null = { quelle: null, ausgeblendet: false },
+) {
   const aufrufe: [string, unknown[]][] = [];
   const kette: Record<string, unknown> = {};
   for (const m of ["from", "insert", "update", "delete", "eq", "select"]) {
     kette[m] = (...args: unknown[]) => { aufrufe.push([m, args]); return kette; };
   }
+  kette.maybeSingle = () => { aufrufe.push(["maybeSingle", []]); return Promise.resolve({ error: null, data: zeile }); };
   kette.single = () => { aufrufe.push(["single", []]); return Promise.resolve({ error: null, ...ergebnis }); };
   kette.then = (ok: (v: unknown) => unknown) => Promise.resolve({ error: null, ...ergebnis }).then(ok);
   return { db: kette as unknown as SupabaseClient, aufrufe };
@@ -221,7 +229,9 @@ describe("terminAktionAusfuehren", () => {
   it("aendern/loeschen nur im eigenen Standort, 0 Zeilen → 404", async () => {
     const { db, aufrufe } = fakeDb({ count: 0 });
     expect((await terminAktionAusfuehren(db, STANDORT, PARTNER, { aktion: "loeschen", id: TERMIN_ID })).status).toBe(404);
-    expect(aufrufe.filter(([m]) => m === "eq").map(([, a]) => a)).toEqual([["id", TERMIN_ID], ["location_id", STANDORT]]);
+    expect(aufrufe.filter(([m]) => m === "eq").map(([, a]) => a)).toEqual([
+      ["id", TERMIN_ID], ["location_id", STANDORT], ["id", TERMIN_ID], ["location_id", STANDORT],
+    ]);
     const { db: db2 } = fakeDb({ count: 1 });
     expect(await terminAktionAusfuehren(db2, STANDORT, PARTNER, { aktion: "aendern", id: TERMIN_ID, ...eingabe })).toEqual({ status: 200, body: { success: true } });
   });
@@ -229,5 +239,39 @@ describe("terminAktionAusfuehren", () => {
     const { db, aufrufe } = fakeDb({ count: 1 });
     expect(await terminAktionAusfuehren(db, STANDORT, PARTNER, { aktion: "aendern", id: TERMIN_ID, titel: "" })).toEqual({ status: 400, body: { success: false, error: "Titel fehlt" } });
     expect(aufrufe).toEqual([]);
+  });
+  it("nicht gefundener oder ausgeblendeter Termin → 404 ohne Aenderung", async () => {
+    const { db, aufrufe } = fakeDb({ count: 1 }, null);
+    expect((await terminAktionAusfuehren(db, STANDORT, PARTNER, { aktion: "loeschen", id: TERMIN_ID })).status).toBe(404);
+    expect(aufrufe.some(([m]) => m === "delete" || m === "update")).toBe(false);
+    const { db: db2 } = fakeDb({ count: 1 }, { quelle: "programmheft", ausgeblendet: true });
+    expect((await terminAktionAusfuehren(db2, STANDORT, PARTNER, { aktion: "aendern", id: TERMIN_ID, ...eingabe })).status).toBe(404);
+  });
+  it("Programm-Termin loeschen = ausblenden, aendern = programm_manuell", async () => {
+    const prog = { quelle: "programmheft", ausgeblendet: false };
+    const { db, aufrufe } = fakeDb({ count: 1 }, prog);
+    expect((await terminAktionAusfuehren(db, STANDORT, PARTNER, { aktion: "loeschen", id: TERMIN_ID })).status).toBe(200);
+    expect(aufrufe.some(([m]) => m === "delete")).toBe(false);
+    expect(aufrufe.find(([m]) => m === "update")?.[1][0]).toEqual({ ausgeblendet: true });
+    const { db: db2, aufrufe: a2 } = fakeDb({ count: 1 }, prog);
+    expect((await terminAktionAusfuehren(db2, STANDORT, PARTNER, { aktion: "aendern", id: TERMIN_ID, ...eingabe })).status).toBe(200);
+    expect(a2.find(([m]) => m === "update")?.[1][0]).toMatchObject({ titel: "Probe", programm_manuell: true });
+    const { db: db3, aufrufe: a3 } = fakeDb({ count: 1 });
+    await terminAktionAusfuehren(db3, STANDORT, PARTNER, { aktion: "aendern", id: TERMIN_ID, ...eingabe });
+    expect(a3.find(([m]) => m === "update")?.[1][0]).not.toHaveProperty("programm_manuell");
+  });
+});
+
+describe("Sommerzeit-Luecke (29.03.2026, 02:00–02:59 gibt es in Zuerich nicht)", () => {
+  it("zeitenZuIso verschiebt auf 03:00 statt null", () => {
+    expect(zeitenZuIso("2026-03-29", false, "02:30", null)).toEqual({ start: "2026-03-29T01:00:00.000Z", ende: null });
+    expect(zeitenZuIso("2026-03-28", false, "22:00", "02:15")?.ende).toBe("2026-03-29T01:00:00.000Z");
+    expect(zeitenZuIso("2026-03-29", false, "01:30", null)?.start).toBe("2026-03-29T00:30:00.000Z");
+  });
+  it("serieEingabePruefen prueft auch «bis» (Folgetag)", () => {
+    const basis = { titel: "Party", datum: "2026-03-28", von: "22:00" };
+    expect(serieEingabePruefen({ ...basis, bis: "02:30" }).ok).toBe(false);
+    expect(serieEingabePruefen({ ...basis, bis: "03:30" }).ok).toBe(true);
+    expect(serieEingabePruefen({ ...basis, datum: "2026-03-29", von: "02:30" }).ok).toBe(false);
   });
 });

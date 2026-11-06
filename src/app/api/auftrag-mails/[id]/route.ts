@@ -1,7 +1,10 @@
 // POST /api/auftrag-mails/[id] — eine wartende Auftrags-Mail erledigen.
 //   { aktion: "zuordnen", job_id }  → Text + Anhaenge in den Eingang des
 //                                     Auftrags, danach KI-Verarbeitung wie
-//                                     beim automatischen Ablegen
+//                                     beim automatischen Ablegen; hat der
+//                                     Auftrag einen Vermietungs-Ablauf, wirkt
+//                                     die Mail vorher darauf wie im Webhook
+//                                     (ablaufMailWirkung — Fehler nur geloggt)
 //   { aktion: "verwerfen" }         → Mail gehoert zu keinem Auftrag;
 //                                     Inhalt + Anhaenge werden geloescht
 // Recht auftraege:see-all (Admin immer). Doppelklick/zwei Admins
@@ -19,6 +22,7 @@ import {
   verarbeiteElemente,
   type WarteAnhang,
 } from "@/lib/auftrag-mail/server";
+import { ablaufMailWirkung } from "@/lib/ablauf/server";
 
 export const maxDuration = 300;
 
@@ -31,6 +35,7 @@ type Erledigt = {
   betreff: string | null;
   inhalt: string | null;
   anhaenge: WarteAnhang[] | null;
+  cc: string[] | null;
 };
 
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
@@ -47,7 +52,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   }
   const admin = createAdminClient();
   const jetzt = new Date().toISOString();
-  const spalten = "id, resend_email_id, absender, betreff, inhalt, anhaenge";
+  const spalten = "id, resend_email_id, absender, betreff, inhalt, anhaenge, cc";
   const schonErledigt = NextResponse.json({ success: false, error: "Diese Mail wurde inzwischen schon erledigt." }, { status: 409 });
 
   if (body.aktion === "verwerfen") {
@@ -106,10 +111,37 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     return NextResponse.json({ success: false, error: "Ablegen fehlgeschlagen — die Mail wartet weiter. Bitte nochmals versuchen." }, { status: 500 });
   }
 
+  // Fuer den Vermietungs-Ablauf (wie im Webhook: Text + Namen der echten Anhaenge, Empfaenger
+  // «An» sind nicht gespeichert). Vor dem Loeschen von Inhalt/Anhaengen festhalten.
+  const echteAnhaenge = (row.anhaenge ?? []).filter((a) => a.disposition !== "inline");
+  const ablaufMail = {
+    von: row.absender ?? "",
+    an: [] as string[],
+    cc: row.cc ?? [],
+    betreff: row.betreff ?? "",
+    text: row.inhalt ?? "",
+    anhangNamen: echteAnhaenge.map((a) => a.name || "anhang").slice(0, 20),
+  };
+
   await loescheWarteAnhaenge(admin, row.anhaenge ?? []);
   await admin.from("auftrag_mails").update({ inhalt: null, anhaenge: [] }).eq("id", id);
-  // KI-Verarbeitung nach der Antwort (kann Minuten dauern); was nicht mehr
-  // reinpasst, verarbeitet der Eingang-Tab beim naechsten Oeffnen.
-  after(() => verarbeiteElemente(admin, jobId, itemIds, Date.now()).then(() => undefined));
+  // Nach der Antwort (KI kann dauern): zuerst die Wirkung auf einen Vermietungs-Ablauf
+  // (ohne Ablauf passiert nichts; Fehler nur loggen — die Zuordnung steht schon), dann die
+  // KI-Verarbeitung des Eingangs; was nicht mehr reinpasst, verarbeitet der Eingang-Tab beim
+  // naechsten Oeffnen.
+  after(async () => {
+    try {
+      await ablaufMailWirkung(admin, {
+        jobId,
+        auftragMailId: id,
+        resendEmailId: row.resend_email_id,
+        mail: ablaufMail,
+        anhangAnzahl: echteAnhaenge.length,
+      });
+    } catch (e) {
+      logError("auftrag-mail.zuordnen.ablauf", e, { jobId });
+    }
+    await verarbeiteElemente(admin, jobId, itemIds, Date.now());
+  });
   return NextResponse.json({ success: true, job_number: (job as { job_number: number }).job_number });
 }

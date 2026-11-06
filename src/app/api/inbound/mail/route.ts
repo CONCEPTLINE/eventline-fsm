@@ -28,8 +28,10 @@ import { recipientsWithPermission } from "@/lib/notification-recipients";
 import { logError } from "@/lib/log";
 import { ordneMailZu, type Zuordnung } from "@/lib/auftrag-mail/ablauf";
 import { auftragsNummernAus, mailMerkmale } from "@/lib/auftrag-mail/verlauf";
+import { ablaufMailWirkung, neuerAuftragAusMail, verwerfeNeuenAblaufAuftrag } from "@/lib/ablauf/server";
 import {
   abgleich,
+  adressen,
   findeVerlauf,
   kiZuordnung,
   ladeAnhaenge,
@@ -67,6 +69,7 @@ const VIA_TEXT: Record<Zuordnung, string> = {
   nummer: "",
   verlauf: " · erkannt am Mailverlauf",
   ki: " · von der KI zugeordnet",
+  ablauf: " · neuer Auftrag aus der Mietanfrage angelegt",
 };
 
 /** Neue Adresse der Ablage (Trust flow, eigener Mail-Eingang seit 01.11.2026). */
@@ -172,6 +175,18 @@ export async function POST(req: NextRequest) {
   let anhaengeCache: MailAnhang[] | null = null;
   const anhaenge = async () => (anhaengeCache ??= await ladeAnhaenge(emailId, resendKey, mail));
   const empfaenger = () => recipientsWithPermission(admin, "auftraege:see-all");
+  // Vermietungs-Ablauf (docs/barakuba/VERTRAG-ABLAUF.md): Empfaenger + Anhang-Namen fuer die Einordnung.
+  const an = adressen(mail.to);
+  const cc = adressen(mail.cc);
+  const echteAnhaenge = (mail.attachments ?? []).filter((a) => a.content_disposition !== "inline");
+  const ablaufMail = {
+    von: absender,
+    an,
+    cc,
+    betreff: subject,
+    text,
+    anhangNamen: echteAnhaenge.map((a) => a.filename ?? "anhang").slice(0, 20),
+  };
 
   try {
     const erg = await ordneMailZu({
@@ -185,6 +200,7 @@ export async function POST(req: NextRequest) {
           message_id: merkmale.messageId,
           referenzen: merkmale.referenzen,
           konversation: merkmale.konversation,
+          cc: cc.length ? cc : null,
           empfangen_am: mail.created_at ?? new Date().toISOString(),
         };
         const { data, error } = await admin
@@ -277,6 +293,15 @@ export async function POST(req: NextRequest) {
         });
       },
       verarbeiten: (jobId, itemIds) => verarbeiteElemente(admin, jobId, itemIds, startZeit),
+      // Vermietungs-Ablauf — beide werfen nie; ohne Partner-Location/Ablauf keine KI, Verhalten wie bisher.
+      neuerAuftrag: (mailId) => neuerAuftragAusMail(admin, { auftragMailId: mailId, mail: ablaufMail, anhaenge }),
+      async verwerfeNeuenAuftrag(jobId) {
+        await verwerfeNeuenAblaufAuftrag(admin, jobId, "Ablegen gescheitert");
+      },
+      async nachZuordnung(jobId, mailId, via) {
+        if (via === "ablauf") return; // gerade aus dieser Mail angelegt
+        await ablaufMailWirkung(admin, { jobId, auftragMailId: mailId, resendEmailId: emailId, mail: ablaufMail, anhangAnzahl: echteAnhaenge.length });
+      },
     });
 
     if (erg.ergebnis === "doppelt") return NextResponse.json({ ok: true, duplicate: true });

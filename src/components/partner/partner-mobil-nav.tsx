@@ -28,7 +28,7 @@ import { NotificationsBell } from "@/components/layout/notifications-bell";
 /** Die drei Bereiche des Partnerportals — Desktop-Tabs und Handy-Leiste. */
 export const PARTNER_BEREICHE: { href: string; label: string; icon: LucideIcon }[] = [
   { href: "/partner/anfragen",      label: "Meine Anfragen", icon: FileText },
-  { href: "/partner/belegungsplan", label: "Belegungsplan",  icon: Calendar },
+  { href: "/partner/kalender",      label: "Kalender",       icon: Calendar },
   { href: "/partner/konto",         label: "Mein Konto",     icon: User },
 ];
 

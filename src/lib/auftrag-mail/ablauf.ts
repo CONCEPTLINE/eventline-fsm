@@ -8,13 +8,18 @@
 //  2. Verlauf (Header, sonst aussagekraeftiger Betreff) — bei Widerspruch
 //     NICHT raten → warten mit den Auftraegen des Verlaufs als Vorschlag
 //  3. KI, nur «eindeutig»
-//  4. sonst: Mail wartet (Inhalt + Anhaenge bleiben) mit Vorschlaegen
+//  4. Vermietungs-Ablauf (optional, src/lib/ablauf): neue Mietanfrage einer
+//     Partner-Location → neuer Auftrag (bzw. bestehender Ablauf-Auftrag des Tages)
+//  5. sonst: Mail wartet (Inhalt + Anhaenge bleiben) mit Vorschlaegen
 //     aus KI + deterministischem Abgleich, Mitteilung mit Link zur Liste.
+// Nach erfolgreicher Zuordnung wirkt die Mail auf einen vorhandenen Ablauf
+// (nachZuordnung, vor der Eingang-KI). Beide Ablauf-Bausteine duerfen den
+// Eingang nie scheitern lassen: Fehler werden verschluckt.
 
 import type { VerlaufErgebnis } from "./verlauf";
 import { vorschlaegeZusammen, type Vorschlag, type VorschlagKandidat } from "./vorschlaege";
 
-export type Zuordnung = "nummer" | "verlauf" | "ki";
+export type Zuordnung = "nummer" | "verlauf" | "ki" | "ablauf";
 
 export type AblaufBausteine = {
   /** Mail fuer diesen Lauf sperren (UNIQUE resend_email_id). null = schon
@@ -34,6 +39,14 @@ export type AblaufBausteine = {
   meldeAbgelegt(jobId: string, via: Zuordnung): Promise<void>;
   meldeWartet(vorschlaege: Vorschlag[]): Promise<void>;
   verarbeiten(jobId: string, itemIds: string[]): Promise<number>;
+  /** Kein Auftrag gefunden: Vermietungs-Ablauf darf einen anlegen (oder
+   *  den bestehenden Ablauf-Auftrag finden). null = wie bisher warten. */
+  neuerAuftrag?(mailId: string): Promise<{ jobId: string; via: Zuordnung } | null>;
+  /** Nach der Zuordnung, vor der Eingang-KI: Wirkung auf einen Ablauf. */
+  nachZuordnung?(jobId: string, mailId: string, via: Zuordnung): Promise<void>;
+  /** Ablegen in einen gerade aus dieser Mail angelegten Auftrag (via 'ablauf') gescheitert:
+   *  den neuen Auftrag wieder entfernen, damit die Wiederholung keinen Doppel-Auftrag erzeugt. */
+  verwerfeNeuenAuftrag?(jobId: string): Promise<void>;
 };
 
 export type AblaufErgebnis =
@@ -68,6 +81,13 @@ export async function ordneMailZu(b: AblaufBausteine): Promise<AblaufErgebnis> {
           }
           kiVorschlaege = ki.vorschlaege;
         }
+        if (!jobId && v.art !== "konflikt" && b.neuerAuftrag) {
+          const neu = await b.neuerAuftrag(sperre.id).catch(() => null);
+          if (neu) {
+            jobId = neu.jobId;
+            via = neu.via;
+          }
+        }
         if (!jobId) vorschlaege = vorschlaegeZusammen([verlaufVorschlaege, kiVorschlaege, b.abgleich(kandidaten)]);
       }
     }
@@ -79,9 +99,16 @@ export async function ordneMailZu(b: AblaufBausteine): Promise<AblaufErgebnis> {
       return { ergebnis: "wartet", vorschlaege: vorschlaege.length };
     }
 
-    const itemIds = await b.ablegen(jobId);
+    let itemIds: string[];
+    try {
+      itemIds = await b.ablegen(jobId);
+    } catch (e) {
+      if (via === "ablauf" && b.verwerfeNeuenAuftrag) await b.verwerfeNeuenAuftrag(jobId).catch(() => undefined);
+      throw e;
+    }
     await b.markiereZugeordnet(sperre.id, jobId, via);
     await b.meldeAbgelegt(jobId, via).catch(() => undefined);
+    if (b.nachZuordnung) await b.nachZuordnung(jobId, sperre.id, via).catch(() => undefined);
     const verarbeitet = await b.verarbeiten(jobId, itemIds);
     return { ergebnis: "zugeordnet", jobId, via, items: itemIds.length, verarbeitet };
   } catch (e) {

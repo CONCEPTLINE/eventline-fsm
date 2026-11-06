@@ -23,8 +23,9 @@
 
 import { alterWarnung } from "@/lib/lohn/hinweise";
 import { ferienPctNachAlter, fmtProzent } from "@/lib/lohn/kern/regeln";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { usePermissions } from "@/lib/use-permissions";
 import { todayLocalIso } from "@/lib/swiss-time";
 import type { Profile } from "@/types";
 import { Card, CardContent } from "@/components/ui/card";
@@ -33,8 +34,9 @@ import { Modal } from "@/components/ui/modal";
 import { EmptyState } from "@/components/ui/empty-state";
 import { useConfirm } from "@/components/ui/use-confirm";
 import { SearchableSelect } from "@/components/searchable-select";
-import { Plus, KeyRound, Pencil, UserX, UserCheck, Trash2, Mail, Users, Search } from "lucide-react";
+import { Plus, KeyRound, Pencil, UserX, UserCheck, Trash2, Mail, Users, Search, MapPin, Loader2 } from "lucide-react";
 import { DeleteUserConfirmModal } from "@/components/einstellungen/delete-user-confirm-modal";
+import { EntfernbarChip, HinzufuegenSelect } from "@/components/standort/zuteilung-chips";
 import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
 import { istIntern } from "@/lib/roles";
@@ -52,7 +54,17 @@ type EditState = {
    *  hier alle Team-Mitglieder auf einmal aus. Beim Save berechnet
    *  die API den Diff und setzt team_lead_id entsprechend. */
   team_member_ids: string[];
+  /** Locations, bei denen die Person eingeteilt ist (standort_mitarbeiter).
+   *  Zaehlt fuer die Verfuegbarkeit im Location-Kalender. */
+  location_ids: string[];
+  /** Geladener Stand beim Oeffnen — Vergleichsbasis fuers Speichern.
+   *  null = noch nicht (erfolgreich) geladen → Locations gesperrt, es wird
+   *  nie eine Liste gesendet (sonst loeschte ein PUT [] alle Zuteilungen). */
+  location_ids_vorher: string[] | null;
 } | null;
+/** Location fuer die Zuteilung — alle (auch archivierte) fuer die Namen,
+ *  zum Hinzufuegen nur aktive. */
+interface LocationOption { id: string; name: string; ort: string | null; waehlbar: boolean }
 /** Rolle inkl. scope (Migration 208) — brauchen wir um in der MA-Liste
  *  die Teamleiter-Kandidaten zu filtern (nur Rollen mit scope='team'). */
 interface RoleOption { slug: string; label: string; scope: "self" | "team" | "all" }
@@ -93,9 +105,62 @@ export function TeamTab() {
    *  null = Modal zu. */
   const [deletingUser, setDeletingUser] = useState<Profile | null>(null);
   const { confirm, ConfirmModalElement } = useConfirm();
+  /** Location-Zuteilung je Person (profile_id → location_ids). */
+  const [zuteilung, setZuteilung] = useState<Record<string, string[]>>({});
+  const [locations, setLocations] = useState<LocationOption[]>([]);
+  /** Ladezustand der Zuteilungen: bis «ok» ist die Location-Auswahl gesperrt. */
+  const [zuteilungStand, setZuteilungStand] = useState<"laedt" | "ok" | "fehler">("laedt");
+  // Location-Zuteilung schreibt nur ein Admin (PUT /api/personal/[id]/standorte).
+  const { role: meineRolle } = usePermissions();
+  const istAdmin = meineRolle === "admin";
+  /** Zuletzt erfolgreich gespeichertes Profil (id + Payload) — nach einem
+   *  Teilfehler (Profil ok, Locations nicht) patcht der zweite Klick das
+   *  unveraenderte Profil nicht nochmals, sondern nur die Locations. */
+  const profilGespeichert = useRef<{ id: string; payload: string; hinweis: string | null } | null>(null);
+
+  /** Zuteilungen + Locations separat laden — ein Fehler hier darf die
+   *  Mitarbeiter-Liste nicht blockieren. */
+  async function loadZuteilung() {
+    setZuteilungStand("laedt");
+    let zuRes: { data: unknown; error: unknown };
+    let locRes: { data: unknown; error: unknown };
+    try {
+      [zuRes, locRes] = await Promise.all([
+        supabase.from("standort_mitarbeiter").select("profile_id, location_id"),
+        supabase.from("locations").select("id, name, address_city, is_active, archived_at").order("name"),
+      ]);
+    } catch (err) {
+      zuRes = { error: err, data: null };
+      locRes = { error: null, data: null };
+    }
+    if (zuRes.error || locRes.error) {
+      console.error("team-tab.loadZuteilung", zuRes.error ?? locRes.error);
+      toast.error("Location-Zuteilungen konnten nicht geladen werden");
+      // Gesperrt lassen — nie «keine Locations» annehmen.
+      setZuteilungStand("fehler");
+      return;
+    }
+    const map: Record<string, string[]> = {};
+    for (const z of (zuRes.data ?? []) as { profile_id: string; location_id: string }[]) {
+      (map[z.profile_id] ??= []).push(z.location_id);
+    }
+    setZuteilung(map);
+    setZuteilungStand("ok");
+    // Dialog vor dem Laden geoeffnet? Dann jetzt den echten Stand einsetzen.
+    setEdit((e) => (e && e.location_ids_vorher === null ? { ...e, location_ids: map[e.id] ?? [], location_ids_vorher: map[e.id] ?? [] } : e));
+    setLocations(
+      ((locRes.data ?? []) as { id: string; name: string; address_city: string | null; is_active: boolean | null; archived_at: string | null }[])
+        .map((l) => ({ id: l.id, name: l.name, ort: l.address_city, waehlbar: l.is_active !== false && !l.archived_at })),
+    );
+  }
+
+  function locationName(id: string): string {
+    return locations.find((l) => l.id === id)?.name ?? "Unbekannte Location";
+  }
 
   async function load() {
     setLoading(true);
+    void loadZuteilung();
     try {
       const [profRes, rolesRes] = await Promise.all([
         supabase.rpc("get_all_profiles_admin"),
@@ -224,7 +289,10 @@ export function TeamTab() {
       birthdate: p.birthdate ?? "",
       team_lead_id: p.team_lead_id ?? "",
       team_member_ids: currentMembersOf(p.id),
+      location_ids: zuteilungStand === "ok" ? zuteilung[p.id] ?? [] : [],
+      location_ids_vorher: zuteilungStand === "ok" ? zuteilung[p.id] ?? [] : null,
     });
+    profilGespeichert.current = null;
     setMemberSearch("");
   }
 
@@ -250,17 +318,64 @@ export function TeamTab() {
       // Leer-String = "kein Teamleiter" -> NULL in DB.
       payload.team_lead_id = edit.team_lead_id ? edit.team_lead_id : null;
     }
-    const res = await fetch(`/api/admin/users/${edit.id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    const json = await res.json();
-    setSavingEdit(false);
-    if (!json.success) { TOAST.errorOr(json.error); return; }
+    // Profil nur patchen, wenn es nicht schon genau so gespeichert ist
+    // (zweiter Klick nach einem Teilfehler: nur noch die Locations).
+    const payloadText = JSON.stringify(payload);
+    const schon = profilGespeichert.current;
+    let hinweis: string | null = schon?.id === edit.id && schon.payload === payloadText ? schon.hinweis : null;
+    if (!(schon?.id === edit.id && schon.payload === payloadText)) {
+      let json: { success?: boolean; error?: string; hinweis?: string } | null = null;
+      try {
+        const res = await fetch(`/api/admin/users/${edit.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: payloadText,
+        });
+        json = await res.json().catch(() => null);
+      } catch {
+        json = null;
+      }
+      if (!json?.success) { setSavingEdit(false); TOAST.errorOr(json?.error); return; }
+      hinweis = json.hinweis ?? null;
+      profilGespeichert.current = { id: edit.id, payload: payloadText, hinweis };
+    }
     // Admin-Rolle/Lohnrecht wird nur beantragt (Vier Augen, Migration 361).
-    if (json.hinweis) toast.success(json.hinweis as string, { action: { label: "Freigaben", onClick: () => window.location.assign(rechteAntraegeHref()) } });
+    const hinweisZeigen = () => {
+      if (hinweis) toast.success(hinweis, { action: { label: "Freigaben", onClick: () => window.location.assign(rechteAntraegeHref()) } });
+    };
+
+    // Location-Zuteilung nur senden, wenn geladen (Vergleichsbasis vom
+    // Oeffnen) und geaendert (ganze Liste).
+    const vorher = edit.location_ids_vorher;
+    const locsGeaendert = istAdmin && vorher !== null
+      && (vorher.length !== edit.location_ids.length || vorher.some((l) => !edit.location_ids.includes(l)));
+    if (locsGeaendert) {
+      let locFehler: string | null = null;
+      try {
+        const locRes = await fetch(`/api/personal/${edit.id}/standorte`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ locationIds: edit.location_ids }),
+        });
+        const locJson = await locRes.json().catch(() => null);
+        if (!locRes.ok || locJson?.success === false) locFehler = locJson?.error || "Locations konnten nicht gespeichert werden";
+      } catch {
+        locFehler = "Locations konnten nicht gespeichert werden";
+      }
+      if (locFehler) {
+        // Teilfehler: Profil ist gespeichert — Liste auffrischen, Hinweis
+        // zeigen, Dialog offen lassen; «Speichern» versucht nur die Locations.
+        setSavingEdit(false);
+        toast.error(`Profil gespeichert, Locations nicht: ${locFehler}`);
+        hinweisZeigen();
+        load();
+        return;
+      }
+    }
+    setSavingEdit(false);
+    if (hinweis) hinweisZeigen();
     else toast.success("Gespeichert");
+    profilGespeichert.current = null;
     setEdit(null);
     load();
   }
@@ -333,11 +448,21 @@ export function TeamTab() {
                   {p.full_name.charAt(0).toUpperCase()}
                 </div>
                 <div className="flex-1 min-w-0 flex flex-col gap-0.5">
-                  <div className="flex items-center gap-2 min-w-0">
+                  <div className="flex items-center gap-2 min-w-0 flex-wrap">
                     <span className="font-medium text-sm truncate">{p.full_name}</span>
                     <span className={`inline-flex px-1.5 py-0 text-[10px] font-medium rounded-full shrink-0 ${p.role === "admin" ? "bg-purple-100 text-purple-700 dark:bg-purple-500/20 dark:text-purple-300" : "bg-gray-100 text-gray-700 dark:bg-gray-500/20 dark:text-gray-300"}`}>
                       {roleLabel(p.role)}
                     </span>
+                    {(zuteilung[p.id] ?? []).map((l) => (
+                      <span
+                        key={l}
+                        className="inline-flex items-center gap-1 px-1.5 py-0 text-[10px] font-medium rounded-full bg-teal-100 text-teal-700 dark:bg-teal-500/20 dark:text-teal-300 shrink-0"
+                        data-tooltip="Eingeteilt bei dieser Location"
+                      >
+                        <MapPin className="h-2.5 w-2.5" />
+                        {locationName(l)}
+                      </span>
+                    ))}
                     {/* Teamleiter-Badge: nur wenn team_lead_id gesetzt UND
                         wir den Namen aufloesen koennen (sonst zeigt der Badge
                         eine verwaiste UUID, was verwirrender waere als nichts). */}
@@ -729,6 +854,51 @@ export function TeamTab() {
               })()}
             </div>
 
+            {/* Locations, bei denen die Person eingeteilt ist (standort_mitarbeiter) — nur Admin. */}
+            {istAdmin && (
+            <div className="space-y-1">
+              <p className="text-[10px] text-muted-foreground/70 ml-1">
+                Locations{edit.location_ids_vorher !== null ? ` (${edit.location_ids.length})` : ""}
+              </p>
+              {edit.location_ids_vorher === null ? (
+                zuteilungStand === "fehler" ? (
+                  <p className="text-[11px] text-red-600 dark:text-red-400 ml-1">
+                    Locations konnten nicht geladen werden — Zuteilung gesperrt (Seite neu laden).
+                  </p>
+                ) : (
+                  <p className="text-[11px] text-muted-foreground ml-1 flex items-center gap-1.5">
+                    <Loader2 className="h-3 w-3 animate-spin" /> Locations werden geladen…
+                  </p>
+                )
+              ) : (<>
+              {edit.location_ids.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 pb-1">
+                  {edit.location_ids.map((l) => (
+                    <EntfernbarChip
+                      key={l}
+                      label={locationName(l)}
+                      icon={<MapPin className="h-3 w-3 text-muted-foreground" />}
+                      entfernenText={`${locationName(l)} entfernen`}
+                      disabled={savingEdit}
+                      onEntfernen={() => setEdit({ ...edit, location_ids: edit.location_ids.filter((x) => x !== l) })}
+                    />
+                  ))}
+                </div>
+              )}
+              <HinzufuegenSelect
+                items={locations
+                  .filter((l) => l.waehlbar && !edit.location_ids.includes(l.id))
+                  .map((l) => ({ id: l.id, label: l.name, sub: l.ort ?? undefined }))}
+                placeholder="Location hinzufügen…"
+                onWahl={(id) => setEdit({ ...edit, location_ids: [...edit.location_ids, id] })}
+              />
+              <p className="text-[10px] text-muted-foreground/70 ml-1">
+                Zählt für die Verfügbarkeit im Kalender der Location; nur Eingeteilte können Übergabeperson sein.
+              </p>
+              </>)}
+            </div>
+            )}
+
             <p className="text-[11px] text-muted-foreground italic pt-2 border-t border-foreground/10">
               Brutto-Stundenlohn + Abzüge werden unter <strong>HR › Lohn</strong> verwaltet.
             </p>
@@ -736,6 +906,7 @@ export function TeamTab() {
             <div className="flex gap-2 pt-1">
               <button type="button" onClick={() => setEdit(null)} disabled={savingEdit} className="kasten kasten-muted flex-1">Abbrechen</button>
               <button type="submit" disabled={savingEdit || !edit.full_name} className="kasten kasten-red flex-1">
+                {savingEdit && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
                 {savingEdit ? "Speichert…" : "Speichern"}
               </button>
             </div>

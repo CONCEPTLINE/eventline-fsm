@@ -1,49 +1,47 @@
-// POST /api/standorte/[id]/kalender-termine — eigene Termine eines Standorts
-// intern anlegen, aendern, loeschen (Recht locations:edit, Admin immer; nur
-// Standorte mit locations.partner_kalender). Gleiches Body-Format wie
-// /api/partner/kalender-termine:
+// /api/standorte/[id]/kalender-termine — eigene Termine (und Programm-Termine)
+// eines Standorts intern anlegen, aendern, loeschen (Recht locations:edit,
+// Admin immer; nur Standorte mit locations.partner_kalender). Gleiche Formen
+// wie /api/partner/kalender-termine:
 //
 // POST { aktion: "anlegen", titel, kunde, start, ende, ganztaegig, notiz } → { success, id }
 // POST { aktion: "aendern", id, titel, kunde, start, ende, ganztaegig, notiz }
 // POST { aktion: "loeschen", id }
+// gleichwertig: PATCH { id, titel, … } (aendern) · DELETE ?id= (loeschen)
 //
 // Schreibt ueber den RLS-Client des Nutzers (Policies standort_termine_*,
 // Migration 382) und nur Termine DIESES Standorts.
 
 import { NextRequest, NextResponse } from "next/server";
-import { requirePermission } from "@/lib/api-auth";
-import { createClient } from "@/lib/supabase/server";
-import { terminAktionAusfuehren } from "@/lib/standort-kalender";
-import { isUuid } from "@/lib/search-escape";
+import { terminAktionAusfuehren, terminBodyMitAktion } from "@/lib/standort-kalender";
 import { logError } from "@/lib/log";
+import { internFehler, internKalenderGate } from "../kalender-gate";
 
-const fehler = (error: string, status: number) => NextResponse.json({ success: false, error }, { status });
+type Ctx = { params: Promise<{ id: string }> };
 
-export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const auth = await requirePermission("locations:edit");
-  if (auth.error) return auth.error;
-  const { id: roh } = await params;
-  if (!isUuid(roh)) return fehler("Ungültige ID", 400);
-  const standortId = roh.toLowerCase();
-  const body = await req.json().catch(() => null);
-
+async function ausfuehren(ctx: Ctx, body: unknown) {
+  const { id: roh } = await ctx.params;
+  const k = await internKalenderGate(roh, "locations:edit");
+  if (k.antwort) return k.antwort;
   try {
-    const supabase = await createClient();
-    const { data: standort, error: sErr } = await supabase
-      .from("locations")
-      .select("partner_kalender")
-      .eq("id", standortId)
-      .maybeSingle();
-    if (sErr) throw sErr;
-    if (!standort) return fehler("Standort nicht gefunden", 404);
-    if ((standort as { partner_kalender: boolean | null }).partner_kalender !== true) {
-      return fehler("Der Kalender ist für diesen Standort nicht freigeschaltet", 403);
-    }
-
-    const ergebnis = await terminAktionAusfuehren(supabase, standortId, auth.user.id, body);
+    const ergebnis = await terminAktionAusfuehren(k.supabase, k.standort.id, k.userId, body);
     return NextResponse.json(ergebnis.body, { status: ergebnis.status });
   } catch (e) {
-    logError("api.standorte.kalender-termine", e, { standortId, aktion: (body as { aktion?: unknown } | null)?.aktion });
-    return fehler("Termin konnte nicht gespeichert werden", 500);
+    logError("api.standorte.kalender-termine", e, {
+      standortId: k.standort.id,
+      aktion: (body as { aktion?: unknown } | null)?.aktion,
+    });
+    return internFehler("Termin konnte nicht gespeichert werden", 500);
   }
+}
+
+export async function POST(req: NextRequest, ctx: Ctx) {
+  return ausfuehren(ctx, await req.json().catch(() => null));
+}
+
+export async function PATCH(req: NextRequest, ctx: Ctx) {
+  return ausfuehren(ctx, terminBodyMitAktion("aendern", await req.json().catch(() => null), null));
+}
+
+export async function DELETE(req: NextRequest, ctx: Ctx) {
+  return ausfuehren(ctx, terminBodyMitAktion("loeschen", null, req.nextUrl.searchParams.get("id")));
 }

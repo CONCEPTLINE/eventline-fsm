@@ -134,9 +134,11 @@ export const PERMISSION_MODULES: readonly PermissionModule[] = PERMISSION_MODULE
 const PARTNER_MODULE_DEFS = [
   // NEU: partner:*-Namespace
   { slug: "partner:anfragen",      label: "Partner-Anfragen",      paths: ["/partner/anfragen"],      actions: ["view", "create", "edit", "delete"] },
-  { slug: "partner:belegungsplan", label: "Partner-Belegungsplan", paths: ["/partner/belegungsplan"], actions: ["view", "edit"] },
+  // Slug bleibt «belegungsplan» (DB-Rechte); die Seite heisst «Kalender» (/partner/belegungsplan leitet um).
+  // paths der Partner-Module liest canAccessPath nicht (nur Doku/Anzeige).
+  { slug: "partner:belegungsplan", label: "Partner-Kalender",      paths: ["/partner/kalender"],      actions: ["view", "edit"] },
   // Auftraege = bestaetigte Anfragen (partner_anfrage -> offen). Partner
-  // sieht sie in «Meine Anfragen» und im Belegungsplan (eigene Anfragen).
+  // sieht sie in «Meine Anfragen» und im Kalender (eigene Anfragen).
   { slug: "partner:auftraege",     label: "Partner-Auftraege",     paths: [],                         actions: ["view"] },
   // LEGACY (Migration 099) — bleiben waehrend Grace-Period parseable.
   // Werden von Migration 216-Nachfolger entfernt.

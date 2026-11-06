@@ -115,3 +115,76 @@ describe("ordneMailZu", () => {
     expect((await ordneMailZu(nochmal)).ergebnis).toBe("wartet");
   });
 });
+
+describe("ordneMailZu — Vermietungs-Ablauf", () => {
+  it("keine Zuordnung → neuerAuftrag legt an, wird abgelegt + verarbeitet, keine Ablauf-Wirkung auf die eigene Mail", async () => {
+    const nach = vi.fn(async () => undefined);
+    const b = bausteine({ neuerAuftrag: vi.fn(async () => ({ jobId: "job-neu", via: "ablauf" as const })), nachZuordnung: nach });
+    const r = await ordneMailZu(b);
+    expect(r).toMatchObject({ ergebnis: "zugeordnet", jobId: "job-neu", via: "ablauf" });
+    expect(b.neuerAuftrag).toHaveBeenCalledWith("row-1");
+    expect(b.speichereWartend).not.toHaveBeenCalled();
+    expect(nach).toHaveBeenCalledWith("job-neu", "row-1", "ablauf");
+  });
+
+  it("neuerAuftrag wirft → Mail wartet wie bisher", async () => {
+    const b = bausteine({ neuerAuftrag: vi.fn(async () => { throw new Error("kaputt"); }) });
+    const r = await ordneMailZu(b);
+    expect(r).toEqual({ ergebnis: "wartet", vorschlaege: 0 });
+    expect(b.speichereWartend).toHaveBeenCalledTimes(1);
+  });
+
+  it("Verlauf-Konflikt → kein neuer Auftrag", async () => {
+    const b = bausteine({
+      verlauf: vi.fn(async () => ({ art: "konflikt" as const, jobIds: ["job-1", "job-2"] })),
+      neuerAuftrag: vi.fn(async () => ({ jobId: "job-neu", via: "ablauf" as const })),
+    });
+    await ordneMailZu(b);
+    expect(b.neuerAuftrag).not.toHaveBeenCalled();
+  });
+
+  it("Nummer gefunden → kein neuer Auftrag; nachZuordnung vor der Verarbeitung, Fehler darin verschluckt", async () => {
+    const reihenfolge: string[] = [];
+    const b = bausteine({
+      nummerJob: vi.fn(async () => "job-1"),
+      neuerAuftrag: vi.fn(async () => null),
+      nachZuordnung: vi.fn(async () => { reihenfolge.push("nach"); throw new Error("KI weg"); }),
+      verarbeiten: vi.fn(async () => { reihenfolge.push("verarbeiten"); return 2; }),
+    });
+    const r = await ordneMailZu(b);
+    expect(r).toMatchObject({ ergebnis: "zugeordnet", via: "nummer" });
+    expect(b.neuerAuftrag).not.toHaveBeenCalled();
+    expect(reihenfolge).toEqual(["nach", "verarbeiten"]);
+  });
+});
+
+describe("ordneMailZu — Ablegen scheitert (L12)", () => {
+  it("nach Neuanlage (via 'ablauf') wird der neue Auftrag verworfen, Sperre freigegeben, Fehler weitergereicht", async () => {
+    const verwerfe = vi.fn(async () => undefined);
+    const b = bausteine({
+      neuerAuftrag: vi.fn(async () => ({ jobId: "job-neu", via: "ablauf" as const })),
+      ablegen: vi.fn(async () => {
+        throw new Error("Eingang-Insert fehlgeschlagen");
+      }),
+      verwerfeNeuenAuftrag: verwerfe,
+    });
+    await expect(ordneMailZu(b)).rejects.toThrow("Eingang-Insert");
+    expect(verwerfe).toHaveBeenCalledWith("job-neu");
+    expect(b.freigeben).toHaveBeenCalledWith("row-1");
+    expect(b.markiereZugeordnet).not.toHaveBeenCalled();
+  });
+
+  it("bei bestehendem Auftrag (via 'ki') wird nichts verworfen", async () => {
+    const verwerfe = vi.fn(async () => undefined);
+    const b = bausteine({
+      neuerAuftrag: vi.fn(async () => ({ jobId: "job-alt", via: "ki" as const })),
+      ablegen: vi.fn(async () => {
+        throw new Error("kaputt");
+      }),
+      verwerfeNeuenAuftrag: verwerfe,
+    });
+    await expect(ordneMailZu(b)).rejects.toThrow("kaputt");
+    expect(verwerfe).not.toHaveBeenCalled();
+    expect(b.freigeben).toHaveBeenCalledWith("row-1");
+  });
+});

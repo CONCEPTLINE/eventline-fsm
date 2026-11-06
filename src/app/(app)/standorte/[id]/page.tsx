@@ -45,6 +45,7 @@ import { NotesDocsTab } from "@/components/standort/tabs/notes-docs-tab";
 import { SettingsTab } from "@/components/standort/tabs/settings-tab";
 import { BelegungsplanTab } from "@/components/standort/tabs/belegungsplan-tab";
 import { useStandortData } from "@/components/standort/tabs/use-standort-data";
+import { StandortMitarbeiterCard } from "@/components/standort/standort-mitarbeiter-card";
 
 export default function StandortDetailPage() {
   const { id } = useParams();
@@ -189,7 +190,7 @@ export default function StandortDetailPage() {
       { key: "notizen", label: "Notizen & Dokumente", icon: <StickyNote className="h-4 w-4 max-md:hidden" /> },
     ];
     if (kalenderAn) {
-      base.push({ key: "belegungsplan", label: "Belegungsplan", icon: <CalendarDays className="h-4 w-4 max-md:hidden" /> });
+      base.push({ key: "belegungsplan", label: "Kalender", icon: <CalendarDays className="h-4 w-4 max-md:hidden" /> });
     }
     if (isAdmin) {
       base.push({ key: "verrechnung", label: "Verrechnung & Kunde", icon: <Settings className="h-4 w-4 max-md:hidden" /> });
@@ -239,6 +240,17 @@ export default function StandortDetailPage() {
             onCreateContact={createContact}
             onDeleteContact={deleteContact}
           />
+          {/* Zugeteilte Mitarbeiter (standort_mitarbeiter) — bearbeiten darf,
+              wer Personal bearbeiten darf (heute Admin, wie Einstellungen ›
+              Mitarbeiter); archiviert = nur lesen. */}
+          <div className="mt-4">
+            <StandortMitarbeiterCard
+              locationId={locationId}
+              locationName={location.name}
+              canEdit={isAdmin && !nurLesen}
+              kalenderAn={kalenderAn}
+            />
+          </div>
         </>
       )}
       {activeTab === "notizen" && (

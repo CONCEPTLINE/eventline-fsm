@@ -27,6 +27,7 @@ export type ResendMail = {
   id?: string;
   from: string;
   to?: string[] | string;
+  cc?: string[] | string | null;
   subject: string | null;
   text: string | null;
   html: string | null;
@@ -39,6 +40,12 @@ export type MailAnhang = { name: string; mime: string; disposition: string | nul
 
 /** Gespeicherter Anhang einer wartenden Mail (auftrag_mails.anhaenge). */
 export type WarteAnhang = { name: string; mime: string; disposition: string | null; pfad: string; groesse: number };
+
+/** Empfaengerliste (to/cc) als Array: Resend liefert Array, String oder nichts. */
+export function adressen(v: string[] | string | null | undefined): string[] {
+  const roh = Array.isArray(v) ? v : typeof v === "string" ? v.split(",") : [];
+  return roh.map((a) => String(a).trim()).filter(Boolean).slice(0, 50);
+}
 
 /** Mailtext: Text bevorzugt, HTML grob enttaggt als Fallback. */
 export function mailText(mail: Pick<ResendMail, "text" | "html">): string {
