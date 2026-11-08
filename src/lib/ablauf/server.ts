@@ -261,14 +261,14 @@ function schrittTitel(n: SchrittNr): string {
   return SCHRITTE.find((s) => s.nr === n)?.titel ?? `Schritt ${n}`;
 }
 
-function folgenText(w: AblaufWirkung, jobStatus: GeplanteWirkung["jobStatus"]): string[] {
+function folgenText(w: AblaufWirkung): string[] {
   const teile: string[] = [];
   if (w.erledigt_plus?.length) {
     const max = Math.max(...w.erledigt_plus) as SchrittNr;
     teile.push(w.erledigt_plus.length > 1 ? `Schritte bis ${max} erledigt` : `Schritt ${max} erledigt`);
   }
   if (w.erledigt_minus?.length) teile.push(`Schritt ${Math.min(...w.erledigt_minus)} wieder offen`);
-  if (w.fixiert) teile.push(jobStatus === "offen" ? "Datum fixiert, im Location-Kalender eingetragen (für den Partner noch verborgen)" : "Datum fixiert");
+  if (w.fixiert) teile.push("Datum fixiert (für den Partner noch verborgen)");
   if (w.unterschrieben) teile.push("jetzt im Partner-Kalender sichtbar");
   if (w.unterschrieben_entfernt) teile.push("im Partner-Kalender wieder verborgen");
   return teile;
@@ -515,7 +515,7 @@ export async function schrittManuell(
     (z) => planeWirkung(z, aktion === "erledigt" ? { erledigen: schritt } : { zurueck: schritt }, jetzt),
     (g) => {
       const kopf = `Schritt ${schritt} «${schrittTitel(schritt)}» ${aktion === "erledigt" ? "manuell erledigt" : "manuell wieder geöffnet"}`;
-      const folgen = folgenText(g.wirkung, g.jobStatus).filter((t) => !t.startsWith("Schritt"));
+      const folgen = folgenText(g.wirkung).filter((t) => !t.startsWith("Schritt"));
       return { text: folgen.length ? `${kopf} → ${folgen.join(", ")}` : kopf, schritt: aktion === "erledigt" ? schritt : null, quelle: "manuell", erstelltVon: userId };
     },
   );
@@ -676,7 +676,7 @@ export async function ablaufMailWirkung(
         },
         (g) => {
           const kopf = art === "vertrag_an_kunde" ? `Vertrags-Mail mit ${opts.anhangAnzahl} Anhang/Anhängen erkannt` : MAIL_ART_TEXT[art];
-          const folgen = folgenText(g.wirkung, g.jobStatus);
+          const folgen = folgenText(g.wirkung);
           if (dokumentIds.length) folgen.push("Vertrag unter Dokumente › Vertrag abgelegt");
           return { text: folgen.length ? `${kopf} → ${folgen.join(", ")}` : kopf, schritt, quelle: "mail", auftragMailId };
         },
@@ -844,8 +844,8 @@ export async function neuerAuftragAusMail(
         title: jobTitel(voll),
         job_type: "location",
         location_id: locationId,
-        status: "anfrage",
-        request_step: 1,
+        // Normaler Auftrag («Bevorstehend»): 'anfrage' ist ein Alt-Status ohne Liste.
+        status: "offen",
         ...zeitraum,
         contact_person: voll.mieter || null,
         contact_phone: voll.telefon || null,

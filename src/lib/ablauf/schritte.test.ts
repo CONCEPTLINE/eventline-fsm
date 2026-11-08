@@ -47,7 +47,7 @@ describe("Schritte", () => {
     expect(schrittFuerMailArt("zusage_kunde", 0)).toBeNull();
   });
 
-  it("Bestätigung erledigt 1+2, fixiert, Auftrag → offen; Rückgängig stellt alles her", () => {
+  it("Bestätigung erledigt 1+2, fixiert, Alt-Anfrage → offen; Rückgängig lässt offen", () => {
     const g = planeWirkung(z(), { erledigen: 2 }, T);
     expect(g.neu.erledigt).toEqual([1, 2]);
     expect(g.neu.fixiert_am).toBe(T);
@@ -55,7 +55,7 @@ describe("Schritte", () => {
     const r = kehreUm({ ...z(), ...g.neu, jobStatus: "offen" }, g.wirkung);
     expect(r.neu.erledigt).toEqual([]);
     expect(r.neu.fixiert_am).toBeNull();
-    expect(r.jobStatus).toBe("anfrage");
+    expect(r.jobStatus).toBeNull(); // nie zurück auf den Alt-Status anfrage
   });
 
   it("Unterschrift setzt unterschrieben_am; zweite gleiche Mail ist leer", () => {
@@ -146,7 +146,7 @@ describe("Rückgängig normalisiert (M7)", () => {
     expect(r.jobStatus).toBeNull();
   });
 
-  it("b) Unterschrift (1–4) zurück nach «zurück auf 3» → nichts erledigt, nicht fixiert, unterschrieben weg, Anfrage", () => {
+  it("b) Unterschrift (1–4) zurück nach «zurück auf 3» → nichts erledigt, nicht fixiert, unterschrieben weg, Auftrag bleibt offen", () => {
     const g1 = planeWirkung(z(), { erledigen: 4 }, T); // plus [1..4], unterschrieben, fixiert
     const s1 = { ...z(), ...g1.neu, jobStatus: "offen" as const };
     const g2 = planeWirkung(s1, { zurueck: 3 }, T); // minus [3,4], unterschrieben_entfernt
@@ -154,7 +154,7 @@ describe("Rückgängig normalisiert (M7)", () => {
     expect(r.neu.erledigt).toEqual([]);
     expect(r.neu.fixiert_am).toBeNull();
     expect(r.neu.unterschrieben_am).toBeNull();
-    expect(r.jobStatus).toBe("anfrage");
+    expect(r.jobStatus).toBeNull(); // nie zurück auf den Alt-Status anfrage
   });
 
   it("Lücke wird geschlossen; Unterschrift bleibt, solange Schritt 4 erledigt ist", () => {
@@ -175,7 +175,7 @@ describe("Rückgängig normalisiert (M7)", () => {
     expect(kehreUm(s, g.wirkung, { fixiertDurchAndere: true }).neu.fixiert_am).toBe(T);
     const r = kehreUm(s, g.wirkung);
     expect(r.neu.fixiert_am).toBeNull();
-    expect(r.jobStatus).toBe("anfrage");
+    expect(r.jobStatus).toBeNull(); // nie zurück auf den Alt-Status anfrage
   });
 
   it("War der Auftrag vor der Fixierung schon offen, bleibt er offen", () => {

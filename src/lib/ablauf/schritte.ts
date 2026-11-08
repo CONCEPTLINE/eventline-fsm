@@ -579,7 +579,7 @@ export function planeWirkung(z: AblaufZustand, p: WirkungsPlan, jetzt: string): 
  *  - fixiert_am bleibt, solange ein Schritt ≥ 2 erledigt ist oder ein anderes, noch wirksames
  *    Ereignis das Datum fixiert hat (`fixiertDurchAndere`),
  *  - unterschrieben_am fällt nur weg, wenn Schritt 4 nicht mehr erledigt ist,
- *  - Auftragsstatus passend: fixiert → 'offen', sonst 'anfrage' (nur zwischen diesen beiden).
+ *  - Auftragsstatus: nie zurück auf den Alt-Status «anfrage» (Ablauf-Aufträge sind «offen»).
  */
 export function kehreUm(
   z: AblaufZustand,
@@ -598,15 +598,11 @@ export function kehreUm(
   if (w.unterschrieben_entfernt && erledigt.includes(4)) unterschrieben_am = unterschrieben_am ?? w.unterschrieben_entfernt;
   if (w.felder_neu) ({ felder, quelle } = felderZuruecknehmen(felder, quelle, w));
 
-  // Status nur nachführen, wenn die Wirkung Schritte/Fixierung betraf (reine Feld-Rücknahme lässt ihn).
-  let jobStatus: "offen" | "anfrage" | null = null;
+  // Ablauf-Aufträge sind normale Aufträge mit Status 'offen' (Leo 07.11.: 'anfrage' ist ein
+  // Alt-Status und erscheint in keiner Liste). Rückgängig setzt deshalb NIE zurück auf
+  // 'anfrage'; nur ein Alt-Datensatz mit 'anfrage' wird beim Fixieren 'offen'.
   const betrifftStatus = !!(w.fixiert || w.erledigt_plus?.length || w.erledigt_minus?.length);
-  if (betrifftStatus && (z.jobStatus === "offen" || z.jobStatus === "anfrage")) {
-    const soll = fixiert_am ? "offen" : "anfrage";
-    // War der Auftrag schon vor der Fixierung 'offen' (nicht aus einer Anfrage), bleibt er es.
-    const warNieAnfrage = soll === "anfrage" && !!w.fixiert && w.fixiert.status_vorher !== "anfrage";
-    if (soll !== z.jobStatus && !warNieAnfrage) jobStatus = soll;
-  }
+  const jobStatus: "offen" | null = betrifftStatus && z.jobStatus === "anfrage" && fixiert_am ? "offen" : null;
   return { neu: { erledigt, fixiert_am, unterschrieben_am, felder, quelle }, jobStatus };
 }
 
