@@ -6,7 +6,13 @@ export interface VertriebDokument {
   uploaded_at: string;
 }
 
-/** Ein Veranstaltungsraum, den wir anschreiben wollen (Tabelle vertrieb_raeume). */
+/** Stufe eines Hauses in der Pipeline (Check-Constraint in Migration 387). */
+export type HausStufe =
+  | "recherche" | "bedarf" | "anruf" | "angeschrieben" | "gespraech"
+  | "pilot" | "partner" | "absage" | "pause";
+
+/** Ein Haus (Location), das wir als Partner gewinnen wollen (Tabelle
+ *  vertrieb_raeume — der Name stammt aus der ersten Fassung «Räume»). */
 export interface VertriebRaum {
   id: string;
   name: string;
@@ -21,8 +27,60 @@ export interface VertriebRaum {
   datum: string | null;
   aufgabe: string | null;
   dokumente: VertriebDokument[];
+  stufe: HausStufe;
+  /** «Basel-Stadt», «Baselland», «Fricktal», «Ring 2», «Solothurn Nord» … */
+  gebiet: string | null;
+  prio: "A" | "B";
+  /** Gruppe/Marke, z. B. «Groupe Oniro» oder «Kulturhaus · KULTURLINE». */
+  gruppe: string | null;
+  bedarf: string | null;
+  /** Quelle des Bedarfs (URL oder Beschreibung). */
+  bedarf_beleg: string | null;
+  bedarf_belegt: boolean;
   created_at: string;
   updated_at: string;
+}
+
+/** Art eines Eintrags im Verlauf eines Hauses. */
+export type HausVerlaufArt = "mail" | "anruf" | "antwort" | "notiz" | "stufe";
+
+/** Ein Eintrag im Verlauf eines Hauses (Tabelle vertrieb_haus_verlauf). */
+export interface HausVerlauf {
+  id: string;
+  haus_id: string;
+  /** Date-Only (YYYY-MM-DD, Zurich-Tag). */
+  datum: string;
+  art: HausVerlaufArt;
+  titel: string;
+  text: string | null;
+  ton: "rot" | "amber" | "gruen" | "neutral" | null;
+  created_at: string;
+}
+
+export type WochenpaketStatus = "offen" | "freigegeben" | "gestrichen" | "eingeplant" | "gesendet";
+
+/** Eine Mail des Wochenpakets (Tabelle vertrieb_wochenpaket_mails). */
+export interface WochenpaketMail {
+  id: string;
+  kw: string;
+  haus_id: string | null;
+  an: string;
+  betreff: string;
+  text: string;
+  anhang_name: string | null;
+  anhang_bucket_pfad: string | null;
+  versand_ab: string | null;
+  kundenblatt: {
+    haus?: string;
+    bedarf?: string;
+    aufhaenger?: string;
+    beleg_url?: string;
+    anrede_hinweis?: string;
+  };
+  pruefungen: { text: string; ok: boolean }[];
+  status: WochenpaketStatus;
+  freigegeben_am: string | null;
+  eingeplant_am: string | null;
 }
 
 /** Status eines Kampagnen-Kontakts (Check-Constraint in Migration 365). */
