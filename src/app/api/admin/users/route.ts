@@ -5,11 +5,10 @@
 // ein Passwort setzt. Der Reset-Link landet auf /passwort-reset.
 
 import { alterWarnung } from "@/lib/lohn/hinweise";
-import { aendereLohndaten } from "@/lib/lohn/aenderungen";
 import { NextResponse } from "next/server";
 import { randomUUID } from "node:crypto";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { requireAdmin, pruefeVertrautesGeraet } from "@/lib/api-auth";
+import { requireAdmin } from "@/lib/api-auth";
 import { rolleOeffnetLohn } from "@/lib/lohn/rechte-antraege";
 import { appUrl } from "@/lib/app-url";
 import { logError } from "@/lib/log";
@@ -40,21 +39,10 @@ export async function POST(request: Request) {
   const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
   const full_name = typeof body.full_name === "string" ? body.full_name.trim() : "";
   const requestedRole = typeof body.role === "string" ? body.role : "techniker";
-  // Geburtsdatum optional (YYYY-MM-DD). Wird fuer Ferienanteil-Auto-
-  // Erkennung gebraucht (<20 Jahre -> 10.64% statt 8.33%).
+  // Geburtsdatum optional (YYYY-MM-DD) — Altershinweis (Anstellung ab 18).
   const birthdate = typeof body.birthdate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(body.birthdate)
     ? body.birthdate
     : null;
-
-  // Optional: Brutto-Stundenlohn. Wenn gesetzt, wird beim User-Create
-  // auch eine employee_compensation-Zeile mit uses_standard_lohn=true
-  // angelegt. So ist der MA sofort vollstaendig konfiguriert.
-  const hourly_wage_chf: number | null = (() => {
-    const v = body.hourly_wage_chf;
-    if (v == null) return null;
-    const n = typeof v === "number" ? v : Number(v);
-    return Number.isFinite(n) && n >= 0 && n < 10000 ? n : null;
-  })();
 
   // Optional: Teamleiter (profiles.team_lead_id). Wird direkt nach dem
   // Anlegen gesetzt — so ist der neue MA sofort einem Teamleiter
@@ -69,16 +57,6 @@ export async function POST(request: Request) {
   }
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     return NextResponse.json({ success: false, error: "Ungültige Email-Adresse" }, { status: 400 });
-  }
-
-  // Stundenlohn = Lohndaten: wie ueberall nur mit Lohnrecht UND vertrautem
-  // Geraet (Lohn-Umbau Phase 1). Admins haben das Lohnrecht; ohne vertrautes
-  // Geraet wird VOR dem Anlegen abgebrochen (keine halben Ergebnisse).
-  if (hourly_wage_chf != null && (await pruefeVertrautesGeraet(auth.user.id)) !== "vertraut") {
-    return NextResponse.json({
-      success: false,
-      error: "Stundenlohn nur auf einem vertrauten Gerät erfassen — Feld leer lassen und den Lohn später unter Lohn › Lohnverwaltung › Mitarbeiter-Lohn eintragen.",
-    }, { status: 403 });
   }
 
   const admin = createAdminClient();
@@ -136,31 +114,6 @@ export async function POST(request: Request) {
     }
   }
 
-  // Optional: Comp-Zeile mit uses_standard_lohn=true anlegen wenn Brutto
-  // angegeben wurde -- so ist der MA sofort vollstaendig konfiguriert.
-  let lohn_warning: string | undefined;
-  if (hourly_wage_chf != null) {
-    const today = todayLocalIso();
-    // Über die Lohn-Änderungsstelle (Phase 2): Protokoll mit Akteur, gleiche Regeln wie der Lohn-Editor.
-    let compErr: { message: string } | null = null;
-    try {
-      const r = await aendereLohndaten(admin, {
-        operationen: [{ op: "insert", tabelle: "employee_compensation", werte: { profile_id: created.userId, hourly_wage_chf, uses_standard_lohn: true, effective_from: today, created_by: auth.user.id } }],
-        bereich: "lohnzeile", profileId: created.userId, zielName: full_name,
-        beschreibung: `Erste Lohnzeile ab ${today}`, begruendung: null, akteurId: auth.user.id, akteurName: null,
-      });
-      if (r.modus !== "direkt") compErr = { message: "Lohnzeile betrifft abgerechnete Monate" };
-    } catch (e) {
-      compErr = { message: e instanceof Error ? e.message : String(e) };
-    }
-    if (compErr) {
-      // Kein Abbruch — User ist bereits angelegt. Aber MELDEN (nicht nur
-      // loggen): die UI zeigt die Warnung, der Lohn wird nachgetragen.
-      logError("admin.users.create.comp", compErr, { userId: created.userId });
-      lohn_warning = `Benutzer angelegt, aber Stundenlohn NICHT gespeichert: ${compErr.message}`;
-    }
-  }
-
   // Setup-Mail mit Reset-Link via Resend — Supabase's Default-Mailer
   // ist unzuverlaessig (Rate-Limit, Spam-Filter). Wir generieren den
   // Recovery-Link via Auth-Admin-API und schicken die Mail dann selbst
@@ -171,7 +124,6 @@ export async function POST(request: Request) {
     success: true,
     user_id: created.userId,
     mail_warning: mail.success ? undefined : mail.error,
-    lohn_warning,
     // Entscheid 29.10.2026: Anstellung nur ab 18 — Warnung, kein Verbot.
     alter_warning: alterWarnung(birthdate, todayLocalIso()) ?? undefined,
   });

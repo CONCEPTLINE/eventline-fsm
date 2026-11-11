@@ -1,25 +1,23 @@
-// Änderungen an Lohndaten (Lohnzeilen, Firmensätze, Anstellungen) — Phase 2.
+// Änderungen an Stempeln (time_entries) gesperrter Monate.
 //
 // Jede Änderung läuft über die DB-Funktion lohn_aenderung_direkt (alles oder
 // nichts, Protokoll alt/neu/wer per Trigger, Migration 364). Betrifft sie
 // abgerechnete (gesperrte) Monate, bricht der Sperr-Trigger ab — dann stellt
 // der Server einen ANTRAG mit Begründung, den eine zweite Person (anderer
 // Admin oder die Vertretung) auf einem vertrauten Gerät innert 24 h bestätigt
-// (gleiches Muster wie rechte_antraege). Nach der Bestätigung rechnet der
-// Kern die betroffenen Monate desselben Jahres neu und schlägt je
-// abweichendem Monat eine Korrekturfassung vor (lohn_korrektur_vorschlaege).
+// (gleiches Muster wie rechte_antraege). Trust flow sieht die Änderung über
+// /api/flow/stempel (nachtraeglich_geaendert). Lohnzeilen, Firmensätze,
+// Anstellungen und Zusatzposten führt seit November 2026 Trust flow
+// (Lohn-Abbau 11.11.2026, Migration 389).
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { notifySystem } from "@/lib/notification-service";
 import { recipientsWithPermission } from "@/lib/notification-recipients";
 import { logError } from "@/lib/log";
-import { ladeAlleSeiten, monatKey, rechneMonate } from "./daten";
-import { LOHN_RECHT, ladeLohnEinstellungen, nachLaufBis } from "./zugriff";
+import { LOHN_RECHT } from "./zugriff";
 import { rechteAntraegeHref } from "@/lib/antraege-links";
 
-// Phase 4 (Migration 367): auch Stempel (time_entries) und Zusatzposten —
-// Stempel abgerechneter Monate und Zusatzposten gesperrter Lohnmonate nur per Antrag.
-export type LohnTabelle = "employee_compensation" | "payroll_defaults" | "lohn_anstellungen" | "time_entries" | "lohn_zusatzposten";
+export type LohnTabelle = "time_entries";
 
 export interface Operation {
   op: "insert" | "update" | "delete";
@@ -28,7 +26,7 @@ export interface Operation {
   werte?: Record<string, unknown>;
 }
 
-export type Bereich = "lohnzeile" | "firmensaetze" | "anstellung" | "stempel" | "zusatzposten";
+export type Bereich = "stempel";
 
 export type AenderungsErgebnis =
   | { modus: "direkt"; ids: (string | null)[] }
@@ -39,15 +37,11 @@ export type AenderungsErgebnis =
 const SPERRE = /nur per Antrag/;
 
 const BEREICH_TEXT: Record<Bereich, string> = {
-  lohnzeile: "Lohnzeile",
-  firmensaetze: "Firmensätze",
-  anstellung: "Anstellung",
   stempel: "Stempel",
-  zusatzposten: "Zusatzposten",
 };
 
 export const ANTRAG_HINWEIS_LOHN =
-  "Die Änderung betrifft abgerechnete Monate — beantragt. Sie wird wirksam, wenn eine zweite Person (anderer Admin oder Vertretung) innert 24 h auf einem vertrauten Gerät bestätigt. Danach schlägt das System Korrekturfassungen vor.";
+  "Die Änderung betrifft abgerechnete Monate — beantragt. Sie wird wirksam, wenn eine zweite Person (anderer Admin oder Vertretung) innert 24 h auf einem vertrauten Gerät bestätigt.";
 
 function datumAusMeldung(m: string): string | null {
   const t = /\(ab (\d{2})\.(\d{2})\.(\d{4})\)/.exec(m);
@@ -145,7 +139,7 @@ export function lohnHinderungsgrund(
   if (Date.parse(a.gueltig_bis) <= Date.now()) return "Abgelaufen (älter als 24 h) — bitte neu beantragen.";
   if (ansichtAls) return "In «Ansicht als» ist keine Bestätigung möglich.";
   if (a.beantragt_von === ich) return "Eigener Antrag — bestätigt eine zweite Person.";
-  if (a.profile_id === ich) return "Den eigenen Lohn bestätigt eine zweite Person.";
+  if (a.profile_id === ich) return "Eigene Stempel bestätigt eine zweite Person.";
   return null;
 }
 
@@ -159,25 +153,16 @@ export async function ladeAntraege(admin: SupabaseClient): Promise<AntragZeile[]
   return (data ?? []) as AntragZeile[];
 }
 
-/** Antrag bestätigen (DB prüft Vier Augen), danach Korrektur-Vorschläge. */
+/** Antrag bestätigen (DB prüft Vier Augen und führt die Änderung aus). */
 export async function bestaetigeAntrag(
   admin: SupabaseClient,
   id: string,
   bestaetiger: { id: string; name: string | null },
-): Promise<{ vorschlaege: number; fehler: string[] }> {
-  const { data, error } = await admin.rpc("lohn_aenderung_ausfuehren", {
+): Promise<void> {
+  const { error } = await admin.rpc("lohn_aenderung_ausfuehren", {
     p_id: id, p_bestaetiger: bestaetiger.id, p_bestaetiger_name: bestaetiger.name, p_notweg_grund: null,
   });
   if (error) throw new Error(error.message);
-  const r = data as { bereich: Bereich; profile_id: string | null; betrifft_ab: string | null };
-  const ab = r.betrifft_ab ?? `${new Date().getFullYear()}-01-01`;
-  return erstelleKorrekturVorschlaege(admin, {
-    jahr: Number(ab.slice(0, 4)),
-    profileIds: r.profile_id ? [r.profile_id] : null,
-    abDatum: ab,
-    nachAuszahlung: r.bereich === "firmensaetze",
-    antragId: id,
-  });
 }
 
 export async function lehneAntragAb(admin: SupabaseClient, id: string, actor: { id: string; name: string | null }, grund: string | null) {
@@ -189,90 +174,4 @@ export async function lehneAntragAb(admin: SupabaseClient, id: string, actor: { 
     .select("id");
   if (error) throw new Error(error.message);
   if (!data || data.length !== 1) throw new Error("Antrag ist nicht mehr offen");
-}
-
-interface GueltigeFassung {
-  id: string;
-  profile_id: string;
-  jahr: number;
-  monat: number;
-  brutto: number | string;
-  netto: number | string;
-  /** Netto + Spesen (Phase 4); null = Fassung vor Phase 4 (= Netto). */
-  auszahlungsbetrag: number | string | null;
-  auszahlungsdatum: string;
-  orig: string | null;
-}
-
-/**
- * Rechnet die Monate eines Jahres mit gültiger Fassung neu (Kern, Sätze nach
- * der ursprünglichen Auszahlung) und schlägt je abweichendem Monat eine
- * Korrekturfassung vor. Ein offener Vorschlag je Person/Monat wird
- * aktualisiert. Gibt Anzahl Vorschläge und Kern-Fehler zurück.
- * Abweichung = Brutto, Netto ODER Auszahlungsbetrag (Netto + Spesen, Phase 4)
- * anders; «differenz» = was die Korrekturfassung ausbezahlt (bzw. zurückfordert).
- *   - abDatum: nur Monate, die dieses Datum berühren oder später liegen
- *   - nachAuszahlung: Firmensätze — Monate mit ursprünglicher Auszahlung ab abDatum
- */
-export async function erstelleKorrekturVorschlaege(
-  admin: SupabaseClient,
-  a: { jahr: number; profileIds: string[] | null; abDatum?: string; nachAuszahlung?: boolean; antragId?: string | null },
-): Promise<{ vorschlaege: number; fehler: string[] }> {
-  const fassungen = await ladeAlleSeiten<GueltigeFassung>(
-    (von, bis) => {
-      let q = admin.from("lohn_fassungen_gueltig").select("id, profile_id, jahr, monat, brutto, netto, auszahlungsbetrag, auszahlungsdatum, orig:ergebnis->>auszahlungsdatum").eq("jahr", a.jahr);
-      if (a.profileIds) q = q.in("profile_id", a.profileIds);
-      return q.order("profile_id").order("monat").range(von, bis);
-    },
-    "Fassungen",
-  );
-  // Nach dem letzten ERP-Lohnmonat (lauf_bis) keine Vorschläge: dort rechnet
-  // Trust flow/Bexio, eine Korrekturfassung wäre ohnehin gesperrt.
-  const { laufBis } = await ladeLohnEinstellungen(admin);
-  const betroffen = fassungen.filter((f) => {
-    if (nachLaufBis(laufBis, { jahr: f.jahr, monat: f.monat })) return false;
-    if (!a.abDatum) return true;
-    if (a.nachAuszahlung) return (f.orig ?? f.auszahlungsdatum) >= a.abDatum;
-    const monatsEnde = `${f.jahr}-${String(f.monat).padStart(2, "0")}-31`;
-    return monatsEnde >= a.abDatum;
-  });
-  const jePerson = new Map<string, GueltigeFassung[]>();
-  for (const f of betroffen) jePerson.set(f.profile_id, [...(jePerson.get(f.profile_id) ?? []), f]);
-
-  let vorschlaege = 0;
-  const fehler: string[] = [];
-  for (const [id, liste] of jePerson) {
-    const satzDatum = new Map(liste.map((f) => [monatKey(f.jahr, f.monat), f.orig ?? f.auszahlungsdatum]));
-    const { ergebnisse, personen } = await rechneMonate(admin, [id], liste.map((f) => ({ jahr: f.jahr, monat: f.monat })), {
-      auszahlungsdatum: (j, m) => satzDatum.get(monatKey(j, m))!,
-    });
-    const name = personen.get(id)?.name ?? id;
-    for (const f of liste) {
-      const r = ergebnisse.get(id)?.get(monatKey(f.jahr, f.monat));
-      if (!r) continue;
-      if (!r.ok) {
-        fehler.push(`${name} ${monatKey(f.jahr, f.monat)}: ${r.fehler}`);
-        continue;
-      }
-      const nettoAlt = Number(f.netto);
-      const bruttoAlt = Number(f.brutto);
-      const auszahlungAlt = f.auszahlungsbetrag == null ? nettoAlt : Number(f.auszahlungsbetrag);
-      // Ausbezahlt wird die Differenz der Auszahlungsbeträge (wie die RPC).
-      const differenz = Number((r.ergebnis.auszahlungsbetrag - auszahlungAlt).toFixed(2));
-      if (Math.abs(differenz) < 0.005 && Math.abs(r.ergebnis.netto - nettoAlt) < 0.005 && Math.abs(r.ergebnis.brutto - bruttoAlt) < 0.005) continue;
-      const werte = {
-        profile_id: id, jahr: f.jahr, monat: f.monat, antrag_id: a.antragId ?? null, vorfassung_id: f.id,
-        brutto_alt: bruttoAlt, brutto_neu: r.ergebnis.brutto, netto_alt: nettoAlt, netto_neu: r.ergebnis.netto, differenz,
-      };
-      const { data: offen, error: e1 } = await admin
-        .from("lohn_korrektur_vorschlaege").select("id").eq("profile_id", id).eq("jahr", f.jahr).eq("monat", f.monat).eq("status", "offen").maybeSingle();
-      if (e1) throw new Error(e1.message);
-      const { error: e2 } = offen
-        ? await admin.from("lohn_korrektur_vorschlaege").update(werte).eq("id", offen.id)
-        : await admin.from("lohn_korrektur_vorschlaege").insert(werte);
-      if (e2) throw new Error(`Vorschlag konnte nicht gespeichert werden: ${e2.message}`);
-      vorschlaege++;
-    }
-  }
-  return { vorschlaege, fehler };
 }

@@ -7,7 +7,6 @@
 //
 // Inhalt:
 //   profile.json              — Stammdaten
-//   compensation.json         — Lohn-Historie alle Zeilen
 //   jobs.json                 — alle Jobs wo User created_by oder project_lead
 //   appointments.json         — job_appointments mit assigned_to=user
 //   time_entries.json         — alle Stempel
@@ -30,7 +29,6 @@ import { isUuid } from "@/lib/search-escape";
 import JSZip from "jszip";
 import { protokolliereZugriff, geraetHashAusCookies } from "@/lib/finanzen/zugriffe";
 import { ZUGRIFF_AKTION } from "@/lib/finanzen/types";
-import { NBU_HINWEIS_KURZ } from "@/lib/lohn/hinweise";
 
 const DOSSIER_BUCKET = "personal-dossiers";
 
@@ -55,13 +53,6 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
   if (!profile) return NextResponse.json({ success: false, error: "Mitarbeiter nicht gefunden" }, { status: 404 });
   // Lese-Protokoll Lohn (fail-open: Rueckgabe ignoriert). Akteur = echter User, Ziel = betroffene Person.
   await protokolliereZugriff({ actorProfileId: auth.user.id, bereich: "lohn", aktion: ZUGRIFF_AKTION.LOHN_DOSSIER, zielProfileId: profileId, geraetHash: await geraetHashAusCookies() });
-
-  // 2. Compensation-Historie
-  const { data: comp } = await admin
-    .from("employee_compensation")
-    .select("*")
-    .eq("profile_id", profileId)
-    .order("effective_from", { ascending: false });
 
   // 3. Jobs (created_by ODER project_lead_id)
   const { data: jobsCreated } = await admin
@@ -121,7 +112,6 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
     `Inhalt:\n` +
     `  index.html — uebersichtliche Tabellen-Ansicht aller Daten\n` +
     `  profile.json — Stammdaten\n` +
-    `  compensation.json — Lohn-Historie (${comp?.length ?? 0} Zeilen)\n` +
     `  jobs.json — Jobs als created_by/project_lead (${jobsCreated?.length ?? 0})\n` +
     `  appointments.json — Termin-Zuweisungen (${appts?.length ?? 0})\n` +
     `  time_entries.json — Stempel-Eintraege (${stempel?.length ?? 0})\n` +
@@ -136,7 +126,6 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
   // PDF-Links relativ zum Folder.
   zip.file("index.html", buildHtmlIndex({
     profile,
-    comp: comp ?? [],
     jobs: jobsCreated ?? [],
     appointments: appts ?? [],
     stempel: stempel ?? [],
@@ -149,7 +138,6 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
   }));
 
   zip.file("profile.json", JSON.stringify(profile, null, 2));
-  zip.file("compensation.json", JSON.stringify(comp ?? [], null, 2));
   zip.file("jobs.json", JSON.stringify(jobsCreated ?? [], null, 2));
   zip.file("appointments.json", JSON.stringify(appts ?? [], null, 2));
   zip.file("time_entries.json", JSON.stringify(stempel ?? [], null, 2));
@@ -264,7 +252,6 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
     download_url: signed?.signedUrl,
     storage_path: path,
     summary: {
-      compensation_rows: comp?.length ?? 0,
       jobs: jobsCreated?.length ?? 0,
       appointments: appts?.length ?? 0,
       time_entries: stempel?.length ?? 0,
@@ -282,7 +269,6 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
 
 interface DossierData {
   profile: Record<string, unknown>;
-  comp: Record<string, unknown>[];
   jobs: Record<string, unknown>[];
   appointments: Record<string, unknown>[];
   stempel: Record<string, unknown>[];
@@ -318,13 +304,6 @@ function fmtMin(min: number): string {
   return m === 0 ? `${h}h` : `${h}h ${String(m).padStart(2, "0")}m`;
 }
 
-function fmtChf(n: unknown): string {
-  if (n == null) return "—";
-  const v = Number(n);
-  if (!Number.isFinite(v)) return "—";
-  return new Intl.NumberFormat("de-CH", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(v);
-}
-
 function buildHtmlIndex(d: DossierData): string {
   const p = d.profile;
   const totalStempelMin = d.stempel.reduce((s, e) => {
@@ -345,23 +324,6 @@ function buildHtmlIndex(d: DossierData): string {
       <td>${fmtDate(co)}</td>
       <td>${fmtMin(minutes)}</td>
       <td>${esc(e.job_id ?? "—")}</td>
-    </tr>`;
-  }).join("");
-
-  // Comp-Historie. uses_standard_lohn-Flag entscheidet ob die Per-Spalten
-  // ueberhaupt relevant sind. Ist es true (oder NULL fuer Altdaten), zeigen
-  // wir 'Standard' statt der einzelnen Werte.
-  const compRows = d.comp.map((c) => {
-    const usesStd = c.uses_standard_lohn !== false;
-    const agPctSum = usesStd ? null : [c.employer_ahv_pct, c.employer_alv_pct, c.employer_fak_pct, c.employer_bu_pct, c.employer_bvg_pct, c.employer_verwaltung_pct].reduce<number>((s, v) => s + Number(v ?? 0), 0);
-    const anPctSum = usesStd ? null : [c.ahv_iv_eo_pct, c.alv_pct, c.nbu_pct, c.bvg_pct, c.ktg_pct, c.quellensteuer_pct].reduce<number>((s, v) => s + Number(v ?? 0), 0);
-    return `<tr>
-      <td>${fmtDate(c.effective_from)}</td>
-      <td>${c.effective_to ? fmtDate(c.effective_to) : "<i>aktiv</i>"}</td>
-      <td>CHF ${fmtChf(c.hourly_wage_chf)}</td>
-      <td>${usesStd ? "<i>Standard</i>" : `Σ AG ${fmtChf(agPctSum!)}%`}</td>
-      <td>${usesStd ? "<i>Standard</i>" : `Σ AN ${fmtChf(anPctSum!)}%`}</td>
-      <td>${esc(c.notes ?? "—")}</td>
     </tr>`;
   }).join("");
 
@@ -486,12 +448,6 @@ function buildHtmlIndex(d: DossierData): string {
     <div class="kpi"><div class="label">Lohn-Dokumente</div><div class="value">${d.wageDocs.length}</div></div>
   </div>
 
-  <h2>Lohn-Historie (${d.comp.length})</h2>
-  ${d.comp.length === 0 ? '<div class="empty">Keine Lohn-Daten hinterlegt.</div>' : `<table>
-    <thead><tr><th>Gültig ab</th><th>Gültig bis</th><th>Brutto/h</th><th>AG-Anteil</th><th>AN-Abzüge</th><th>Notiz</th></tr></thead>
-    <tbody>${compRows}</tbody>
-  </table><div class="note">NBU (in den AN-Abzügen enthalten) ${esc(NBU_HINWEIS_KURZ)} (Art. 13 UVV).</div>`}
-
   <h2>Stempel-Einträge (${d.stempel.length})</h2>
   ${d.stempel.length === 0 ? '<div class="empty">Keine Stempel-Einträge.</div>' : `${d.stempel.length > 500 ? '<div class="note">Zeigt die letzten 500 Einträge. Vollständige Liste in <code>time_entries.json</code>.</div>' : ''}<table>
     <thead><tr><th>Nr</th><th>Clock-In</th><th>Clock-Out</th><th>Dauer</th><th>Job-ID</th></tr></thead>
@@ -535,7 +491,7 @@ function buildHtmlIndex(d: DossierData): string {
   </table>`}
 
   <h2 style="margin-top:48px;color:#888;font-size:14px;border-bottom:1px solid #2a2a2a">Rohdaten</h2>
-  <div class="note">Alle Daten zusätzlich als JSON: <code>profile.json</code>, <code>compensation.json</code>, <code>jobs.json</code>, <code>appointments.json</code>, <code>time_entries.json</code>, <code>service_reports.json</code>, <code>notifications.json</code>, <code>wage_documents.json</code>, <code>uploaded_documents.json</code>.</div>
+  <div class="note">Alle Daten zusätzlich als JSON: <code>profile.json</code>, <code>jobs.json</code>, <code>appointments.json</code>, <code>time_entries.json</code>, <code>service_reports.json</code>, <code>notifications.json</code>, <code>wage_documents.json</code>, <code>uploaded_documents.json</code>.</div>
 </body>
 </html>`;
 }

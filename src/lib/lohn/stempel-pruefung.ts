@@ -8,8 +8,8 @@
 //     Abrechnung wäre zu tief; oder
 //   - sehr langen Stempel (> STEMPEL_LANG_STUNDEN) hat, den die
 //     Lohnverwaltung noch nicht als korrekt bestätigt hat (time_entries.geprueft_at).
-// Dann erzeugen weder der Lauf noch der Knopf eine Abrechnung (LohnFehler
-// «stempel_pruefen», src/lib/lohn/abrechnung.ts).
+// Trust flow bekommt die Zahl der Probleme je Person mit den Stempeln
+// (/api/flow/stempel) und rechnet erst danach.
 //
 // Schwelle 16 h: Tages- und Abendarbeit liegt nach Art. 10 Abs. 3 ArG mit
 // Pausen und Überzeit innerhalb von 14 Stunden; 2 h Reserve für Auf-/Abbau
@@ -21,6 +21,14 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { ladeAlleSeiten } from "./daten";
+
+/** Ist der Monat (Stempel) gesperrt? Gleiche Regel wie die DB (is_time_entry_locked: ab dem 5. des Folgemonats). */
+export async function istMonatGesperrtDb(admin: SupabaseClient, year: number, month: number): Promise<boolean> {
+  const mitte = `${year}-${String(month).padStart(2, "0")}-15T12:00:00Z`;
+  const { data, error } = await admin.rpc("is_time_entry_locked", { p_clock_in: mitte });
+  if (error) throw new Error(`Monatssperre konnte nicht geprüft werden: ${error.message}`);
+  return data === true;
+}
 
 export const STEMPEL_LANG_STUNDEN = 16;
 export const STEMPEL_LANG_MS = STEMPEL_LANG_STUNDEN * 60 * 60 * 1000;

@@ -38,7 +38,6 @@ type CascadeDef = { table: string; col: string; purpose: string };
 // dann ab, die DB ebenso (Trigger profiles_lohn_schutz, Migration 360).
 type AufbewahrungDef = CascadeDef & { nurEntschieden?: boolean };
 const AUFBEWAHRUNG: AufbewahrungDef[] = [
-  { table: "employee_compensation", col: "profile_id", purpose: "Lohn-Historie (Stundenlöhne, Sätze) — Aufbewahrungspflicht" },
   { table: "wage_documents", col: "profile_id", purpose: "Lohnabrechnungen und Lohnausweise — Aufbewahrungspflicht" },
   { table: "time_entries", col: "user_id", purpose: "Stempelzeiten (Lohngrundlage) — Aufbewahrungspflicht" },
   { table: "time_off", col: "user_id", purpose: "Entschiedene Abwesenheiten (Ferien, Krankheit …) — Aufbewahrungspflicht", nurEntschieden: true },
@@ -113,7 +112,6 @@ const SET_NULL_PRESERVE: SetNullDef[] = [
   { table: "calendar_events", col: "profile_id" },
   { table: "company_settings", col: "updated_by" },
   { table: "documents", col: "uploaded_by" },
-  { table: "employee_compensation", col: "created_by" },
   { table: "job_appointments", col: "assigned_to" },
   { table: "job_draft_notes", col: "author_id" },
   { table: "job_drafts", col: "created_by" },
@@ -129,7 +127,6 @@ const SET_NULL_PRESERVE: SetNullDef[] = [
   { table: "jobs", col: "submitted_by" },
   { table: "partner_form_template", col: "draft_updated_by" },
   { table: "partner_form_template", col: "live_published_by" },
-  { table: "payroll_defaults", col: "created_by" },
   { table: "permission_audit_log", col: "actor_profile_id" },
   { table: "permission_audit_log", col: "target_profile_id" },
   { table: "profiles", col: "team_lead_id" },

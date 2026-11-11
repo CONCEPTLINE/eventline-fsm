@@ -44,9 +44,11 @@ describe("Claims Stempel/Vergleich", () => {
     expect(pruefeMonatsClaims(monat({ profile: ["x"] }), { bereich: true })).toMatchObject({ code: "profile_ungueltig" });
     expect(pruefeMonatsClaims(monat({ monat: 13 }), { bereich: true })).toMatchObject({ code: "monat_ungueltig" });
   });
-  it("Vergleich nur bis 2026-11 (Parallelmonat), Dezember → 422", () => {
+  it("Vergleich nur bis 2026-10 (letzter ERP-Lohnmonat), danach → 422", () => {
+    const okt = stempelBereich(2026, 10);
+    expect(pruefeMonatsClaims({ jahr: 2026, monat: 10, von: okt.von, bis: okt.bis, profile: [P1] }, { bereich: false, bis: VERGLEICH_BIS }).ok).toBe(true);
     const nov = stempelBereich(2026, 11);
-    expect(pruefeMonatsClaims({ jahr: 2026, monat: 11, von: nov.von, bis: nov.bis, profile: [P1] }, { bereich: false, bis: VERGLEICH_BIS }).ok).toBe(true);
+    expect(pruefeMonatsClaims({ jahr: 2026, monat: 11, von: nov.von, bis: nov.bis, profile: [P1] }, { bereich: false, bis: VERGLEICH_BIS })).toMatchObject({ code: "monat_nicht_erlaubt" });
     expect(pruefeMonatsClaims(monat(), { bereich: false, bis: VERGLEICH_BIS })).toMatchObject({ ok: false, code: "monat_nicht_erlaubt", status: 422 });
     expect(pruefeMonatsClaims(monat({ jahr: 2027, monat: 1 }), { bereich: false, bis: VERGLEICH_BIS })).toMatchObject({ code: "monat_nicht_erlaubt" });
   });
@@ -189,7 +191,8 @@ describe("Lohnabrechnung aus Bexio (A5)", () => {
     expect(pruefeAblageClaims(c())).toEqual({ ok: true, anfrage: { profileId: P1, art: "lohnabrechnung", jahr: 2026, monat: 12, fassung: 1, sha256: sha } });
     expect(pruefeAblageClaims(c({ art: "lohnabrechnung" }))).toMatchObject({ ok: true, anfrage: { art: "lohnabrechnung", monat: 12 } });
     expect(pruefeAblageClaims(c({ art: "lohn" }))).toMatchObject({ code: "art_ungueltig" });
-    expect(pruefeAblageClaims(c({ monat: 11 }))).toMatchObject({ code: "erp_monat", status: 422 });
+    expect(pruefeAblageClaims(c({ monat: 11 }))).toMatchObject({ ok: true, anfrage: { monat: 11 } });
+    expect(pruefeAblageClaims(c({ monat: 10 }))).toMatchObject({ code: "erp_monat", status: 422 });
     expect(pruefeAblageClaims(c({ fassung: 0 }))).toMatchObject({ code: "fassung_ungueltig" });
     expect(pruefeAblageClaims(c({ sha256: sha.toUpperCase() }))).toMatchObject({ code: "sha256_ungueltig" });
     expect(pruefeAblageClaims(c({ erp_profil_id: "x" }))).toMatchObject({ code: "person_ungueltig" });

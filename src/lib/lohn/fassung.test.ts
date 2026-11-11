@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { fassungsPfad, speichereFassung, LohnFehler } from "./fassung";
+import { fassungsPfad, speichereBexioFassung, LohnFehler } from "./fassung";
 import { geraetFreigabeVerboten, lohnAenderungVerboten } from "./zugriff";
 
 const P = "a0000000-0000-4000-8000-000000000017";
@@ -34,56 +34,61 @@ function fake(opts: {
 const basis = {
   profileId: P,
   docType: "lohnabrechnung" as const,
-  year: 2026,
-  month: 9,
+  jahr: 2026,
+  monat: 11,
+  fassung: 1,
   pdf: new Uint8Array([37, 80, 68, 70]),
-  source: "auto" as const,
-  actorId: null,
-  actorName: "Automatischer Lohnlauf",
+  pdfSha256: "0".repeat(64),
+  flowAbrufId: "b0000000-0000-4000-8000-000000000001",
+  flowSub: "trust-flow",
   jetzt: new Date("2026-10-29T09:15:02.123Z"),
   zufall: "abc123",
 };
+const pfadBasis = { profileId: P, docType: "lohnabrechnung" as const, year: 2026, month: 9, jetzt: basis.jetzt, zufall: basis.zufall };
 
 describe("Speicherpfad je Fassung — nie überschreiben", () => {
   it("enthält Periode, Fassung, Zeitstempel und Zufall", () => {
-    expect(fassungsPfad({ ...basis, version: 2 })).toBe(`${P}/2026/2026-09/v2-20261029T091502Z-abc123.pdf`);
-    expect(fassungsPfad({ ...basis, docType: "lohnausweis", month: null, version: 1 })).toBe(
+    expect(fassungsPfad({ ...pfadBasis, version: 2 })).toBe(`${P}/2026/2026-09/v2-20261029T091502Z-abc123.pdf`);
+    expect(fassungsPfad({ ...pfadBasis, docType: "lohnausweis", month: null, version: 1 })).toBe(
       `${P}/2026/lohnausweis/v1-20261029T091502Z-abc123.pdf`,
     );
   });
   it("lädt immer mit upsert:false hoch", async () => {
     const f = fake({ rpc: { data: { modus: "neu", id: "x", version: 1 } } });
-    await speichereFassung(f.client, basis);
+    await speichereBexioFassung(f.client, basis);
     expect(f.upload).toHaveBeenCalledTimes(1);
     expect(f.upload.mock.calls[0][2]).toMatchObject({ upsert: false });
-    expect(f.upload.mock.calls[0][0]).toBe(`${P}/2026/2026-09/v1-20261029T091502Z-abc123.pdf`);
+    expect(f.upload.mock.calls[0][0]).toBe(`${P}/2026/2026-11/v1-20261029T091502Z-abc123.pdf`);
   });
   it("nächste Fassung bekommt n+1 im Pfad", async () => {
-    const f = fake({ maxVersion: 3, rpc: { data: { modus: "neue_fassung", id: "x", version: 4, vorherige_version: 3 } } });
-    const r = await speichereFassung(f.client, basis);
+    const f = fake({ maxVersion: 3, rpc: { data: { modus: "neue_fassung", id: "x", version: 4 } } });
+    const r = await speichereBexioFassung(f.client, basis);
     expect(f.upload.mock.calls[0][0]).toContain("/v4-");
-    expect(r).toMatchObject({ modus: "neue_fassung", version: 4, vorherigeVersion: 3 });
+    expect(r).toMatchObject({ modus: "neue_fassung", version: 4 });
   });
 });
 
 describe("PDF und Zeile gemeinsam", () => {
   it("Storage-Fehler: keine Zeile (rpc nie aufgerufen), Fehler wird geworfen", async () => {
     const f = fake({ uploadError: "Storage down" });
-    await expect(speichereFassung(f.client, basis)).rejects.toBeInstanceOf(LohnFehler);
+    await expect(speichereBexioFassung(f.client, basis)).rejects.toBeInstanceOf(LohnFehler);
     expect(f.rpc).not.toHaveBeenCalled();
     expect(f.remove).not.toHaveBeenCalled();
   });
   it("DB-Fehler nach dem Hochladen: genau die eigene Datei wird wieder entfernt", async () => {
     const f = fake({ rpc: { error: { message: "unique violation" } } });
-    await expect(speichereFassung(f.client, basis)).rejects.toThrow(/unique violation/);
+    await expect(speichereBexioFassung(f.client, basis)).rejects.toThrow(/unique violation/);
     expect(f.remove).toHaveBeenCalledTimes(1);
     expect(f.remove.mock.calls[0][0]).toEqual([f.upload.mock.calls[0][0]]);
   });
-  it("inzwischen vorhanden (Lauf): eigene Datei weg, nichts überschrieben", async () => {
+  it("schon vorhanden oder abgelehnt: eigene Datei weg, nichts überschrieben", async () => {
     const f = fake({ rpc: { data: { modus: "vorhanden", id: "alt", version: 1 } } });
-    const r = await speichereFassung(f.client, { ...basis, nurWennKeineGueltige: true });
+    const r = await speichereBexioFassung(f.client, basis);
     expect(r.modus).toBe("vorhanden");
     expect(f.remove).toHaveBeenCalledTimes(1);
+    const g = fake({ rpc: { data: { modus: "abgelehnt", code: "erp_monat", meldung: "x" } } });
+    expect(await speichereBexioFassung(g.client, basis)).toMatchObject({ modus: "abgelehnt", code: "erp_monat" });
+    expect(g.remove).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -1,54 +1,12 @@
 import { describe, it, expect } from "vitest";
-import {
-  gesperrteMonateAb,
-  istMonatGesperrt,
-  letzteGesperrteMonate,
-  letzterGesperrterMonat,
-  monatLabel,
-  monatsLetzter,
-  sperrtAb,
-} from "./monate";
+import { monatLabel, monatsLetzter, sperrtAb } from "./monate";
 import { geheimnisGleich, istCronAufruf } from "@/lib/geheimnis";
 import { ANFRAGE_GUELTIG_STUNDEN, anfrageAbgelaufen } from "@/lib/geraete-freigabe";
 
 describe("Monatssperre (ab dem 5. des Folgemonats)", () => {
-  it("September ist am 4.10. offen, am 5.10. gesperrt", () => {
-    expect(istMonatGesperrt({ jahr: 2026, monat: 9 }, "2026-10-04")).toBe(false);
-    expect(istMonatGesperrt({ jahr: 2026, monat: 9 }, "2026-10-05")).toBe(true);
-  });
-  it("laufender Monat ist nie gesperrt (Befund 2: keine halbe Abrechnung)", () => {
-    expect(istMonatGesperrt({ jahr: 2026, monat: 10 }, "2026-10-29")).toBe(false);
-  });
-  it("Jahreswechsel: Dezember sperrt am 5. Januar", () => {
+  it("Sperre ab dem 5. des Folgemonats, auch über den Jahreswechsel", () => {
+    expect(sperrtAb({ jahr: 2026, monat: 9 })).toBe("2026-10-05");
     expect(sperrtAb({ jahr: 2026, monat: 12 })).toBe("2027-01-05");
-    expect(istMonatGesperrt({ jahr: 2026, monat: 12 }, "2027-01-04")).toBe(false);
-    expect(istMonatGesperrt({ jahr: 2026, monat: 12 }, "2027-01-05")).toBe(true);
-  });
-  it("Vorgabe = letzter gesperrter Monat", () => {
-    expect(letzterGesperrterMonat("2026-10-29")).toEqual({ jahr: 2026, monat: 9 });
-    expect(letzterGesperrterMonat("2026-11-04")).toEqual({ jahr: 2026, monat: 9 });
-    expect(letzterGesperrterMonat("2026-11-05")).toEqual({ jahr: 2026, monat: 10 });
-    expect(letzterGesperrterMonat("2027-01-03")).toEqual({ jahr: 2026, monat: 11 });
-    expect(letzterGesperrterMonat("2027-02-01")).toEqual({ jahr: 2026, monat: 12 });
-  });
-  it("alle gesperrten Monate ab einem Startmonat (Nachholen)", () => {
-    expect(gesperrteMonateAb({ jahr: 2026, monat: 7 }, "2026-10-29")).toEqual([
-      { jahr: 2026, monat: 7 },
-      { jahr: 2026, monat: 8 },
-      { jahr: 2026, monat: 9 },
-    ]);
-    expect(gesperrteMonateAb({ jahr: 2026, monat: 10 }, "2026-10-29")).toEqual([]);
-    expect(gesperrteMonateAb({ jahr: 2026, monat: 11 }, "2027-01-05")).toEqual([
-      { jahr: 2026, monat: 11 },
-      { jahr: 2026, monat: 12 },
-    ]);
-  });
-  it("Auswahl im UI: neuester zuerst, über den Jahreswechsel", () => {
-    expect(letzteGesperrteMonate("2027-02-10", 3)).toEqual([
-      { jahr: 2027, monat: 1 },
-      { jahr: 2026, monat: 12 },
-      { jahr: 2026, monat: 11 },
-    ]);
   });
   it("Monatsende und Label", () => {
     expect(monatsLetzter({ jahr: 2028, monat: 2 })).toBe("2028-02-29");

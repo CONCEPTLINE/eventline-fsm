@@ -10,7 +10,7 @@
 // Eingebunden zentral in src/lib/api-auth.ts (requirePermission nach Recht,
 // requireUser/requireInternal/requireAdmin mit { wartung }), in den Layouts
 // der Seiten (src/components/wartung/wartung-seite.tsx) und im Cron
-// /api/cron/auto-lohnabrechnung (pausiert den Lauf).
+// /api/cron/stempel-monatsende (versendet dann nichts).
 //
 // Schalten: Einstellungen › Sicherheit (Admins, vertrautes Gerät) oder
 // node scripts/wartung.mjs an|aus|status|ausnahmen.
@@ -21,7 +21,7 @@ export type WartungBereich = (typeof WARTUNG_BEREICHE)[number];
 export const WARTUNG_BEREICH_INFO: Record<WartungBereich, { label: string; umfang: string }> = {
   lohn: {
     label: "Lohn",
-    umfang: "Lohn-Seite (Meine + Team), Lohndokumente, Monatsstunden, Generieren, BVG-Prognose, automatischer Lohnlauf",
+    umfang: "Lohn-Seite, Lohndokumente, Stempel prüfen, Trust-flow-Schnittstellen",
   },
   rechte: {
     label: "Rechte",

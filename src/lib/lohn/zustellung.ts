@@ -1,6 +1,6 @@
 // Zustellung von Lohnabrechnungen an die Mitarbeitenden (Lohn-Umbau Phase 4).
 //
-// VERTRAG (von src/lib/lohn/abrechnung.ts nach jeder neuen Fassung aufgerufen):
+// VERTRAG (von src/lib/flow/daten.ts nach jeder aus Trust flow abgelegten Fassung aufgerufen):
 //   meldeNeueAbrechnung(admin, { profileId, jahr, monat, wageDocumentId, art })
 //   - hält in lohn_dokument_zustellung «bereitgestellt» fest (+ aktuelle Wahl digital/Papier)
 //   - meldet der Person über den Benachrichtigungsdienst (Typ lohn_dokument,
@@ -82,18 +82,6 @@ export async function ladeAktuelleWahl(admin: SupabaseClient, profileId: string)
     akteur_name: null,
     notiz: null,
   };
-}
-
-/** Historie (neueste zuerst). */
-export async function ladeWahlHistorie(admin: SupabaseClient, profileId: string): Promise<WahlEintrag[]> {
-  const { data, error } = await admin
-    .from("lohn_zustellung_wahl")
-    .select("id, wahl, version, gewaehlt_at, quelle, akteur_name, notiz")
-    .eq("profile_id", profileId)
-    .order("gewaehlt_at", { ascending: false })
-    .limit(50);
-  if (error) throw new Error(`Zustell-Wahl konnte nicht geladen werden: ${error.message}`);
-  return (data ?? []) as WahlEintrag[];
 }
 
 /** Wahl speichern (neuer Historien-Eintrag + Einwilligung in profiles). Wirft bei Fehlern. */

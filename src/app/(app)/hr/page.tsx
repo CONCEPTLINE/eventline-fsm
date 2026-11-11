@@ -11,8 +11,7 @@
  *   ?tab=tickets                          → /tickets
  *   ?tab=ferien | abwesenheit             → /ferien
  *   ?tab=loehne | lohn                    → /lohn  (lohn=team: subtab
- *                                                   dokumente|mitarbeiter|standardwerte
- *                                                   → /lohn/verwaltung, sonst
+ *                                                   monatsstunden bzw. ohne
  *                                                   → Stempelzeiten › Prüfen)
  *   ?tab=mitarbeiter                      → /einstellungen?tab=mitarbeiter
  *                                            (nur Admins)
@@ -76,11 +75,11 @@ export default function HrWeiterleitung() {
       "/einstellungen": role === "admin",
     };
 
-    // Alte Links auf Lohn › Team → Lohnverwaltung bzw. Stempelzeiten › Prüfen (nur mit Lohnrecht).
+    // Alte Links auf Lohn › Team → Stempelzeiten › Prüfen (nur mit Lohnrecht) bzw. /lohn.
     const tab = searchParams.get("tab");
     if ((tab === "loehne" || tab === "lohn") && resolveLohnAnsicht(searchParams.get("lohn")) === "team" && can("lohn:manage")) {
       const ziel = teamLinkZiel(searchParams.get("subtab"), searchParams.get("monat"));
-      if (ziel.startsWith("/lohn/") || erlaubt["/stempelzeiten"]) {
+      if (ziel === "/lohn" || erlaubt["/stempelzeiten"]) {
         router.replace(ziel);
         return;
       }

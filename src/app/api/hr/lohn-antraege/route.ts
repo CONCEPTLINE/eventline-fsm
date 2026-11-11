@@ -1,4 +1,4 @@
-// Anträge zu Lohndaten nach der Monatssperre (Phase 2, Migration 364).
+// Anträge zu Stempeln nach der Monatssperre (Phase 2/4, Migrationen 364/367).
 //
 // GET  /api/hr/lohn-antraege                 — offene + zuletzt entschiedene Anträge
 //                                              (je mit darf_bestaetigen/hinderungsgrund)
@@ -7,8 +7,6 @@
 // Bestätigen: Lohnrecht + vertrautes Gerät, nicht der Antragsteller, nicht die
 // betroffene Person, aktiver Admin oder Vertretung (prüft die DB-Funktion
 // lohn_aenderung_ausfuehren erneut), innert 24 h, nicht in «Ansicht als».
-// Danach rechnet der Kern die betroffenen Monate neu und legt
-// Korrektur-Vorschläge an (Lohn › Lohndokumente).
 // Ablehnen / eigenen Antrag zurückziehen: jede Person mit Lohnrecht.
 
 import { NextResponse } from "next/server";
@@ -49,8 +47,8 @@ export async function POST(req: Request) {
       await lehneAntragAb(admin, id, { id: auth.user.id, name }, typeof body?.grund === "string" ? body.grund.trim().slice(0, 500) || null : null);
       return NextResponse.json({ success: true });
     }
-    const r = await bestaetigeAntrag(admin, id, { id: auth.user.id, name });
-    return NextResponse.json({ success: true, vorschlaege: r.vorschlaege, fehler: r.fehler });
+    await bestaetigeAntrag(admin, id, { id: auth.user.id, name });
+    return NextResponse.json({ success: true });
   } catch (e) {
     return NextResponse.json({ success: false, error: e instanceof Error ? e.message : String(e) }, { status: 400 });
   }

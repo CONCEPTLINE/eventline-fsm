@@ -12,8 +12,6 @@ import { requireUser } from "@/lib/api-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { DIGITAL_EINWILLIGUNG_VERSION, speichereWahl } from "@/lib/lohn/zustellung";
 
-export const WAGE_DIGITAL_CONSENT_VERSION = DIGITAL_EINWILLIGUNG_VERSION;
-
 export async function POST() {
   const auth = await requireUser({ wartung: "lohn" });
   if (auth.error) return auth.error;

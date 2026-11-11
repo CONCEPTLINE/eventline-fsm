@@ -43,8 +43,8 @@ export function ladeWartung(opts?: { frisch?: boolean }): Promise<WartungStand> 
   return cache.lesen(opts);
 }
 
-/** Ungecacht und streng: wirft, wenn der Stand nicht lesbar ist. Für den
- *  Cron des Lohnlaufs — der läuft im Zweifel NICHT. */
+/** Ungecacht und streng: wirft, wenn der Stand nicht lesbar ist. Für Crons
+ *  und den Schalter — im Zweifel läuft nichts. */
 export function ladeWartungStreng(): Promise<WartungStand> {
   return ladeAusDb();
 }

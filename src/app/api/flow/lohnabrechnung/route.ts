@@ -6,7 +6,7 @@
 //   Ausweis wie A1 (EdDSA, 60 s, jti einmalig) mit erp_profil_id, art
 //   («lohnabrechnung» = Vorgabe | «lohnausweis», Migration 377), fassung (1–99,
 //   laut Trust flow) und sha256 (hex) der PDF — die PDF ist damit mit signiert.
-//     lohnabrechnung: jahr, monat (ab 2026-12 und nach lohn_einstellungen.lauf_bis)
+//     lohnabrechnung: jahr, monat (ab 2026-11 und nach lohn_einstellungen.lauf_bis)
 //     lohnausweis:    jahr (ab 2026), kein monat
 //   PDF höchstens 2 MB.
 // Ablage: eigene Fassung mit Quelle «bexio» im Bucket lohndokumente (nie

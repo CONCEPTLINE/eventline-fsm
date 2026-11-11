@@ -155,11 +155,3 @@ export async function pruefeGeraetFreigabe(admin: SupabaseClient, freigeberId: s
 export function nachLaufBis(laufBis: LohnMonat | null, m: LohnMonat): boolean {
   return laufBis != null && (m.jahr > laufBis.jahr || (m.jahr === laufBis.jahr && m.monat > laufBis.monat));
 }
-
-const MONATSNAMEN = ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"];
-
-/** Klartext für abgelehnte Lohnmonate nach lauf_bis (gleicher Wortlaut wie die Datenbank, Migration 367). */
-export function meldungNachLaufBis(laufBis: LohnMonat): string {
-  const n = laufBis.monat === 12 ? { jahr: laufBis.jahr + 1, monat: 1 } : { jahr: laufBis.jahr, monat: laufBis.monat + 1 };
-  return `Ab ${MONATSNAMEN[n.monat - 1]} ${n.jahr} läuft der Lohn über Trust flow/Bexio — im ERP keine Lohnabrechnung, Korrektur oder Zusatzposten mehr für diesen Monat.`;
-}

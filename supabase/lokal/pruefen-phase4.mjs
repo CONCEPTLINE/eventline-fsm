@@ -1,20 +1,15 @@
 #!/usr/bin/env node
-// Prüftor Lohn-Umbau Phase 4 «Stempel und Monatsabschluss» — NUR LOKAL
+// Prüftor Lohn-Umbau Phase 4 «Stempel» — NUR LOKAL
 // (Docker-Supabase + Dev-Server :3100). Ändert nur die lokale Test-DB.
 //
 //   A  Stempel (phase4/stempel.mjs): Überlappung (Regel 368, Altfälle
 //      ausgenommen, angrenzend erlaubt, gleichzeitige Geräte), lange Stempel
 //      nur mit Begründung, Felder der Lohnverwaltung geschützt, Sperre auch für
 //      den Server, Stempel-Antrag nach der Sperre (Vier Augen), Ticket-Nachtrag
-//   B  Abrechnung (phase4/abrechnung.mjs): Zusatzposten in Brutto/Abzügen/
-//      Auszahlung, Jahresliste, Lohnausweis; Zusatzposten nach der Sperre nur
-//      per Antrag; Inhalt der Lohnabrechnung (Klartext, keine internen Angaben)
-//   C  Monatsabschluss (phase4/monatsabschluss.mjs): offener/langer Stempel
-//      blockiert den Monat im Lauf, Alarm, Erinnerung vor der Sperre,
-//      Statusspalte (fehlt/erstellt/blockiert/Korrektur/Fehler/ausbezahlt),
-//      «ausbezahlt» von Hand, Zustellung (Meldung, Wahl, geöffnet), Zähler «Anträge»
+//   (B Abrechnung und C Monatsabschluss entfielen mit dem Lohn-Abbau 11.11.2026:
+//    das ERP rechnet keinen Lohn mehr, Trust flow rechnet.)
 //
-// Aufruf: bash supabase/lokal/aufbauen.sh --nur-seed && node supabase/lokal/pruefen-phase4.mjs [stempel|abrechnung|monatsabschluss]
+// Aufruf: bash supabase/lokal/aufbauen.sh --nur-seed && node supabase/lokal/pruefen-phase4.mjs [stempel]
 // Meldet sich überall nur LOKAL ab (signOut({ scope: "local" })).
 
 import fs from "node:fs";
@@ -87,13 +82,6 @@ async function login(wer, geraet = GERAET[wer]) {
   return { api, supa, userId: data.user.id };
 }
 const post = (s, pfad, body, method = "POST") => s.api(pfad, { method, body: JSON.stringify(body) });
-/** Lohnlauf wie der Cron (Systemweg). */
-const lauf = async (query = "") => {
-  const res = await fetch(`${APP}/api/cron/auto-lohnabrechnung${query}`, { headers: { authorization: `Bearer ${env.CRON_SECRET}` } });
-  let json = null;
-  try { json = await res.json(); } catch { /* leer */ }
-  return { status: res.status, json };
-};
 const cron = async (pfad) => {
   const res = await fetch(`${APP}${pfad}`, { headers: { authorization: `Bearer ${env.CRON_SECRET}` } });
   let json = null;
@@ -101,10 +89,10 @@ const cron = async (pfad) => {
   return { status: res.status, json };
 };
 
-const ctx = { ok, titel, sql, sqlFehler, gleich, mm, login, post, lauf, cron, ID, MAIL, APP, env, service, root };
+const ctx = { ok, titel, sql, sqlFehler, gleich, mm, login, post, cron, ID, MAIL, APP, env, service, root };
 
 const nur = process.argv[2];
-const module = ["stempel", "abrechnung", "monatsabschluss"].filter((m) => !nur || m === nur);
+const module = ["stempel"].filter((m) => !nur || m === nur);
 try {
   // Lauf holt gesperrte Monate ab März nach (wie pruefen-phase1).
   sql("update lohn_einstellungen set lauf_ab = '2026-03-01' where id = 'default'");

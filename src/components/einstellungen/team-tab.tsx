@@ -11,18 +11,13 @@
  *   - Deaktivieren / Aktivieren (Soft-Delete via is_active + auth-ban)
  *   - Hard-Delete (mit Dossier-Backup)
  *
- * "Neuer Benutzer"-Button: Email + Name + Rolle + Geburtsdatum + (optional)
- * Brutto-Stundenlohn. Wenn Wage gesetzt, wird beim Anlegen automatisch eine
- * employee_compensation-Zeile mit uses_standard_lohn=true erstellt -- so
- * dass der Mitarbeiter sofort vollstaendig konfiguriert ist ohne 2. Klick.
+ * "Neuer Benutzer"-Button: Email + Name + Rolle + Geburtsdatum.
  *
- * Lohn-Pflege (Brutto, Override, Standardwerte) lebt jetzt unter
- * HR › Lohn › Mitarbeiter-Lohn / Standardwerte. Dieses Tab ist
- * reine Stammdaten-Verwaltung.
+ * Lohn (Sätze, Anstellungen, Abrechnungen) führt Trust flow (seit November
+ * 2026). Dieses Tab ist reine Stammdaten-Verwaltung.
  */
 
 import { alterWarnung } from "@/lib/lohn/hinweise";
-import { ferienPctNachAlter, fmtProzent } from "@/lib/lohn/kern/regeln";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { usePermissions } from "@/lib/use-permissions";
@@ -69,13 +64,6 @@ interface LocationOption { id: string; name: string; ort: string | null; waehlba
  *  die Teamleiter-Kandidaten zu filtern (nur Rollen mit scope='team'). */
 interface RoleOption { slug: string; label: string; scope: "self" | "team" | "all" }
 
-/** Ferienzuschlag diesen Monat nach Alter — Regel des Lohn-Rechenkerns
- *  (10,64 % bis und mit dem Monat des 20. Geburtstags). */
-function ferienTextHeute(geburtsdatum: string): string {
-  const [j, m] = todayLocalIso().split("-").map(Number);
-  return fmtProzent(ferienPctNachAlter(geburtsdatum, j, m));
-}
-
 function calcAge(birthdate: string | null | undefined): number | null {
   if (!birthdate) return null;
   const today = todayLocalIso();
@@ -94,7 +82,7 @@ export function TeamTab() {
   const [showCreate, setShowCreate] = useState(false);
   const [creating, setCreating] = useState(false);
   const [createForm, setCreateForm] = useState({
-    email: "", full_name: "", role: "techniker", birthdate: "", hourly_wage_chf: "", team_lead_id: "",
+    email: "", full_name: "", role: "techniker", birthdate: "", team_lead_id: "",
   });
   const [edit, setEdit] = useState<EditState>(null);
   const [savingEdit, setSavingEdit] = useState(false);
@@ -256,12 +244,6 @@ export function TeamTab() {
       role: createForm.role,
     };
     if (createForm.birthdate) payload.birthdate = createForm.birthdate;
-    // Wenn Brutto angegeben, wird beim User-Create eine Comp-Row mit
-    // uses_standard_lohn=true angelegt -> kein 2. Klick noetig.
-    if (createForm.hourly_wage_chf) {
-      const wage = parseFloat(createForm.hourly_wage_chf.replace(",", "."));
-      if (Number.isFinite(wage) && wage >= 0) payload.hourly_wage_chf = wage;
-    }
     // Optional: Teamleiter beim Anlegen gleich mitgeben — API setzt
     // profiles.team_lead_id nach dem Auth-Create.
     if (createForm.team_lead_id) payload.team_lead_id = createForm.team_lead_id;
@@ -274,10 +256,9 @@ export function TeamTab() {
     setCreating(false);
     if (!json.success) { TOAST.errorOr(json.error); return; }
     toast.success("Benutzer angelegt — Einladungs-Mail verschickt");
-    if (json.lohn_warning) toast.error(json.lohn_warning);
     if (json.alter_warning) toast.warning(json.alter_warning, { duration: 10000 });
     setShowCreate(false);
-    setCreateForm({ email: "", full_name: "", role: "techniker", birthdate: "", hourly_wage_chf: "", team_lead_id: "" });
+    setCreateForm({ email: "", full_name: "", role: "techniker", birthdate: "", team_lead_id: "" });
     load();
   }
 
@@ -613,25 +594,12 @@ export function TeamTab() {
                 return (
                   <>
                     <p className="text-[10px] text-muted-foreground/70 ml-1">
-                      {age} Jahre · Ferienzuschlag <strong>{ferienTextHeute(createForm.birthdate)}</strong>
+                      {age} Jahre
                     </p>
                     {warnung && <p className="text-[10px] text-amber-700 dark:text-amber-300 ml-1">{warnung}</p>}
                   </>
                 );
               })()}
-            </div>
-            <div className="space-y-1">
-              <p className="text-[10px] text-muted-foreground/70 ml-1">Brutto / h (CHF, optional)</p>
-              <Input
-                type="text"
-                inputMode="decimal"
-                value={createForm.hourly_wage_chf}
-                onChange={(e) => setCreateForm({ ...createForm, hourly_wage_chf: e.target.value })}
-                placeholder="z.B. 22.50"
-              />
-              <p className="text-[10px] text-muted-foreground/70 ml-1">
-                Wenn gesetzt, greifen die Firmen-Standardwerte automatisch.
-              </p>
             </div>
           </div>
           <p className="text-xs text-muted-foreground">
@@ -837,7 +805,7 @@ export function TeamTab() {
               </div>
             )}
             <div className="space-y-1">
-              <p className="text-[10px] text-muted-foreground/70 ml-1">Geburtsdatum (für Ferienanteil-Auto-Erkennung)</p>
+              <p className="text-[10px] text-muted-foreground/70 ml-1">Geburtsdatum</p>
               <Input
                 type="date"
                 value={edit.birthdate}
@@ -848,7 +816,7 @@ export function TeamTab() {
                 if (age == null) return null;
                 return (
                   <p className="text-[10px] text-muted-foreground/70 ml-1">
-                    Aktuell {age} Jahre · Ferienzuschlag <strong>{ferienTextHeute(edit.birthdate)}</strong>
+                    Aktuell {age} Jahre
                   </p>
                 );
               })()}
@@ -898,10 +866,6 @@ export function TeamTab() {
               </>)}
             </div>
             )}
-
-            <p className="text-[11px] text-muted-foreground italic pt-2 border-t border-foreground/10">
-              Brutto-Stundenlohn + Abzüge werden unter <strong>HR › Lohn</strong> verwaltet.
-            </p>
 
             <div className="flex gap-2 pt-1">
               <button type="button" onClick={() => setEdit(null)} disabled={savingEdit} className="kasten kasten-muted flex-1">Abbrechen</button>

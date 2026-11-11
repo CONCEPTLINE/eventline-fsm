@@ -163,7 +163,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
   }, [open, fehlerText]);
 
   // Aktionen-Treffer: client-seitig, instant (kein Server-Roundtrip).
-  // "krank" → Abwesenheit melden, "lohnerhoehung" → HR › Lohn, usw.
+  // "krank" → Abwesenheit melden, "lohnabrechnung" → HR › Lohn, usw.
   // Seiten = exakt die Sidebar dieser Rolle (paletteEintraege).
   const eintraege = useMemo(() => paletteEintraege(permissions, role), [permissions, role]);
   const actions = useMemo(() => {
@@ -321,7 +321,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
             ) : (
               <div className="py-2">
                 {/* Aktionen — Direktnavigation ("krank" → Abwesenheit melden,
-                    "lohnerhoehung" → HR › Lohn). Immer zuoberst. */}
+                    "lohnabrechnung" → HR › Lohn). Immer zuoberst. */}
                 {actions.length > 0 && (
                   <div className="mb-2">
                     <div className="px-4 py-1 text-[10px] font-semibold tracking-wider uppercase text-muted-foreground/60 max-md:text-[11px] max-md:text-muted-foreground">

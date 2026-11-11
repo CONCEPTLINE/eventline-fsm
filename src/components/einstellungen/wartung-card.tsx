@@ -66,7 +66,7 @@ export function WartungCard() {
             title: `Wartung «${info.label}» einschalten?`,
             message:
               `Betrifft: ${info.umfang}. Alle ausser den Ausnahmen sehen dort nur noch den Hinweis mit Mischas Kontakt; ` +
-              `die Schnittstellen antworten mit 503.${bereich === "lohn" ? " Der automatische Lohnlauf pausiert." : ""}`,
+              "die Schnittstellen antworten mit 503.",
             confirmLabel: "Einschalten",
             variant: "red",
           }

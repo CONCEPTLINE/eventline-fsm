@@ -51,14 +51,6 @@ export interface CalendarShift {
   meetingLink: string | null;
 }
 
-/** BVG-Forecast pro Person fuer den aktuell sichtbaren Monat (Schichtplan). */
-export interface BvgPersonForecast {
-  /** CHF-Prognose — null ohne vertrautes Geraet (dann nur die Ampel). */
-  chf: number | null;
-  threshold: number;
-  status: "ok" | "warn" | "crit";
-}
-
 /** Genehmigte Abwesenheit (time_off) — wird in beiden Views dezent als
  *  kleiner Marker pro Tag/Person gerendert. Geladen ueber
  *  team_abwesenheiten() (Migration 379): «abwesend» = maskierte Krankheit

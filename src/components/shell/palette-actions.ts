@@ -3,7 +3,7 @@
 // Zwei Quellen, zusammengefuehrt in paletteEintraege():
 //   1. PALETTE_ACTIONS — statischer Katalog von App-Aktionen/Zielen mit
 //      deutschen Synonymen — "krank" fuehrt zu Krank melden,
-//      "lohnerhoehung" zu HR › Lohn, usw.
+//      "lohnabrechnung" zu HR › Lohn, usw.
 //   2. Seiten — exakt die Sidebar (sichtbareNavGruppen: gleiche Labels,
 //      gleiche Sichtbarkeit). SEITEN_INFO ergaenzt nur Unterzeile und
 //      Suchbegriffe; eine eigene Seitenliste gibt es nicht mehr. Der
@@ -21,8 +21,8 @@
 // (Defense in depth).
 
 import {
-  CalendarOff, Clock, ClipboardList, FileText, Wallet, FileStack,
-  Timer, Percent, Users, Shield, ShieldCheck, Building2,
+  CalendarOff, Clock, ClipboardList, FileText, FileStack,
+  Timer, Users, Shield, ShieldCheck, Building2,
   Plug, Handshake, UserCircle, TrendingUp, CalendarCheck, Truck, LayoutDashboard,
   Receipt, Wrench, ThermometerSun,
 } from "lucide-react";
@@ -136,38 +136,10 @@ export const PALETTE_ACTIONS: PaletteAction[] = [
     icon: FileStack,
     keywords: ["lohn", "lohnabrechnung", "lohn pdf", "lohnausweis", "payslip", "lohnzettel"],
   },
-  // Befristet bis nach dem Lohnlauf November 2026 (Phase 2 entfernt /lohn/verwaltung).
-  {
-    id: "lohnerhoehung",
-    label: "Löhne & Lohnerhöhung",
-    sublabel: "HR › Lohn › Lohnverwaltung › Mitarbeiter-Lohn (Lohn ändern oder Erhöhung planen)",
-    href: "/lohn/verwaltung?tab=mitarbeiter",
-    icon: Wallet,
-    keywords: ["lohn", "lohnerhoehung", "gehalt", "gehaltserhoehung", "salaer", "stundenlohn", "lohn aendern", "verdienst", "brutto"],
-    gate: "lohn:manage",
-  },
-  {
-    id: "lohnabrechnungen",
-    label: "Lohndokumente verwalten",
-    sublabel: "HR › Lohn › Lohnverwaltung › Lohndokumente (Monats-Abrechnungen)",
-    href: "/lohn/verwaltung?tab=dokumente",
-    icon: FileStack,
-    keywords: ["lohnabrechnung", "lohndokumente", "lohnlauf", "abrechnung lohn", "lohn pdf"],
-    gate: "lohn:manage",
-  },
-  {
-    id: "lohn-standardwerte",
-    label: "Lohn-Standardwerte",
-    sublabel: "HR › Lohn › Lohnverwaltung › Standardwerte (AHV/ALV/BVG-Sätze)",
-    href: "/lohn/verwaltung?tab=standardwerte",
-    icon: Percent,
-    keywords: ["standardwerte", "abzuege", "ahv", "alv", "bvg", "sozialleistungen", "arbeitgeberanteil", "quellensteuer"],
-    gate: "lohn:manage",
-  },
   {
     id: "monatsstunden",
     label: "Stunden prüfen",
-    sublabel: "HR › Stempelzeiten › Prüfen (Stunden je Person vor der Lohnabrechnung)",
+    sublabel: "HR › Stempelzeiten › Prüfen (Stunden je Person vor dem Monatsabschluss)",
     href: "/stempelzeiten?ansicht=pruefen",
     icon: Timer,
     keywords: ["monatsstunden", "stunden pruefen", "stunden uebersicht", "stundenkontrolle", "monatsabschluss"],

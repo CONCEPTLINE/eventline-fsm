@@ -33,7 +33,7 @@ import { ChevronLeft, ChevronRight, Plus, CalendarDays } from "lucide-react";
 import { logError } from "@/lib/log";
 import { toast } from "sonner";
 import { formatJobNumber } from "@/lib/nummern-format";
-import type { BvgPersonForecast, CalendarItem, CalendarShift, CalendarTimeOff, CalendarView, ItemType } from "@/components/kalender/types";
+import type { CalendarItem, CalendarShift, CalendarTimeOff, CalendarView, ItemType } from "@/components/kalender/types";
 import { MonthView } from "@/components/kalender/month-view";
 import { WeekView } from "@/components/kalender/week-view";
 import { IcalFeedBlock } from "@/components/kalender/ical-feed-block";
@@ -52,7 +52,7 @@ import Loading from "./loading";
  * neue Termine), Desktop den bisherigen Kalender. Breite unbekannt (nur
  * SSR/Hydration) → Skelett ohne Effekte (loading.tsx hat beide Varianten per
  * md:), damit der Desktop-Baum am Handy nicht kurz mountet und seine
- * Abfragen (Items, BVG) verwirft.
+ * Abfragen (Items) verwirft.
  */
 export default function KalenderPage() {
   const isMobile = useIsMobile();
@@ -171,17 +171,6 @@ function KalenderDesktop() {
       document.removeEventListener("keydown", onKey);
     };
   }, [icalOpen]);
-  // BVG-Forecast pro Person fuer den aktuell sichtbaren Monat — wird in der
-  // Wochenansicht als Pille neben dem Namen gerendert. Nur in der Woche
-  // relevant (im Monat sieht man keine Person-Zeilen).
-  const [bvgByPerson, setBvgByPerson] = useState<Map<string, BvgPersonForecast>>(new Map());
-  // Cache pro Monats-Key ("YYYY-M") — Wochenwechsel INNERHALB desselben
-  // Monats loest damit keinen erneuten Abruf von /api/hr/bvg-prognose aus.
-  // Termin-Saves invalidieren den Cache via handleTerminChanged (der
-  // Forecast haengt an den Monats-Terminen), bvgRefreshKey erzwingt dann
-  // den Refetch fuer den aktuell sichtbaren Monat.
-  const bvgCacheRef = useRef<Map<string, Map<string, BvgPersonForecast>>>(new Map());
-  const [bvgRefreshKey, setBvgRefreshKey] = useState(0);
   const { can } = usePermissions();
 
   const year = currentDate.getFullYear();
@@ -403,80 +392,10 @@ function KalenderDesktop() {
 
   useEffect(() => { load(); }, [load]);
 
-  // Nach Termin-Save/-Delete: Kalender-Daten neu laden UND den BVG-Monats-
-  // Cache invalidieren — der Forecast rechnet aus den Monats-Terminen, ein
-  // gecachter Wert waere nach dem Save bis zum Monatswechsel stale.
-  // bvgRefreshKey stoesst den Forecast-Effect fuer den sichtbaren Monat an.
+  // Nach Termin-Save/-Delete: Kalender-Daten neu laden.
   const handleTerminChanged = useCallback(() => {
-    bvgCacheRef.current.clear();
-    setBvgRefreshKey((k) => k + 1);
     void load();
   }, [load]);
-
-  // BVG-Forecast pro Person fuer den Monat der aktuell sichtbaren Wochen-
-  // Ansicht (Pille im Schichtplan). Eigener Loader weil wir den GANZEN Monat
-  // brauchen — nicht nur die Sicht-Woche — sonst stimmt der Forecast nicht.
-  // Massgeblicher Monat = Monat des Donnerstags (weekDays[3], ISO-Konvention).
-  // Deps sind die primitiven Monats-Werte statt weekDays — Wochen-Nav
-  // innerhalb desselben Monats feuert den Effect gar nicht erst neu; ueber
-  // Monatsgrenzen hinweg greift zusaetzlich der bvgCacheRef pro Monats-Key.
-  const bvgYear = weekDays[3].getFullYear();
-  const bvgMonth = weekDays[3].getMonth() + 1;
-  // Lohnrecht als primitiver Wert in den Deps — `can` ist pro Render eine
-  // neue Funktion und wuerde den Effect sonst bei jedem Render neu feuern.
-  // Vor `ready` liefert can() false; sobald die Rechte da sind, laedt er.
-  const darfLohn = can("lohn:manage");
-  useEffect(() => {
-    if (view !== "woche") return;
-    // Ohne Lohnrecht keine Prognose (der Server antwortete ohnehin 403) —
-    // und keine Pillen aus einem frueheren Stand (z. B. nach «Ansicht als»).
-    if (!darfLohn) {
-      setBvgByPerson((prev) => (prev.size === 0 ? prev : new Map()));
-      return;
-    }
-    const cacheKey = `${bvgYear}-${bvgMonth}`;
-    const cached = bvgCacheRef.current.get(cacheKey);
-    if (cached) {
-      setBvgByPerson(cached);
-      return;
-    }
-    let cancelled = false;
-    // Lohn-Umbau Phase 1: Lohnzeilen und BVG-Schwelle liest nur noch der
-    // Server (/api/hr/bvg-prognose, Rechnung im Lohn-Rechenkern src/lib/lohn/kern).
-    const monat = `${bvgYear}-${String(bvgMonth).padStart(2, "0")}`;
-    (async () => {
-      let res: Response;
-      let body: { success?: boolean; error?: string; personen?: Record<string, BvgPersonForecast> } | null;
-      try {
-        res = await fetch(`/api/hr/bvg-prognose?monat=${monat}`, { cache: "no-store" });
-        body = await res.json().catch(() => null);
-      } catch (e) {
-        if (cancelled) return;
-        toast.error(`BVG-Prognose konnte nicht geladen werden: ${e instanceof Error ? e.message : String(e)}`);
-        setBvgByPerson(new Map());
-        return;
-      }
-      if (cancelled) return;
-      // 403 = kein Lohnrecht (serverseitig) → still keine Pillen, wie bisher.
-      if (res.status === 403) {
-        setBvgByPerson(new Map());
-        return;
-      }
-      if (!res.ok || !body?.success || !body.personen) {
-        toast.error(`BVG-Prognose konnte nicht geladen werden: ${body?.error ?? `HTTP ${res.status}`}`);
-        setBvgByPerson(new Map());
-        return;
-      }
-      const result = new Map<string, BvgPersonForecast>(Object.entries(body.personen));
-      // Nur NICHT-cancelled und erfolgreiche Ergebnisse cachen — eine
-      // cancelled-Antwort kann von VOR einer Termin-Aenderung stammen
-      // (handleTerminChanged leert den Cache mid-flight) und wuerde den
-      // frisch geleerten Cache re-verstalen; Fehler sollen neu versucht werden.
-      bvgCacheRef.current.set(cacheKey, result);
-      setBvgByPerson(result);
-    })();
-    return () => { cancelled = true; };
-  }, [view, bvgYear, bvgMonth, bvgRefreshKey, darfLohn]);
 
   // Navigation: in Wochenansicht +-7 Tage, in Monatsansicht +-1 Monat.
   function nav(direction: -1 | 1) {
@@ -655,7 +574,6 @@ function KalenderDesktop() {
                   shifts={shifts}
                   timeOffs={timeOffs}
                   onStandaloneShiftClick={setEditTerminId}
-                  bvgByPerson={bvgByPerson}
                 />
               </div>
             </div>

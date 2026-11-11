@@ -1,9 +1,9 @@
 // Cron: Erinnerung vor der Monatssperre (Lohn-Umbau Phase 4, vercel.json:
 // täglich am 1.–4. morgens Zürich).
 //
-// Am 5. des Monats wird der Vormonat gesperrt und abgerechnet. Ein offener
-// Stempel (kein Ende) zählt in der Abrechnung nicht — der Lohnlauf blockiert
-// dann den Monat (src/lib/lohn/lauf.ts). Darum vorher:
+// Am 5. des Monats wird der Vormonat gesperrt; Trust flow holt die Stempel
+// (/api/flow/stempel) und rechnet den Lohn. Ein offener Stempel (kein Ende)
+// zählt nicht und wird Trust flow als Problem gemeldet. Darum vorher:
 //   - 1.–4.: JEDE Person mit offenen Stempeln, die im Vormonat begonnen haben
 //     (Ortszeit Zürich), bekommt eine Erinnerung im Klartext («bis 4.
 //     ausstempeln, am 5. wird der Monat abgeschlossen») — Typ stempel_reminder
@@ -16,7 +16,7 @@
 // Grenze: Wer die In-App-Meldung dieses Typs abgeschaltet hat, hinterlässt
 // keinen Nachweis — eine Wiederholung am selben Tag kann Push/Mail doppeln.
 //
-// Wartung «Lohn» (Migration 363): nichts versenden (wie der Lohnlauf).
+// Wartung «Lohn» (Migration 363): nichts versenden.
 // SYSTEMWEG: nur mit CRON_SECRET (zeitsicher verglichen), kein Benutzer.
 // ?heute=YYYY-MM-DD nur ausserhalb der Produktion (Prüfskript).
 

@@ -27,10 +27,10 @@ export const PROFILE_MAX = 50;
 export const ANTWORTEN_PROFILE_MAX = 500;
 /** Antworten: höchstens so viele Fragen je Ausweis. */
 export const ANTWORTEN_FRAGEN_MAX = 20;
-/** Vergleich (Parallelmonat) nur bis und mit diesem Lohnmonat — danach rechnet das ERP nicht mehr. */
-export const VERGLEICH_BIS = { jahr: 2026, monat: 11 } as const;
-/** Lohnabrechnungen aus Bexio ab diesem Lohnmonat (und nur nach lohn_einstellungen.lauf_bis). */
-export const BEXIO_AB = { jahr: 2026, monat: 12 } as const;
+/** Vergleich nur bis und mit diesem Lohnmonat — der letzte, den das ERP gerechnet hat (ab November 2026 rechnet Trust flow, Mischa 11.11.2026). */
+export const VERGLEICH_BIS = { jahr: 2026, monat: 10 } as const;
+/** Lohnabrechnungen aus Trust flow ab diesem Lohnmonat (und nur nach lohn_einstellungen.lauf_bis). */
+export const BEXIO_AB = { jahr: 2026, monat: 11 } as const;
 /** Grösste PDF aus Bexio (dekodiert). */
 export const PDF_MAX_BYTES = 2 * 1024 * 1024;
 /** Grösster Körper der Ablage-Route (Base64 der PDF + Ausweis + JSON). */

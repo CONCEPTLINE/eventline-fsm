@@ -17,7 +17,7 @@
 import { Fragment, useMemo } from "react";
 import Link from "next/link";
 import { Clock, User, Plane } from "lucide-react";
-import type { BvgPersonForecast, CalendarItem, CalendarShift, CalendarTimeOff } from "./types";
+import type { CalendarItem, CalendarShift, CalendarTimeOff } from "./types";
 import { ABWESEND_LABEL } from "@/lib/abwesenheit-sichtbarkeit";
 
 const TIME_OFF_LABEL: Record<CalendarTimeOff["type"], string> = {
@@ -36,10 +36,6 @@ interface Props {
   /** Klick auf einen Termin ohne Job-Bezug (kein href). Optional —
    *  wenn nicht gesetzt, bleibt der Termin static. */
   onStandaloneShiftClick?: (shiftId: string) => void;
-  /** BVG-Forecast pro Profile-ID fuer den sichtbaren Monat — wird als
-   *  Pille neben dem Namen gerendert. Nur Personen mit Forecast bekommen
-   *  eine Pille (Stunden-Lohn nicht hinterlegt -> keine Pille). */
-  bvgByPerson?: Map<string, BvgPersonForecast>;
   /** Genehmigte Abwesenheiten — dezenter Marker (Plane-Icon) im
    *  jeweiligen (Person, Tag)-Cell, tooltip mit Typ. */
   timeOffs?: CalendarTimeOff[];
@@ -88,7 +84,7 @@ const SHIFT_STYLE_NEUTRAL = {
   text: "text-foreground/80",
 };
 
-export function WeekView({ weekDays, items, shifts, onStandaloneShiftClick, bvgByPerson, timeOffs }: Props) {
+export function WeekView({ weekDays, items, shifts, onStandaloneShiftClick, timeOffs }: Props) {
   // Lookup-Map (personId-dateKey -> TimeOff-Typ) fuer schnelle pro-Cell-
   // Pruefung. Built once pro Render-Cycle, NICHT pro Cell.
   const timeOffByPersonDay = useMemo(() => {
@@ -133,8 +129,7 @@ export function WeekView({ weekDays, items, shifts, onStandaloneShiftClick, bvgB
 
   // Mitarbeiter-Gruppen — pro Person die Termine der Woche, chronologisch.
   // Sortierung: alphabetisch nach Name; "Unzugewiesen" ans Ende.
-  // Key = assigneeId (UUID) damit Namens-Dubletten getrennt bleiben + Lookup
-  // gegen bvgByPerson direkt moeglich ist.
+  // Key = assigneeId (UUID) damit Namens-Dubletten getrennt bleiben.
   const personRows = useMemo(() => {
     const map = new Map<string, { id: string | null; name: string; isUnassigned: boolean; shifts: CalendarShift[] }>();
     for (const s of shifts) {
@@ -264,28 +259,10 @@ export function WeekView({ weekDays, items, shifts, onStandaloneShiftClick, bvgB
 
             {/* Person-Zeilen */}
             {personRows.map((g) => {
-              const bvg = g.id ? bvgByPerson?.get(g.id) : undefined;
-              // Ohne vertrautes Geraet liefert der Server nur die Ampel (chf null).
-              const bvgPct = bvg && bvg.chf != null ? Math.min(100, Math.round((bvg.chf / bvg.threshold) * 100)) : null;
-              const bvgStyle = bvg
-                ? bvg.status === "crit" ? "bg-red-500/15 text-red-700 dark:text-red-300 border-red-500/40"
-                : bvg.status === "warn" ? "bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/40"
-                : "bg-green-500/10 text-green-700 dark:text-green-300 border-green-500/30"
-                : "";
               return (
               <Fragment key={g.id ?? `noname-${g.name}`}>
                 <div className={`bg-card px-3 py-2 text-sm font-medium truncate flex items-center justify-between gap-2 ${g.isUnassigned ? "text-muted-foreground italic" : ""}`}>
                   <span className="truncate">{g.name}</span>
-                  {bvg && (
-                    <span
-                      className={`shrink-0 text-[10px] font-bold tabular-nums px-1.5 py-0.5 rounded border ${bvgStyle}`}
-                      data-tooltip={bvg.chf != null
-                        ? `BVG-Forecast: ${Math.round(bvg.chf).toLocaleString("de-CH")} / ${Math.round(bvg.threshold).toLocaleString("de-CH")} CHF (${bvgPct}%)`
-                        : `BVG-Ampel: ${bvg.status === "crit" ? "über der Schwelle" : bvg.status === "warn" ? "knapp unter der Schwelle" : "unter der Schwelle"} — Beträge nur auf einem vertrauten Gerät`}
-                    >
-                      {bvgPct != null ? `${bvgPct}%` : "BVG"}
-                    </span>
-                  )}
                 </div>
                 {weekDays.map((d) => {
                   const k = keyOf(d);

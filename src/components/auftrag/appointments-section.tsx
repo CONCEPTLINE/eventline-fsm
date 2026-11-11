@@ -102,13 +102,6 @@ export function AppointmentsSection({
   // Partner-Meldung bei verschobenen 'verschiebbar'-Terminen). Vorher gab
   // es am Auftrag keinen Zeit-Edit — nur Loeschen+Neu.
   const [editApptId, setEditApptId] = useState<string | null>(null);
-  // BVG-Vorwarnung: zeigt Confirm-Modal mit pro-Person-Aufschluesselung
-  // wenn Forecast nach Insert >= 95% der Schwelle erreicht.
-  const [bvgWarn, setBvgWarn] = useState<null | {
-    threshold: number;
-    rows: { name: string; current: number | null; after: number | null; status: "ok" | "warn" | "crit" }[];
-    pending: { startTime: string; endTime: string; assignees: string[]; userId: string | null };
-  }>(null);
 
   // Granulare Invalidierung: Termin-Aktionen aendern nur job_appointments.
   // Statt Parent-loadAll (6 Queries, resettet u.a. Notizen mid-edit) feuern
@@ -165,47 +158,7 @@ export function AppointmentsSection({
     const { data: { user } } = await supabase.auth.getUser();
     const assignees = apptForm.assigned_to.length > 0 ? apptForm.assigned_to : [user?.id || ""];
 
-    // BVG-Vorabpruefung: Forecast pro Assignee fuer den Monat, in dem der
-    // neue Termin liegt. Wenn jemand >= 95% reisst -> Modal. Seit dem
-    // Lohn-Umbau Phase 1 rechnet der Server (/api/hr/bvg-prognose) — der
-    // Browser liest keine Lohnzeilen mehr. Ohne Lohnrecht (403) keine
-    // Pruefung wie bisher; bei anderen Fehlern ein Hinweis, der Termin wird
-    // trotzdem gespeichert (die Warnung darf die Arbeit nicht blockieren).
-    type BvgZeile = { profile_id: string; current: number | null; after: number | null; status: "ok" | "warn" | "crit" };
-    const personen = assignees.filter(Boolean);
-    let bvg: { threshold: number; zeilen: BvgZeile[] } | null = null;
-    if (personen.length > 0) {
-      try {
-        const res = await fetch("/api/hr/bvg-prognose", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ datum: apptForm.date, start_time: startTime, end_time: endTime, personen }),
-        });
-        if (res.status !== 403) {
-          const body = (await res.json().catch(() => null)) as
-            | { success?: boolean; error?: string; threshold?: number | null; zeilen?: BvgZeile[] }
-            | null;
-          if (!res.ok || !body?.success) throw new Error(body?.error ?? `HTTP ${res.status}`);
-          if (body.threshold != null) bvg = { threshold: Number(body.threshold), zeilen: body.zeilen ?? [] };
-        }
-      } catch (err) {
-        toast.error(`BVG-Prüfung nicht möglich: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    }
-    const warnRows: { name: string; current: number | null; after: number | null; status: "ok" | "warn" | "crit" }[] = [];
-    for (const z of bvg?.zeilen ?? []) {
-      if (z.status === "ok") continue;
-      const p = profiles.find((x) => x.id === z.profile_id);
-      warnRows.push({ name: p?.full_name || "Unbekannt", current: z.current, after: z.after, status: z.status });
-    }
-    if (bvg && warnRows.length > 0) {
-      setAddingAppt(false);
-      setBvgWarn({ threshold: bvg.threshold, rows: warnRows, pending: { startTime, endTime, assignees, userId: user?.id ?? null } });
-      return;
-    }
-
     await persistAppointment(startTime, endTime, assignees, user?.id ?? null);
-    return;
     } finally {
       setAddingAppt(false);
     }
@@ -261,18 +214,6 @@ export function AppointmentsSection({
     setShowApptForm(false);
     invalidateAppointments();
     toast.success(`Termin für ${assignees.length} Person${assignees.length > 1 ? "en" : ""} erstellt`);
-  }
-
-  async function confirmBvgAndProceed() {
-    if (!bvgWarn) return;
-    const { pending } = bvgWarn;
-    setAddingAppt(true);
-    try {
-      await persistAppointment(pending.startTime, pending.endTime, pending.assignees, pending.userId);
-      setBvgWarn(null);
-    } finally {
-      setAddingAppt(false);
-    }
   }
 
   // useConfirm-Pattern statt vorherigem hardcoded Code "5225"-Modal —
@@ -732,46 +673,6 @@ export function AppointmentsSection({
         />
       )}
 
-      <Modal
-        open={bvgWarn !== null}
-        onClose={() => setBvgWarn(null)}
-        title="BVG-Eintrittsschwelle erreicht"
-        icon={<AlertTriangle className="h-5 w-5 text-red-500" />}
-        size="md"
-      >
-        {bvgWarn && (
-          <div className="space-y-3">
-            <p className="text-sm">
-              Mit diesem Termin verdienen folgende Personen brutto mehr als die hinterlegte BVG-Schwelle von <strong>{bvgWarn.threshold.toLocaleString("de-CH", { maximumFractionDigits: 0 })} CHF</strong> pro Monat. Sie würden damit BVG-pflichtig.
-            </p>
-            <div className="space-y-1">
-              {bvgWarn.rows.map((r) => (
-                <div key={r.name} className={`p-2 rounded-lg border text-xs ${r.status === "crit" ? "bg-red-500/10 border-red-500/40" : "bg-amber-500/10 border-amber-500/40"}`}>
-                  <div className="flex items-baseline justify-between">
-                    <span className="font-semibold">{r.name}</span>
-                    {r.current != null && r.after != null && (
-                      <span className="tabular-nums font-bold">
-                        {Math.round(r.current).toLocaleString("de-CH")} → {Math.round(r.after).toLocaleString("de-CH")} CHF
-                      </span>
-                    )}
-                  </div>
-                  <p className="text-muted-foreground mt-0.5">
-                    {r.status === "crit" ? "Über der Schwelle." : "Knapp unter der Schwelle (Warnzone)."}
-                  </p>
-                </div>
-              ))}
-            </div>
-            <div className="flex justify-end gap-2 pt-2 border-t border-border">
-              <button type="button" onClick={() => setBvgWarn(null)} className="kasten kasten-muted">
-                Abbrechen
-              </button>
-              <button type="button" onClick={confirmBvgAndProceed} disabled={addingAppt} className="kasten kasten-red">
-                {addingAppt ? "Erstellt…" : "Trotzdem erstellen"}
-              </button>
-            </div>
-          </div>
-        )}
-      </Modal>
     </>
   );
 }

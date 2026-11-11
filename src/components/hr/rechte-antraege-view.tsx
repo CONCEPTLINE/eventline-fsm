@@ -45,12 +45,12 @@ interface Antrag {
   eigener: boolean;
 }
 
-/** Lohndaten-Antrag (Phase 2, Migration 364): Änderung an Lohnzeile,
- *  Firmensätzen oder Anstellung nach der Monatssperre; Phase 4 (Migration 367)
- *  auch Stempel und Zusatzposten abgerechneter Monate. */
+/** Stempel-Antrag (Migrationen 364/367): Änderung an Stempeln abgerechneter
+ *  Monate. Lohnzeilen, Firmensätze, Anstellungen und Zusatzposten führt seit
+ *  November 2026 Trust flow (Lohn-Abbau 11.11.2026). */
 interface LohnAntrag {
   id: string;
-  bereich: "lohnzeile" | "firmensaetze" | "anstellung" | "stempel" | "zusatzposten";
+  bereich: "stempel";
   ziel_name: string | null;
   beschreibung: string;
   begruendung: string;
@@ -78,11 +78,7 @@ const ART_LABEL: Record<Antrag["art"], string> = {
 };
 
 const BEREICH_LABEL: Record<LohnAntrag["bereich"], string> = {
-  lohnzeile: "Lohnzeile",
-  firmensaetze: "Firmensätze",
-  anstellung: "Anstellung",
   stempel: "Stempel",
-  zusatzposten: "Zusatzposten",
 };
 
 /** Skelett: eine Karte mit Status, Angaben-Zeilen und zwei Knöpfen (CLAUDE.md §7). */
@@ -149,7 +145,7 @@ export function RechteAntraegeView({ onGeaendert }: { onGeaendert?: () => void }
     if (aktion === "bestaetigen") {
       const ok = await confirm({
         title: "Antrag bestätigen?",
-        message: `${a.beschreibung}.\nBegründung: ${a.begruendung}\n\nDie Änderung gilt sofort. Danach rechnet das System die betroffenen Monate neu und schlägt Korrekturfassungen vor (Lohn › Lohnverwaltung › Lohndokumente).`,
+        message: `${a.beschreibung}.\nBegründung: ${a.begruendung}\n\nDie Änderung gilt sofort.`,
         confirmLabel: "Bestätigen",
         variant: "blue",
       });
@@ -166,7 +162,7 @@ export function RechteAntraegeView({ onGeaendert }: { onGeaendert?: () => void }
       grund = await prompt({
         title: "Antrag ablehnen?",
         label: "Grund der Ablehnung",
-        placeholder: "z. B. Betrag stimmt nicht mit dem Vertrag überein",
+        placeholder: "z. B. Zeiten stimmen nicht mit dem Rapport überein",
         confirmLabel: "Ablehnen",
         variant: "red",
         maxLength: 500,
@@ -184,14 +180,7 @@ export function RechteAntraegeView({ onGeaendert }: { onGeaendert?: () => void }
       if (!res.ok || !json?.success) {
         toast.error((json?.error as string | undefined) ?? "Entscheid fehlgeschlagen.");
       } else if (aktion === "bestaetigen") {
-        const n = Number(json.vorschlaege ?? 0);
-        toast.success(`Bestätigt — ${n} Korrektur-Vorschl${n === 1 ? "ag" : "äge"} (Lohn › Lohnverwaltung › Lohndokumente)`);
-        const fehler = Array.isArray(json.fehler) ? (json.fehler as string[]) : [];
-        if (fehler.length > 0) {
-          toast.warning(`${fehler.length} Monat${fehler.length === 1 ? "" : "e"} nicht nachgerechnet`, {
-            description: fehler.slice(0, 5).join("\n") + (fehler.length > 5 ? "\n…" : ""),
-          });
-        }
+        toast.success("Bestätigt");
       } else {
         toast.success(a.eigener ? "Zurückgezogen" : "Abgelehnt");
       }
@@ -335,25 +324,25 @@ export function RechteAntraegeView({ onGeaendert }: { onGeaendert?: () => void }
         Admin: über Mischa.
       </p>
 
-      {/* Lohndaten (Phase 2): Lohnzeilen, Firmensätze, Anstellungen nach der Monatssperre */}
+      {/* Stempel abgerechneter Monate (Vier Augen) */}
       {lohn === undefined ? (
         <div className="shimmer rounded-md h-20" />
       ) : lohn && (
         <div className="space-y-4 pt-4 border-t border-border">
           <div>
             <h2 className="text-lg font-semibold tracking-tight flex items-center gap-2">
-              <Wallet className="h-4 w-4" /> Lohndaten
+              <Wallet className="h-4 w-4" /> Stempel abgerechneter Monate
             </h2>
             <p className="text-sm text-muted-foreground mt-0.5">
-              Änderungen an Lohnzeilen, Firmensätzen und Anstellungen, die abgerechnete Monate betreffen, gelten erst, wenn eine
-              zweite Person (anderer Admin oder Vertretung) innert 24 h bestätigt. Danach schlägt das System Korrekturfassungen vor.
+              Änderungen an Stempeln abgerechneter Monate gelten erst, wenn eine zweite Person (anderer Admin oder Vertretung)
+              innert 24 h bestätigt.
             </p>
           </div>
 
           <section className="space-y-2">
             <h2 className="px-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Offen</h2>
             {lohn.offen.length === 0 ? (
-              <EmptyState icon={Wallet} title="Keine offenen Lohndaten-Anträge" />
+              <EmptyState icon={Wallet} title="Keine offenen Stempel-Anträge" />
             ) : (
               lohn.offen.map((a) => (
                 <Card key={a.id} className={a.id === markiert ? "ring-2 ring-red-500/60" : undefined}>

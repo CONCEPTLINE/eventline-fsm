@@ -3,11 +3,6 @@
 //            → zählt als «geöffnet» (Zustellnachweis, Phase 4); Abrufe durch
 //            die Lohnverwaltung oder in «Ansicht als» zählen nie
 //          - alle anderen: Lohnrecht + vertrautes Gerät
-// DELETE /api/hr/wage-documents/[id] → in den PAPIERKORB (archivieren).
-//          Body optional { grund }. Nie endgültig löschen: Zeile und Datei
-//          bleiben, jede Aktion steht im Protokoll (lohn_dokument_protokoll).
-//          Lohnrecht + vertrautes Gerät.
-// Wiederherstellen: POST ./wiederherstellen
 
 import { NextResponse } from "next/server";
 import { requireUser, requireTrustedDevice, pruefeVertrautesGeraet } from "@/lib/api-auth";
@@ -58,29 +53,4 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     : `Lohnausweis_${doc.year}${fassung}.pdf`;
 
   return NextResponse.json({ success: true, url: signed.signedUrl, filename });
-}
-
-export async function DELETE(req: Request, { params }: { params: Promise<{ id: string }> }) {
-  const auth = await requireTrustedDevice(LOHN_RECHT);
-  if (auth.error) return auth.error;
-  const { id } = await params;
-  if (!isUuid(id)) return NextResponse.json({ success: false, error: "Nicht gefunden" }, { status: 404 });
-  const body = (await req.json().catch(() => null)) as { grund?: unknown } | null;
-  const grund = typeof body?.grund === "string" ? body.grund.trim().slice(0, 500) : null;
-
-  const admin = createAdminClient();
-  const { data: doc, error: docErr } = await admin.from("wage_documents").select("profile_id").eq("id", id).maybeSingle();
-  if (docErr) return NextResponse.json({ success: false, error: docErr.message }, { status: 500 });
-  if (!doc) return NextResponse.json({ success: false, error: "Nicht gefunden" }, { status: 404 });
-  if (doc.profile_id === auth.user.id) return NextResponse.json({ success: false, error: EIGENE_DOKUMENTE_VERBOTEN }, { status: 403 });
-  const { data: me, error: meErr } = await admin.from("profiles").select("full_name").eq("id", auth.user.id).maybeSingle();
-  if (meErr) return NextResponse.json({ success: false, error: meErr.message }, { status: 500 });
-  const { error } = await admin.rpc("lohn_dokument_archivieren", {
-    p_id: id,
-    p_actor: auth.user.id,
-    p_actor_name: (me?.full_name as string | null) ?? null,
-    p_grund: grund,
-  });
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 });
-  return NextResponse.json({ success: true });
 }

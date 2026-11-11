@@ -377,7 +377,7 @@ export async function DELETE(
   }
 
   // Lohn-Umbau Phase 1 — ZUERST pruefen, dann loeschen, nie Speicherdateien:
-  // Wer Lohnzeilen, Lohndokumente, Stempel oder entschiedene Abwesenheiten
+  // Wer Lohndokumente, Stempel oder entschiedene Abwesenheiten
   // hat, wird nicht geloescht, sondern bleibt archiviert (deaktiviert, Login
   // gesperrt) — Aufbewahrungspflicht. Die DB erzwingt dasselbe (Trigger
   // profiles_lohn_schutz, Migration 360). Dateien in «lohndokumente» und
@@ -385,7 +385,6 @@ export async function DELETE(
   // Person geloescht, noch bevor der Login weg war).
   if (profile) {
     const pruefungen = await Promise.all([
-      admin.from("employee_compensation").select("id", { count: "exact", head: true }).eq("profile_id", id),
       admin.from("wage_documents").select("id", { count: "exact", head: true }).eq("profile_id", id),
       admin.from("time_entries").select("id", { count: "exact", head: true }).eq("user_id", id),
       admin.from("time_off").select("id", { count: "exact", head: true }).eq("user_id", id).neq("status", "beantragt"),
@@ -394,7 +393,7 @@ export async function DELETE(
     if (fehler) {
       return NextResponse.json({ success: false, error: `Prüfung fehlgeschlagen: ${fehler.message}` }, { status: 500 });
     }
-    const namen = ["Lohnzeilen", "Lohndokumente", "Stempelzeiten", "Abwesenheiten"];
+    const namen = ["Lohndokumente", "Stempelzeiten", "Abwesenheiten"];
     const vorhanden = pruefungen.map((r, i) => ((r.count ?? 0) > 0 ? namen[i] : null)).filter(Boolean);
     if (vorhanden.length > 0) {
       return NextResponse.json(
