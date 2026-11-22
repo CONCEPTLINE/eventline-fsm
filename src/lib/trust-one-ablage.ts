@@ -13,7 +13,7 @@ import { TRUST_ONE_ABLAGE_BEREICH, TRUST_ONE_FRISTEN_LINK, TRUST_ONE_URL_STANDAR
 //   trust-one   GET  {TRUST_ONE_URL}/api/ablage/extern/fristen?bereich=…&tage=30 (Rueckweg bis 15.11.2026; danach
 //               faellt dieser Zweig samt Schalter weg)
 // ablageFristenLink() folgt demselben Schalter (Dashboard-Kachel). TRUST_FLOW_URL / TRUST_ONE_URL optional (Standard
-// https://flow.trust-group.ch bzw. https://one.trust-group.ch); Bearer TRUST_ONE_ABLAGE_TOKEN (= ABLAGE_EXTERN_TOKEN).
+// https://flow.linera-group.ch bzw. https://one.linera-group.ch); Bearer TRUST_ONE_ABLAGE_TOKEN (= ABLAGE_EXTERN_TOKEN).
 // Werte nie loggen.
 
 /** Wartezeit auf die Fristen (Dashboard und Wand warten darauf). */
@@ -24,7 +24,7 @@ const FRISTEN_CACHE_S = 300;
 const FRISTEN_TAGE = 30;
 
 /** Basis-Adresse von Trust flow (env TRUST_FLOW_URL kann sie ueberschreiben). */
-export const TRUST_FLOW_URL_STANDARD = "https://flow.trust-group.ch";
+export const TRUST_FLOW_URL_STANDARD = "https://flow.linera-group.ch";
 
 export type AblageZiel = "trust-one" | "trust-flow";
 
@@ -33,7 +33,7 @@ export function ablageZiel(): AblageZiel {
   return process.env.ABLAGE_ZIEL?.trim().toLowerCase() === "trust-flow" ? "trust-flow" : "trust-one";
 }
 
-const ZIEL_NAME: Record<AblageZiel, string> = { "trust-one": "Trust one", "trust-flow": "Trust flow" };
+const ZIEL_NAME: Record<AblageZiel, string> = { "trust-one": "LINERA one", "trust-flow": "LINERA flow" };
 
 function basisUrl(ziel: AblageZiel): string {
   const roh = ziel === "trust-flow"

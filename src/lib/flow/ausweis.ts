@@ -6,7 +6,7 @@
 // (Env FLOW_ABRUF_PUBLIC_KEY, SPKI/DER base64) — kein gemeinsames Geheimnis, das
 // ERP kann keinen Ausweis ausstellen.
 //
-// Claims: iss https://flow.trust-group.ch, aud (je Route), sub (Trust-flow-Profil),
+// Claims: iss https://flow.trust-group.ch oder https://flow.linera-group.ch (E9, FLOW_AUSSTELLER), aud (je Route), sub (Trust-flow-Profil),
 // jti (UUID, einmalig — prüft der Server in flow_abrufe), iat, exp (= iat + 60),
 // firma "eventline", aal "aal2", geraet true; je Route weitere (src/lib/flow/regeln.ts):
 // jahr/monat/von/bis und profile (Stempel/Vergleich) bzw. erp_profil_id, art, jahr/monat,
@@ -19,6 +19,8 @@
 import { createPublicKey, verify, type KeyObject } from "node:crypto";
 
 export const FLOW_ISS = "https://flow.trust-group.ch";
+/** Angenommene Aussteller von LINERA flow, alt und neu (E9): beide gelten, bis nach dem Schlüsseltag der alte entfernt wird. */
+export const FLOW_AUSSTELLER: readonly string[] = [FLOW_ISS, "https://flow.linera-group.ch"];
 export const FLOW_FIRMA = "eventline";
 
 export const FLOW_AUDS = [
@@ -135,7 +137,7 @@ export function pruefeFlowAusweis(
 
   const c = jsonTeil(p);
   if (!c) return { ok: false, grund: "format" };
-  if (c.iss !== FLOW_ISS) return { ok: false, grund: "aussteller" };
+  if (typeof c.iss !== "string" || !FLOW_AUSSTELLER.includes(c.iss)) return { ok: false, grund: "aussteller" };
   if (c.aud !== erwartet) return { ok: false, grund: "empfaenger" };
 
   const { iat, exp, nbf } = c;
@@ -153,7 +155,7 @@ export function pruefeFlowAusweis(
   return {
     ok: true,
     ausweis: {
-      iss: FLOW_ISS,
+      iss: c.iss,
       aud: erwartet,
       sub: (c.sub as string).toLowerCase(),
       jti: (c.jti as string).toLowerCase(),

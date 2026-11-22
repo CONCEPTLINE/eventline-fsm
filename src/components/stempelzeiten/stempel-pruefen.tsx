@@ -140,7 +140,7 @@ export function StempelPruefen() {
             gesperrt seit {tagMonat(aktuell.sperrt_ab)} – Änderungen nur per Antrag
           </span>
         )}
-        <p className="text-sm text-muted-foreground md:ml-auto">Stunden des Teams vor der Lohnabrechnung in Trust flow.</p>
+        <p className="text-sm text-muted-foreground md:ml-auto">Stunden des Teams vor der Lohnabrechnung in LINERA flow.</p>
       </div>
 
       <div className="overflow-hidden rounded-xl border border-border bg-card">
@@ -163,7 +163,7 @@ export function StempelPruefen() {
           aktuell.personen.map((p) => <PersonZeile key={p.profile_id} p={p} onPruefen={() => setOffenFuer(p.profile_id)} />)
         )}
       </div>
-      <p className="px-1 text-xs text-muted-foreground">Trust flow holt diese Stunden über die Schnittstelle.</p>
+      <p className="px-1 text-xs text-muted-foreground">LINERA flow holt diese Stunden über die Schnittstelle.</p>
 
       <PruefDialog
         person={person}

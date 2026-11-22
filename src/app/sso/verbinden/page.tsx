@@ -112,7 +112,7 @@ export default function SsoVerbindenPage() {
             <p className="text-sm text-red-600">{zustand.text}</p>
           ) : (
             <p className="text-sm">
-              Hier gibt es nichts zu verbinden. Klicke in Trust one auf EVENTLINE ERP, um die Verbindung zu starten.
+              Hier gibt es nichts zu verbinden. Klicke in LINERA one auf EVENTLINE ERP, um die Verbindung zu starten.
             </p>
           )}
           <Link href={APP_START} className="kasten kasten-muted w-full !py-2.5 !text-sm">
@@ -125,11 +125,11 @@ export default function SsoVerbindenPage() {
       {zustand.art === "frage" && (
         <div className="space-y-5 text-center">
           <p className="text-sm">
-            Trust one{zustand.trustOneName ? <> (<strong className="font-semibold">{zustand.trustOneName}</strong>)</> : null}{" "}
+            LINERA one{zustand.trustOneName ? <> (<strong className="font-semibold">{zustand.trustOneName}</strong>)</> : null}{" "}
             mit deinem Konto <strong className="font-semibold">{zustand.konto}</strong> verbinden?
           </p>
           <p className="text-xs text-muted-foreground">
-            Danach meldet dich ein Klick in Trust one direkt hier an.
+            Danach meldet dich ein Klick in LINERA one direkt hier an.
           </p>
           {fehler && <p className="text-sm text-red-600">{fehler}</p>}
           <div className="flex flex-col gap-2.5">

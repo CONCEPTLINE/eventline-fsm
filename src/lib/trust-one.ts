@@ -3,7 +3,7 @@
 // Browser (Links). Die Server-Aufrufe der Fremd-API stehen in lib/trust-one-ablage.
 
 /** Basis-Adresse von Trust one (Server-Aufrufe koennen sie per env TRUST_ONE_URL ueberschreiben). */
-export const TRUST_ONE_URL_STANDARD = "https://one.trust-group.ch";
+export const TRUST_ONE_URL_STANDARD = "https://one.linera-group.ch";
 
 /** Bereich (Slug) der EVENTLINE GmbH in der Trust-one-Ablage. */
 export const TRUST_ONE_ABLAGE_BEREICH = "eventline-gmbh";

@@ -2,7 +2,8 @@ import "server-only";
 import { createPublicKey, verify } from "node:crypto";
 
 export type TrustOneClaims = { iss: string; aud: string; sub: string; name?: string; iat: number; exp: number; jti: string };
-const ISS = "https://one.trust-group.ch";
+/** Aussteller von LINERA one, alt und neu (E9): beide gelten, bis nach dem Schlüsseltag der alte entfernt wird. */
+export const TRUST_ONE_AUSSTELLER: readonly string[] = ["https://one.trust-group.ch", "https://one.linera-group.ch"];
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** Prüft Signatur, Aussteller, Empfänger und Zeit. Gibt null bei jedem Fehler (nie Details nach aussen). */
@@ -19,7 +20,7 @@ export function verifyTrustOneToken(token: string, audience: "eventline" | "conc
     if (!verify(null, Buffer.from(`${h}.${p}`), pub, Buffer.from(s, "base64url"))) return null;
     const c = JSON.parse(Buffer.from(p, "base64url").toString("utf8")) as TrustOneClaims;
     const now = Math.floor(Date.now() / 1000);
-    if (c.iss !== ISS || c.aud !== audience) return null;
+    if (typeof c.iss !== "string" || !TRUST_ONE_AUSSTELLER.includes(c.iss) || c.aud !== audience) return null;
     if (typeof c.iat !== "number" || typeof c.exp !== "number") return null;
     if (c.exp < now - 5 || c.iat > now + 30 || c.exp - c.iat > 120) return null;
     if (!UUID.test(c.sub) || typeof c.jti !== "string" || c.jti.length < 16 || c.jti.length > 200) return null;

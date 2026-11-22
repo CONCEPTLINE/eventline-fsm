@@ -93,7 +93,7 @@ async function meldeAlteAblageAdresse(
     recipients,
     title: "Mail an die alte Ablage-Adresse",
     message: `Von ${absender} · «${betreff || "(kein Betreff)"}»${anhaenge ? ` · ${anhaenge} Anhang/Anhänge` : ""} — nicht abgelegt. `
-      + `Die Ablage ist in Trust flow: bitte an ${ABLAGE_ADRESSE_NEU} weiterleiten bzw. den Absender auf die neue Adresse hinweisen.`,
+      + `Die Ablage ist in LINERA flow: bitte an ${ABLAGE_ADRESSE_NEU} weiterleiten bzw. den Absender auf die neue Adresse hinweisen.`,
     link: null,
   });
 }

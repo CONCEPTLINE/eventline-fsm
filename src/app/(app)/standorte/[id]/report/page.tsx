@@ -537,7 +537,7 @@ export default async function LocationReportPage({ params, searchParams }: Props
                   <span className="r-kpi-label">Personal-Vollkosten</span>
                 </div>
                 <p className="r-kpi-value">CHF <span>{fmtChf(kpis.personal_vollkosten_chf)}</span></p>
-                <p className="r-kpi-hint">Stunden × Kosten-Satz (Trust flow)</p>
+                <p className="r-kpi-hint">Stunden × Kosten-Satz (LINERA flow)</p>
                 {kpis.personen_ohne_satz > 0 && <p className="r-kpi-hint">{ohneSatzText(kpis.personen_ohne_satz)}</p>}
               </div>
               <div className="r-kpi r-kpi-primary">
@@ -557,7 +557,7 @@ export default async function LocationReportPage({ params, searchParams }: Props
                   <span className="r-kpi-label">Personal-Vollkosten</span>
                 </div>
                 <p className="r-kpi-value">CHF <span>{fmtChf(kpis.personal_vollkosten_chf)}</span></p>
-                <p className="r-kpi-hint">Stunden × Kosten-Satz (Trust flow) · alle gearbeiteten Stunden im Zeitraum</p>
+                <p className="r-kpi-hint">Stunden × Kosten-Satz (LINERA flow) · alle gearbeiteten Stunden im Zeitraum</p>
                 {kpis.personen_ohne_satz > 0 && <p className="r-kpi-hint">{ohneSatzText(kpis.personen_ohne_satz)}</p>}
               </div>
               <div className="r-kpi r-kpi-primary">
@@ -988,7 +988,7 @@ export default async function LocationReportPage({ params, searchParams }: Props
               </div>
             </div>
             <p className="text-[9px] text-muted-foreground mt-2">
-              Vollkosten = gearbeitete Stunden × Kosten-Stundensatz je Mitarbeiter aus Trust flow (Lohn inkl.
+              Vollkosten = gearbeitete Stunden × Kosten-Stundensatz je Mitarbeiter aus LINERA flow (Lohn inkl.
               Ferien-/Feiertagszuschlag und Arbeitgeber-Beiträge), gültig am Tag der Stempelung. Stunden ohne
               Stundensatz (z. B. Provisionslohn) sind nicht eingerechnet{kpis.personen_ohne_satz > 0 ? " (* = teilweise ohne Satz)" : ""}.
             </p>

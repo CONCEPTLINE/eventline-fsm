@@ -522,7 +522,7 @@ function TeamBudgetPanel({
                   else actual += (e.minutes / 60) * satz;
                 }
                 const ohneSatzHinweis = ohneSatz.size > 0 && (
-                  <span className="opacity-70" data-tooltip="Kein Stundensatz aus Trust flow (z. B. Provisionslohn) — nicht in den Kosten enthalten">
+                  <span className="opacity-70" data-tooltip="Kein Stundensatz aus LINERA flow (z. B. Provisionslohn) — nicht in den Kosten enthalten">
                     ohne Satz: {ohneSatz.size} {ohneSatz.size === 1 ? "Person" : "Personen"}
                   </span>
                 );

@@ -68,7 +68,7 @@ echo "{\"date\":\"$DATE\",\"size\":\"$TOTAL_SIZE\",\"db_size\":\"$DUMP_SIZE\",\"
 # Status an Trust one melden (seit 24.10.2026; Technik → Sicherungen +
 # Alarm-Mail, wenn laenger als 26h keine OK-Meldung kommt). Best-effort:
 # eine fehlgeschlagene Meldung bricht das Backup nicht ab. Braucht im .env
-# FSM_URL=https://one.trust-group.ch und ABLAGE_SYNC_TOKEN = der
+# FSM_URL=https://one.linera-group.ch und ABLAGE_SYNC_TOKEN = der
 # NAS_BACKUP_TOKEN aus Trust one (Variablen-Name bleibt aus Gewohnheit).
 if [ -n "${FSM_URL:-}" ] && [ -n "${ABLAGE_SYNC_TOKEN:-}" ]; then
   log "Melde Backup-Status an Trust one..."

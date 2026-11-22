@@ -121,7 +121,7 @@ export default function SsoPage() {
       {zustand === "nicht_verbunden" && (
         <div className="space-y-5 text-center">
           <p className="text-sm">
-            Dieses Konto ist noch nicht mit Trust one verbunden. Melde dich einmal mit deinem EVENTLINE-Konto an,
+            Dieses Konto ist noch nicht mit LINERA one verbunden. Melde dich einmal mit deinem EVENTLINE-Konto an,
             dann verbinden wir es.
           </p>
           <button
@@ -141,7 +141,7 @@ export default function SsoPage() {
 
       {zustand === "fehler" && (
         <div className="space-y-5 text-center">
-          <p className="text-sm">Der Sprung aus Trust one hat nicht geklappt. Bitte normal anmelden.</p>
+          <p className="text-sm">Der Sprung aus LINERA one hat nicht geklappt. Bitte normal anmelden.</p>
           <Link href="/login" className="kasten kasten-muted w-full !py-2.5 !text-sm">
             <LogIn className="h-4 w-4" />
             Zur Anmeldung

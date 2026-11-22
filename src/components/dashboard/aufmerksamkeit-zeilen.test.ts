@@ -21,7 +21,7 @@ describe("aufmerksamkeitZeilen — Fristen (E3.4)", () => {
       n: 3,
       label: "Fristen in 30 Tagen",
       ton: "amber",
-      href: "https://one.trust-group.ch/geschaeft/ablage/eventline-gmbh?ansicht=fristen",
+      href: "https://one.linera-group.ch/geschaeft/ablage/eventline-gmbh?ansicht=fristen",
     });
     expect(aufmerksamkeitZeilen({ ...leer, fristen_30_tage: 1 })[0].label).toBe("Frist in 30 Tagen");
   });
@@ -35,10 +35,10 @@ describe("aufmerksamkeitZeilen — Fristen (E3.4)", () => {
   });
 
   it("Link vom Server (Schalter ABLAGE_ZIEL) gewinnt; fehlt er (alter Cache), Trust one", () => {
-    expect(aufmerksamkeitZeilen({ ...leer, fristen_30_tage: 2, fristen_link: "https://flow.trust-group.ch/eventline/fristen" })[0].href)
-      .toBe("https://flow.trust-group.ch/eventline/fristen");
+    expect(aufmerksamkeitZeilen({ ...leer, fristen_30_tage: 2, fristen_link: "https://flow.linera-group.ch/eventline/fristen" })[0].href)
+      .toBe("https://flow.linera-group.ch/eventline/fristen");
     expect(aufmerksamkeitZeilen({ ...leer, fristen_30_tage: 2, fristen_link: null })[0].href)
-      .toBe("https://one.trust-group.ch/geschaeft/ablage/eventline-gmbh?ansicht=fristen");
+      .toBe("https://one.linera-group.ch/geschaeft/ablage/eventline-gmbh?ansicht=fristen");
   });
 
   it("Reihenfolge: nach den Anfragen, vor dem Abrechnen", () => {

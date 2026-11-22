@@ -32,7 +32,7 @@ describe("ladeTrustOneFristen", () => {
     fetchMock.mockResolvedValue(antwort(200, { success: true, fristen: [], anzahl_aktiv: 2, anzahl_vorschlag: 3 }));
     await expect(ladeTrustOneFristen()).resolves.toEqual({ aktiv: 2, vorschlag: 3 });
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit & { headers: Record<string, string> }];
-    expect(url).toBe("https://one.trust-group.ch/api/ablage/extern/fristen?bereich=eventline-gmbh&tage=30");
+    expect(url).toBe("https://one.linera-group.ch/api/ablage/extern/fristen?bereich=eventline-gmbh&tage=30");
     expect(init.headers.Authorization).toBe(`Bearer ${TOKEN}`);
   });
 
@@ -69,7 +69,7 @@ describe("Schalter ABLAGE_ZIEL (Umzug nach Trust flow)", () => {
     vi.stubEnv("ABLAGE_ZIEL", "trust-one");
     fetchMock.mockResolvedValue(antwort(200, { success: true, anzahl_aktiv: 1, anzahl_vorschlag: 0 }));
     await expect(ladeTrustOneFristen()).resolves.toEqual({ aktiv: 1, vorschlag: 0 });
-    expect(fetchMock.mock.calls[0][0]).toBe("https://one.trust-group.ch/api/ablage/extern/fristen?bereich=eventline-gmbh&tage=30");
+    expect(fetchMock.mock.calls[0][0]).toBe("https://one.linera-group.ch/api/ablage/extern/fristen?bereich=eventline-gmbh&tage=30");
   });
 
   it("trust-flow: POST {firma, tage: 30} mit Bearer; faellig → aktiv, vorschlaege → vorschlag", async () => {
@@ -77,7 +77,7 @@ describe("Schalter ABLAGE_ZIEL (Umzug nach Trust flow)", () => {
     fetchMock.mockResolvedValue(antwort(200, { offen: 9, faellig: 4, vorschlaege: 2 }));
     await expect(ladeTrustOneFristen()).resolves.toEqual({ aktiv: 4, vorschlag: 2 });
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit & { headers: Record<string, string> }];
-    expect(url).toBe("https://flow.trust-group.ch/api/ablage/extern/fristen");
+    expect(url).toBe("https://flow.linera-group.ch/api/ablage/extern/fristen");
     expect(init.method).toBe("POST");
     expect(init.headers.Authorization).toBe(`Bearer ${TOKEN}`);
     expect(init.headers["Content-Type"]).toBe("application/json");
@@ -95,22 +95,22 @@ describe("Schalter ABLAGE_ZIEL (Umzug nach Trust flow)", () => {
   it("trust-flow wirft statt 0: Serverfehler, kaputte Antwort, Netzfehler, fehlender Token", async () => {
     vi.stubEnv("ABLAGE_ZIEL", "trust-flow");
     fetchMock.mockResolvedValueOnce(antwort(401, { error: "nein" }));
-    await expect(ladeTrustOneFristen()).rejects.toThrow(/Trust flow antwortet nicht wie erwartet \(HTTP 401\)/);
+    await expect(ladeTrustOneFristen()).rejects.toThrow(/LINERA flow antwortet nicht wie erwartet \(HTTP 401\)/);
     fetchMock.mockResolvedValueOnce(antwort(200, { offen: 1, faellig: -1, vorschlaege: 0 }));
     await expect(ladeTrustOneFristen()).rejects.toThrow(/nicht wie erwartet/);
     fetchMock.mockResolvedValueOnce(antwort(200, { anzahl_aktiv: 1, anzahl_vorschlag: 0, success: true }));
     await expect(ladeTrustOneFristen()).rejects.toThrow(/nicht wie erwartet/);
     fetchMock.mockRejectedValueOnce(new TypeError("fetch failed"));
-    await expect(ladeTrustOneFristen()).rejects.toThrow(/Trust flow ist nicht erreichbar/);
+    await expect(ladeTrustOneFristen()).rejects.toThrow(/LINERA flow ist nicht erreichbar/);
     vi.stubEnv("TRUST_ONE_ABLAGE_TOKEN", "");
-    await expect(ladeTrustOneFristen()).rejects.toThrow(/Trust flow ist nicht verbunden/);
+    await expect(ladeTrustOneFristen()).rejects.toThrow(/LINERA flow ist nicht verbunden/);
     expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 
   it("Link der Dashboard-Kachel folgt dem Schalter (Trust flow /eventline/fristen, sonst Trust one wie bisher)", () => {
-    expect(ablageFristenLink()).toBe("https://one.trust-group.ch/geschaeft/ablage/eventline-gmbh?ansicht=fristen");
+    expect(ablageFristenLink()).toBe("https://one.linera-group.ch/geschaeft/ablage/eventline-gmbh?ansicht=fristen");
     vi.stubEnv("ABLAGE_ZIEL", "trust-flow");
-    expect(ablageFristenLink()).toBe("https://flow.trust-group.ch/eventline/fristen");
+    expect(ablageFristenLink()).toBe("https://flow.linera-group.ch/eventline/fristen");
     vi.stubEnv("TRUST_FLOW_URL", "http://localhost:3200/");
     expect(ablageFristenLink()).toBe("http://localhost:3200/eventline/fristen");
   });

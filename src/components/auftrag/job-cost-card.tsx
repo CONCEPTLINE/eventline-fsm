@@ -45,7 +45,7 @@ export function PlannedCostBadge({ jobId, refreshKey }: { jobId: string; refresh
   const ohneSatz = planned.ohneSatz > 0 ? (
     <span
       className="text-[11px] font-normal normal-case tracking-normal whitespace-nowrap text-muted-foreground"
-      data-tooltip={`${planned.ohneSatz === 1 ? "1 Person hat" : `${planned.ohneSatz} Personen haben`} keinen Stundensatz aus Trust flow (z. B. Provisionslohn) — nicht in den Kosten enthalten`}
+      data-tooltip={`${planned.ohneSatz === 1 ? "1 Person hat" : `${planned.ohneSatz} Personen haben`} keinen Stundensatz aus LINERA flow (z. B. Provisionslohn) — nicht in den Kosten enthalten`}
     >
       ohne Satz: {planned.ohneSatz} {planned.ohneSatz === 1 ? "Person" : "Personen"}
     </span>
@@ -56,7 +56,7 @@ export function PlannedCostBadge({ jobId, refreshKey }: { jobId: string; refresh
     <>
       <span
         className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold tabular-nums whitespace-nowrap normal-case tracking-normal bg-green-100 text-green-700 dark:bg-green-500/20 dark:text-green-300"
-        data-tooltip={`Personal-Kosten-Prognose: ${hours} h zugewiesene Termine × Kosten-CHF/h der Mitarbeiter aus Trust flow (nur mit Lohnrecht sichtbar)`}
+        data-tooltip={`Personal-Kosten-Prognose: ${hours} h zugewiesene Termine × Kosten-CHF/h der Mitarbeiter aus LINERA flow (nur mit Lohnrecht sichtbar)`}
       >
         ~ CHF {Math.round(planned.chf).toLocaleString("de-CH")}
       </span>

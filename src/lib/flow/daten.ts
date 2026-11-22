@@ -391,7 +391,7 @@ export async function arztzeugnisAntwort(admin: SupabaseClient, a: { timeOffId: 
       ok: false,
       status: 410,
       code: "arztzeugnis_geloescht",
-      meldung: `Das Arztzeugnis wurde an Trust flow übergeben und ${ARZTZEUGNIS_LOESCHEN_NACH_TAGEN} Tage danach im ERP gelöscht.`,
+      meldung: `Das Arztzeugnis wurde an LINERA flow übergeben und ${ARZTZEUGNIS_LOESCHEN_NACH_TAGEN} Tage danach im ERP gelöscht.`,
       daten: { an_flow_at: z.arztzeugnis_an_flow_at as string },
     };
   }

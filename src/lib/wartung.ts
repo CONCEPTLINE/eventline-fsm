@@ -21,7 +21,7 @@ export type WartungBereich = (typeof WARTUNG_BEREICHE)[number];
 export const WARTUNG_BEREICH_INFO: Record<WartungBereich, { label: string; umfang: string }> = {
   lohn: {
     label: "Lohn",
-    umfang: "Lohn-Seite, Lohndokumente, Stempel prüfen, Trust-flow-Schnittstellen",
+    umfang: "Lohn-Seite, Lohndokumente, Stempel prüfen, LINERA-flow-Schnittstellen",
   },
   rechte: {
     label: "Rechte",

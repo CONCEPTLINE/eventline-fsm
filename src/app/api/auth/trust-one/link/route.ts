@@ -24,9 +24,9 @@ import { logError } from "@/lib/log";
 
 const PENDING_FORMAT = /^[A-Za-z0-9_-]{20,100}$/;
 const MSG_ABGELAUFEN =
-  "Diese Verbindung ist abgelaufen oder wurde schon verwendet. Klicke in Trust one nochmals auf EVENTLINE ERP.";
+  "Diese Verbindung ist abgelaufen oder wurde schon verwendet. Klicke in LINERA one nochmals auf EVENTLINE ERP.";
 const MSG_ANDERES_KONTO =
-  "Dein EVENTLINE-Konto ist bereits mit einem anderen Trust-one-Konto verbunden. Wende dich an einen Admin.";
+  "Dein EVENTLINE-Konto ist bereits mit einem anderen LINERA-one-Konto verbunden. Wende dich an einen Admin.";
 const MSG_FEHLER = "Verbinden hat nicht geklappt. Bitte nochmals versuchen.";
 
 function antwort(status: number, body: Record<string, unknown>) {
