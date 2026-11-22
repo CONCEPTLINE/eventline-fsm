@@ -2,13 +2,14 @@ import "server-only";
 import { createPublicKey, verify } from "node:crypto";
 
 export type TrustOneClaims = { iss: string; aud: string; sub: string; name?: string; iat: number; exp: number; jti: string };
-/** Aussteller von LINERA one, alt und neu (E9): beide gelten, bis nach dem Schlüsseltag der alte entfernt wird. */
-export const TRUST_ONE_AUSSTELLER: readonly string[] = ["https://one.trust-group.ch", "https://one.linera-group.ch"];
+/** Aussteller von LINERA one (E9 W5, 22.11.2026: nur noch der neue; one.trust-group.ch ist abgeschaltet). */
+export const TRUST_ONE_AUSSTELLER: readonly string[] = ["https://one.linera-group.ch"];
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** Prüft Signatur, Aussteller, Empfänger und Zeit. Gibt null bei jedem Fehler (nie Details nach aussen). */
 export function verifyTrustOneToken(token: string, audience: "eventline" | "conceptline"): TrustOneClaims | null {
-  const key = process.env.TRUST_ONE_SSO_PUBLIC_KEY;
+  // Env (E9 W4): zuerst LINERA_ONE_SSO_PUBLIC_KEY, dann der alte Name TRUST_ONE_SSO_PUBLIC_KEY als Rueckfall.
+  const key = process.env.LINERA_ONE_SSO_PUBLIC_KEY || process.env.TRUST_ONE_SSO_PUBLIC_KEY;
   if (!key || typeof token !== "string" || token.length > 4000) return null;
   const parts = token.split(".");
   if (parts.length !== 3) return null;

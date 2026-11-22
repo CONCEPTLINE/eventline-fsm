@@ -9,13 +9,13 @@ import { istIntern } from "@/lib/roles";
 // ladeAblageKontext: `mitarbeiter` = aktiv und intern (nur sie darf die KI als
 // Person setzen), `namen_alle` = jeder Name (Minimierung vor Claude,
 // Personalakten-Regel). Nur Name + zwei Flags, keine IDs, Mails oder Rollen.
-// Auth: Bearer TRUST_ONE_API_TOKEN (in Trust one: ERP_API_TOKEN), timing-safe;
+// Auth: Bearer LINERA_ONE_API_TOKEN (Rueckfall alter Name TRUST_ONE_API_TOKEN; in LINERA one: ERP_API_TOKEN), timing-safe;
 // ohne konfiguriertes Secret 503.
 
 export const dynamic = "force-dynamic";
 
 function tokenOk(request: Request): boolean | null {
-  const secret = process.env.TRUST_ONE_API_TOKEN;
+  const secret = process.env.LINERA_ONE_API_TOKEN || process.env.TRUST_ONE_API_TOKEN;
   if (!secret || secret.length < 32) return null;
   const header = request.headers.get("authorization") ?? "";
   const a = Buffer.from(header.startsWith("Bearer ") ? header.slice(7) : "");

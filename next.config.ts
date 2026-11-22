@@ -117,14 +117,16 @@ const nextConfig: NextConfig = {
     // Vermietungs-Ablauf: Vertragskopf (barakuba-Logo) + Mail-Anhänge (Infoblatt, Checkliste, Poller-Merkblatt).
     "/api/jobs/\\[id\\]/ablauf/**": ["src/lib/ablauf/unterlagen/**/*.pdf"],
   },
-  // Ablage (NAS) und Technik leben seit 24.10.2026 in Trust one — alte Lesezeichen und Mail-Links dorthin leiten.
+  // Ablage (NAS) lebt seit 01.11.2026 in LINERA flow (Firma «eventline»), Technik in LINERA one — alte Lesezeichen
+  // und Mail-Links dorthin leiten. Env zuerst neuer Name LINERA_*, dann alter TRUST_* als Rueckfall.
   async redirects() {
-    const trustOne = (process.env.TRUST_ONE_URL?.trim() || "https://one.linera-group.ch").replace(/\/+$/, "");
-    const ablage = `${trustOne}/geschaeft/ablage/eventline-gmbh`;
+    const lineraOne = (process.env.LINERA_ONE_URL?.trim() || process.env.TRUST_ONE_URL?.trim() || "https://one.linera-group.ch").replace(/\/+$/, "");
+    const lineraFlow = (process.env.LINERA_FLOW_URL?.trim() || process.env.TRUST_FLOW_URL?.trim() || "https://flow.linera-group.ch").replace(/\/+$/, "");
+    const ablage = `${lineraFlow}/eventline/ablage`;
     return [
       { source: "/nas/:pfad*", destination: ablage, permanent: false },
       { source: "/ablage/:pfad*", destination: ablage, permanent: false },
-      { source: "/technik/:pfad*", destination: `${trustOne}/`, permanent: false },
+      { source: "/technik/:pfad*", destination: `${lineraOne}/`, permanent: false },
     ];
   },
   async headers() {

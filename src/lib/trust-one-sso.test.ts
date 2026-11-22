@@ -18,15 +18,18 @@ function token(claims: Record<string, unknown>, privat: KeyObject = paar.private
 
 function claims(extra: Record<string, unknown> = {}): Record<string, unknown> {
   const iat = Math.floor(Date.now() / 1000);
-  return { iss: "https://one.trust-group.ch", aud: "eventline", sub: randomUUID(), iat, exp: iat + 60, jti: randomUUID(), ...extra };
+  return { iss: "https://one.linera-group.ch", aud: "eventline", sub: randomUUID(), iat, exp: iat + 60, jti: randomUUID(), ...extra };
 }
 
-beforeEach(() => vi.stubEnv("TRUST_ONE_SSO_PUBLIC_KEY", pubB64));
+beforeEach(() => {
+  vi.stubEnv("TRUST_ONE_SSO_PUBLIC_KEY", pubB64);
+  vi.stubEnv("LINERA_ONE_SSO_PUBLIC_KEY", "");
+});
 afterEach(() => vi.unstubAllEnvs());
 
 describe("verifyTrustOneToken", () => {
-  it("alter Aussteller one.trust-group.ch → gültig (heutiger Sprung one → ERP)", () => {
-    expect(verifyTrustOneToken(token(claims()), "eventline")?.iss).toBe("https://one.trust-group.ch");
+  it("alter Aussteller one.trust-group.ch → abgelehnt (E9 W5)", () => {
+    expect(verifyTrustOneToken(token(claims({ iss: "https://one.trust-group.ch" })), "eventline")).toBeNull();
   });
 
   it("neuer Aussteller one.linera-group.ch → gültig (Schlüsseltag)", () => {
@@ -44,5 +47,11 @@ describe("verifyTrustOneToken", () => {
   it("ohne öffentlichen Schlüssel → abgelehnt", () => {
     vi.stubEnv("TRUST_ONE_SSO_PUBLIC_KEY", "");
     expect(verifyTrustOneToken(token(claims()), "eventline")).toBeNull();
+  });
+
+  it("Schlüssel unter dem neuen Namen LINERA_ONE_SSO_PUBLIC_KEY → gültig (alter Name nur Rückfall)", () => {
+    vi.stubEnv("TRUST_ONE_SSO_PUBLIC_KEY", "");
+    vi.stubEnv("LINERA_ONE_SSO_PUBLIC_KEY", pubB64);
+    expect(verifyTrustOneToken(token(claims()), "eventline")).not.toBeNull();
   });
 });

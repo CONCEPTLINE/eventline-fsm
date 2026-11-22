@@ -45,9 +45,9 @@ export function aufmerksamkeitZeilen(a: AufmerksamkeitDaten): AufmerksamkeitZeil
     // Vier-Augen-Anträge (nur Admin): offen und von DIESEM Admin bestätigbar.
     // `?? null`: fehlt in einem alten Session-Cache.
     { key: "rechte", n: a.rechte_antraege ?? null, eins: "Rechte-/Lohndaten-Antrag", mehr: "Rechte-/Lohndaten-Anträge", ton: "amber", icon: ShieldCheck, href: rechteAntraegeHref({ from: "dashboard" }) },
-    // Fristen der Ablage (nur Admin; Trust one, ab dem Umzug Trust flow): aktive
-    // und noch offene Vorschlaege mit Datum heute bis +30 Tage. Link vom Server
-    // (Schalter ABLAGE_ZIEL); alte Session-Caches ohne Link → Trust one.
+    // Fristen der Ablage (nur Admin; LINERA flow): aktive und noch offene
+    // Vorschlaege mit Datum heute bis +30 Tage. Link vom Server (Schalter
+    // ABLAGE_ZIEL); alte Session-Caches ohne Link → Fristen in LINERA flow.
     { key: "fristen", n: a.fristen_30_tage, eins: "Frist in 30 Tagen", mehr: "Fristen in 30 Tagen", ton: "amber", icon: CalendarClock, href: a.fristen_link || TRUST_ONE_FRISTEN_LINK },
     { key: "abrechnen", n: a.nicht_abgerechnet, eins: "Auftrag nicht abgerechnet", mehr: "Aufträge nicht abgerechnet", ton: "neutral", icon: Banknote, href: "/abrechnung?from=dashboard" },
     { key: "belege", n: a.neue_belege, eins: "Neuer Beleg", mehr: "Neue Belege", ton: "neutral", icon: Receipt, href: "/abrechnung?from=dashboard" },

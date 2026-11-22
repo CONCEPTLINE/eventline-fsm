@@ -113,7 +113,7 @@ async function warteAufServer(erwartet) {
 // --- Ausweise und Aufrufe
 const b64 = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
 function ausweis(aud, extra = {}, { privat = KEY.privat, iat = Math.floor(Date.now() / 1000) } = {}) {
-  const c = { iss: "https://flow.trust-group.ch", aud, sub: SUB, jti: randomUUID(), iat, exp: iat + 60, firma: "eventline", aal: "aal2", geraet: true, ...extra };
+  const c = { iss: "https://flow.linera-group.ch", aud, sub: SUB, jti: randomUUID(), iat, exp: iat + 60, firma: "eventline", aal: "aal2", geraet: true, ...extra };
   const kopf = b64({ alg: "EdDSA", typ: "JWT" });
   const inhalt = b64(c);
   return { token: `${kopf}.${inhalt}.${sign(null, Buffer.from(`${kopf}.${inhalt}`), privat).toString("base64url")}`, jti: c.jti };

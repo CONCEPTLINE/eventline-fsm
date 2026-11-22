@@ -14,14 +14,14 @@ const leer: AufmerksamkeitDaten = {
 };
 
 describe("aufmerksamkeitZeilen — Fristen (E3.4)", () => {
-  it("Zeile «Fristen in 30 Tagen» mit Link auf die Fristen der Ablage in Trust one", () => {
+  it("Zeile «Fristen in 30 Tagen» mit Link auf die Fristen der Ablage in LINERA flow", () => {
     const [z] = aufmerksamkeitZeilen({ ...leer, fristen_30_tage: 3 });
     expect(z).toMatchObject({
       key: "fristen",
       n: 3,
       label: "Fristen in 30 Tagen",
       ton: "amber",
-      href: "https://one.linera-group.ch/geschaeft/ablage/eventline-gmbh?ansicht=fristen",
+      href: "https://flow.linera-group.ch/eventline/fristen",
     });
     expect(aufmerksamkeitZeilen({ ...leer, fristen_30_tage: 1 })[0].label).toBe("Frist in 30 Tagen");
   });
@@ -34,11 +34,11 @@ describe("aufmerksamkeitZeilen — Fristen (E3.4)", () => {
     expect(aufmerksamkeitZeilen(alt as AufmerksamkeitDaten)).toHaveLength(0);
   });
 
-  it("Link vom Server (Schalter ABLAGE_ZIEL) gewinnt; fehlt er (alter Cache), Trust one", () => {
+  it("Link vom Server (Schalter ABLAGE_ZIEL) gewinnt; fehlt er (alter Cache), Fristen in LINERA flow", () => {
     expect(aufmerksamkeitZeilen({ ...leer, fristen_30_tage: 2, fristen_link: "https://flow.linera-group.ch/eventline/fristen" })[0].href)
       .toBe("https://flow.linera-group.ch/eventline/fristen");
     expect(aufmerksamkeitZeilen({ ...leer, fristen_30_tage: 2, fristen_link: null })[0].href)
-      .toBe("https://one.linera-group.ch/geschaeft/ablage/eventline-gmbh?ansicht=fristen");
+      .toBe("https://flow.linera-group.ch/eventline/fristen");
   });
 
   it("Reihenfolge: nach den Anfragen, vor dem Abrechnen", () => {

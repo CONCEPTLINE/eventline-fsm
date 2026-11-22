@@ -74,10 +74,10 @@ describe("Ausweis prüfen", () => {
     expect(pruefe(`${h}.${p}.`)).toEqual({ ok: false, grund: "format" });
   });
 
-  it("Aussteller alt (flow.trust-group.ch) und neu (flow.linera-group.ch) → beide gültig (E9)", () => {
+  it("Aussteller nur neu (flow.linera-group.ch); alt (flow.trust-group.ch) abgelehnt (E9 W5)", () => {
     const alt = pruefe(signiere(k.privat, claims("erp-stempel", JETZT, { iss: "https://flow.trust-group.ch" })));
     const neu = pruefe(signiere(k.privat, claims("erp-stempel", JETZT, { iss: "https://flow.linera-group.ch" })));
-    expect(alt.ok && alt.ausweis.iss).toBe("https://flow.trust-group.ch");
+    expect(alt).toEqual({ ok: false, grund: "aussteller" });
     expect(neu.ok && neu.ausweis.iss).toBe("https://flow.linera-group.ch");
     expect(pruefe(signiere(k.privat, claims("erp-stempel", JETZT, { iss: "https://flow.linera-group.ch/" })))).toEqual({ ok: false, grund: "aussteller" });
     expect(pruefe(signiere(k.privat, claims("erp-stempel", JETZT, { iss: ["https://flow.linera-group.ch"] })))).toEqual({ ok: false, grund: "aussteller" });

@@ -135,7 +135,7 @@ export async function POST(request: Request) {
   }
 
   // Kein eigenes Login-Protokoll in der App — eine Zeile im Vercel-Log.
-  console.info(JSON.stringify({ ctx: "api.auth.trust-one", ereignis: "Anmeldung über Trust one", profile_id: profile.id }));
+  console.info(JSON.stringify({ ctx: "api.auth.trust-one", ereignis: "Anmeldung über LINERA one", profile_id: profile.id }));
 
   return antwort(200, { status: "ok", token_hash: linkData.properties.hashed_token });
 }

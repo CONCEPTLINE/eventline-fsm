@@ -105,7 +105,7 @@ export async function POST(request: Request) {
     return antwort(500, { success: false, error: MSG_FEHLER });
   }
 
-  console.info(JSON.stringify({ ctx: "api.auth.trust-one.link", ereignis: "Mit Trust one verbunden", profile_id: profileId }));
+  console.info(JSON.stringify({ ctx: "api.auth.trust-one.link", ereignis: "Mit LINERA one verbunden", profile_id: profileId }));
 
   return antwort(200, { success: true });
 }

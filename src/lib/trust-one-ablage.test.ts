@@ -1,4 +1,4 @@
-// lib/trust-one-ablage — Fristen-Zaehler der Ablage (Trust flow / Trust one) mit Attrappe fuer fetch.
+// lib/trust-one-ablage — Fristen-Zaehler der Ablage (LINERA flow / LINERA one) mit Attrappe fuer fetch.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
@@ -19,6 +19,9 @@ beforeEach(() => {
   vi.stubEnv("TRUST_ONE_ABLAGE_TOKEN", TOKEN);
   vi.stubEnv("TRUST_ONE_URL", "");
   vi.stubEnv("TRUST_FLOW_URL", "");
+  vi.stubEnv("LINERA_ONE_ABLAGE_TOKEN", "");
+  vi.stubEnv("LINERA_ONE_URL", "");
+  vi.stubEnv("LINERA_FLOW_URL", "");
   vi.stubEnv("ABLAGE_ZIEL", "");
 });
 
@@ -56,16 +59,33 @@ describe("ladeTrustOneFristen", () => {
   });
 });
 
-describe("Schalter ABLAGE_ZIEL (Umzug nach Trust flow)", () => {
+describe("Schalter ABLAGE_ZIEL (Umzug nach LINERA flow)", () => {
   it("Standard trust-one: fehlend, leer oder unbekannt; nur «trust-flow» schaltet um", () => {
     expect(ablageZiel()).toBe("trust-one");
     vi.stubEnv("ABLAGE_ZIEL", "trust_flow");
     expect(ablageZiel()).toBe("trust-one");
     vi.stubEnv("ABLAGE_ZIEL", " Trust-Flow ");
     expect(ablageZiel()).toBe("trust-flow");
+    vi.stubEnv("ABLAGE_ZIEL", "linera-flow");
+    expect(ablageZiel()).toBe("trust-flow");
   });
 
-  it("trust-one: Fristen weiter per GET an Trust one (unveraendert)", async () => {
+  it("Env-Namen: LINERA_* zuerst, TRUST_* als Rueckfall", async () => {
+    vi.stubEnv("ABLAGE_ZIEL", "linera-flow");
+    vi.stubEnv("TRUST_ONE_ABLAGE_TOKEN", "");
+    vi.stubEnv("LINERA_ONE_ABLAGE_TOKEN", TOKEN);
+    vi.stubEnv("TRUST_FLOW_URL", "http://alt.example/");
+    vi.stubEnv("LINERA_FLOW_URL", "http://neu.example/");
+    fetchMock.mockResolvedValue(antwort(200, { offen: 0, faellig: 0, vorschlaege: 0 }));
+    await ladeTrustOneFristen();
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit & { headers: Record<string, string> }];
+    expect(url).toBe("http://neu.example/api/ablage/extern/fristen");
+    expect(init.headers.Authorization).toBe(`Bearer ${TOKEN}`);
+    vi.stubEnv("LINERA_FLOW_URL", "");
+    expect(ablageFristenLink()).toBe("http://alt.example/eventline/fristen");
+  });
+
+  it("trust-one: Fristen weiter per GET an LINERA one (unveraendert)", async () => {
     vi.stubEnv("ABLAGE_ZIEL", "trust-one");
     fetchMock.mockResolvedValue(antwort(200, { success: true, anzahl_aktiv: 1, anzahl_vorschlag: 0 }));
     await expect(ladeTrustOneFristen()).resolves.toEqual({ aktiv: 1, vorschlag: 0 });
@@ -107,7 +127,7 @@ describe("Schalter ABLAGE_ZIEL (Umzug nach Trust flow)", () => {
     expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 
-  it("Link der Dashboard-Kachel folgt dem Schalter (Trust flow /eventline/fristen, sonst Trust one wie bisher)", () => {
+  it("Link der Dashboard-Kachel folgt dem Schalter (LINERA flow /eventline/fristen, sonst LINERA one wie bisher)", () => {
     expect(ablageFristenLink()).toBe("https://one.linera-group.ch/geschaeft/ablage/eventline-gmbh?ansicht=fristen");
     vi.stubEnv("ABLAGE_ZIEL", "trust-flow");
     expect(ablageFristenLink()).toBe("https://flow.linera-group.ch/eventline/fristen");
