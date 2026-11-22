@@ -2,7 +2,7 @@
 // Auftrags-Mailadresse auftrag@in.eventline-basel.com: weitergeleitete
 // Kunden-Mails landen automatisch im Eingang des passenden Auftrags und
 // werden sofort von der KI verarbeitet. (ablage@… ist seit 01.11.2026 in
-// Trust flow: ablage@in.trust-group.ch — hier nur noch ein Hinweis an die Admins.)
+// LINERA flow: ablage@in.linera-group.ch — hier nur noch ein Hinweis an die Admins.)
 //
 // Ablauf (Kern in src/lib/auftrag-mail/ablauf.ts):
 //  1. Svix-Signatur pruefen (RESEND_WEBHOOK_SECRET, whsec_…) — sonst 401.
@@ -73,7 +73,7 @@ const VIA_TEXT: Record<Zuordnung, string> = {
 };
 
 /** Neue Adresse der Ablage (Trust flow, eigener Mail-Eingang seit 01.11.2026). */
-const ABLAGE_ADRESSE_NEU = "ablage@in.trust-group.ch";
+const ABLAGE_ADRESSE_NEU = "ablage@in.linera-group.ch";
 
 /** Mail an die alte Ablage-Adresse: nichts weiterleiten (trust one nimmt nichts mehr an), aber auch nicht still
  *  verlieren — die Admins bekommen eine Mitteilung (Typ «system») mit Absender, Betreff und der neuen Adresse. Keine
@@ -153,7 +153,7 @@ export async function POST(req: NextRequest) {
   const text = mailText(mail);
 
   // ── Alte Ablage-Adresse (ablage@…) ─────────────────────────────
-  // Die Ablage lebt seit 01.11.2026 in Trust flow mit eigenem Mail-Eingang (ablage@in.trust-group.ch); trust one nimmt
+  // Die Ablage lebt seit 01.11.2026 in LINERA flow mit eigenem Mail-Eingang (ablage@in.linera-group.ch); trust one nimmt
   // nichts mehr an. Kein Auftrag-Matching, keine KI, keine Weiterleitung — nur ein Hinweis an die Admins, damit nichts
   // still verloren geht.
   const empfaengerListe = ([] as string[]).concat(mail.to ?? []);

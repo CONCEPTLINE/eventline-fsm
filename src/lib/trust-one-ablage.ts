@@ -5,7 +5,7 @@ import { TRUST_ONE_ABLAGE_BEREICH, TRUST_ONE_FRISTEN_LINK, TRUST_ONE_URL_STANDAR
 
 // Fristen-Zaehler der Ablage fuer Dashboard und Buero-Bildschirm. Die Ablage der EVENTLINE GmbH lebt seit 01.11.2026
 // in Trust flow (vorher seit 24.10.2026 in Trust one); das ERP liest nur noch den Zaehler. Mail-Anhaenge leitet es nicht
-// mehr weiter: ablage@in.eventline-basel.com meldet nur noch den Admins die neue Adresse ablage@in.trust-group.ch
+// mehr weiter: ablage@in.eventline-basel.com meldet nur noch den Admins die neue Adresse ablage@in.linera-group.ch
 // (api/inbound/mail).
 // Schalter env ABLAGE_ZIEL = "trust-flow" | "trust-one" (Standard, auch leer/unbekannt) — ablageZiel():
 //   trust-flow  POST {TRUST_FLOW_URL}/api/ablage/extern/fristen  Body {firma: "eventline", tage: 30}
