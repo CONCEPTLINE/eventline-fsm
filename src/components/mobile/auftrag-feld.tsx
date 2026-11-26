@@ -9,7 +9,8 @@
  * Zustandsmaschine (Einstempeln → Ausstempeln → Rapport-PDF) · Route /
  * Anrufen · Rapport-Zeile → /auftraege/[id]/rapport · Wo & wann ·
  * Ansprechperson · KI-Zusammenfassung (eingeklappt, nur lesen) · Notiz
- * fuers Team (Autosave 800 ms in jobs.notes) · Dokumente (Vorschau).
+ * fuers Team (Autosave 800 ms in jobs.notizen_intern; Partner-Text aus jobs.notes
+ * nur lesend) · Dokumente (Vorschau).
  *
  * Keine Tabs, kein «…»-Menue (Freigeben/Stornieren/Verantwortlich bleiben
  * Desktop), kein Technik-Tab, keine KI-Vorschlaege, kein Bexio, kein Upload.
@@ -202,7 +203,7 @@ export function AuftragFeld({ jobId }: { jobId: string }) {
   const isAdmin = role === "admin";
   const online = useOnline();
   const { active, clockIn, clockOut } = useStempel();
-  const { job, appointments, documents, reports, notesText, setNotesSaved, fehler, loadAll } = useAuftragData(jobId, { isAdmin, permsReady });
+  const { job, appointments, documents, reports, notesText, setNotesSaved, partnerNotiz, fehler, loadAll } = useAuftragData(jobId, { isAdmin, permsReady });
 
   // ── Offline-Cache `job:<id>` ──────────────────────────────────────────
   // undefined = noch nicht gelesen, null = kein Eintrag auf diesem Geraet.
@@ -302,7 +303,7 @@ export function AuftragFeld({ jobId }: { jobId: string }) {
     if (!job || notiz === null || notiz.quelle !== notesText || notiz.text === notesText) return;
     const text = notiz.text;
     const t = setTimeout(async () => {
-      const { error } = await supabase.from("jobs").update({ notes: text || null }).eq("id", jobId);
+      const { error } = await supabase.from("jobs").update({ notizen_intern: text || null }).eq("id", jobId);
       if (error) {
         TOAST.supabaseError(error, "Notiz konnte nicht gespeichert werden");
         return;
@@ -635,7 +636,17 @@ export function AuftragFeld({ jobId }: { jobId: string }) {
         </section>
       )}
 
-      {/* Notiz fuers Team — nur mit frischem Stand (Autosave braucht Netz).
+      {/* Gemeinsame Notiz mit dem Partner (jobs.notes) — nur lesend. */}
+      {job && partnerNotiz.trim() && (
+        <section className="flex flex-col gap-2">
+          <div className="flex min-h-[28px] items-center px-1">
+            <h2 className={LABEL}>Notiz vom Partner (sieht der Partner)</h2>
+          </div>
+          <p className="whitespace-pre-wrap break-words rounded-xl border border-border bg-card px-4 py-[7px] text-[14px] leading-6">{partnerNotiz}</p>
+        </section>
+      )}
+
+      {/* Notiz fuers Team (intern) — nur mit frischem Stand (Autosave braucht Netz).
           Archiviert: nur anzeigen (und nur, wenn eine da ist). */}
       {job && nurLesen && notesText.trim() && (
         <section className="flex flex-col gap-2">

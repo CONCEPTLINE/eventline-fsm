@@ -39,6 +39,7 @@ import {
 } from "@/lib/standort-kalender";
 import { aktivePersonen, standortMitarbeiterIds, verfuegbarkeitBerechnen } from "@/lib/standort-verfuegbarkeit";
 import { logError } from "@/lib/log";
+import { programmheftQuelle } from "@/lib/programmheft";
 
 export async function GET(req: NextRequest) {
   const gate = await requirePartnerPortal();
@@ -58,6 +59,8 @@ export async function GET(req: NextRequest) {
     const standort = await standortKalenderLaden(gate.admin, gate.standortId);
     const kalender = standort?.partner_kalender === true;
     const darfEintragen = kalender && gate.darf("partner:belegungsplan:edit");
+    // Programmheft-Abgleich nur, wo eine Quelle hinterlegt ist (vorerst barakuba).
+    const programmheft = kalender && programmheftQuelle(standort?.name) !== null;
 
     const [jobs, termine, serien, uebernahmen, mitarbeiterIds] = await Promise.all([
       kalenderJobsLaden(gate.admin, gate.standortId, start, end),
@@ -94,7 +97,7 @@ export async function GET(req: NextRequest) {
       uebernahmen,
       verfuegbarkeit,
     };
-    return NextResponse.json({ success: true, ...antwort, darfEintragen });
+    return NextResponse.json({ success: true, ...antwort, darfEintragen, programmheft });
   } catch (e) {
     logError("api.partner.belegungsplan", e);
     return partnerFehler("Belegungsplan konnte nicht geladen werden", 500);

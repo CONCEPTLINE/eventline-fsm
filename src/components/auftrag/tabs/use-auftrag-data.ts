@@ -3,8 +3,9 @@
 /**
  * `useAuftragData(id, opts)` — laedt und cached alles was die Detail-Seite
  * braucht: Job + Termine + Dokumente + Profile + Rapporte + Stunden-Audit
- * (admin-only). Bietet zusaetzlich die Notizen-Felder
- * mit Autosave (Debounce 800ms).
+ * (admin-only). Bietet zusaetzlich die internen Notizen (jobs.notizen_intern)
+ * mit Autosave (Debounce 800ms) und den gemeinsamen Partner-Text (jobs.notes)
+ * nur zum Lesen.
  *
  * isAdmin kommt als Parameter aus usePermissions() (/api/me) rein — der
  * fruehere getUser+profiles.role-Wasserfall nach dem Promise.all war ein
@@ -39,6 +40,21 @@ export type AuditRow = {
   diff_minutes: number;
 };
 
+/** Notizfeld als Text: alte Firmenportal-JSON-Liste (`{"_notes":[…]}`) wird
+ *  zusammengefuegt, Plain-Text bleibt wie er ist. */
+function notizText(roh: string | null | undefined): string {
+  if (!roh) return "";
+  try {
+    const parsed = JSON.parse(roh);
+    if (Array.isArray(parsed?._notes)) {
+      return parsed._notes.map((n: { content: string }) => n.content).join("\n\n");
+    }
+  } catch {
+    /* Plain-Text */
+  }
+  return roh;
+}
+
 export function useAuftragData(
   id: string,
   opts: {
@@ -67,8 +83,10 @@ export function useAuftragData(
   // Reiter auf «Ablauf · Rapport & Abschluss · Dokumente & Historie» um.
   const [hatAblauf, setHatAblauf] = useState<boolean | null>(null);
 
-  // Notizen — State + Autosave (Debounce 800ms).
+  // Interne Notizen (jobs.notizen_intern) — State + Autosave (Debounce 800ms).
   const [notesText, setNotesText] = useState("");
+  // Gemeinsame Notiz mit dem Partner (jobs.notes) — intern nur lesend.
+  const [partnerNotiz, setPartnerNotiz] = useState("");
   const [savedText, setSavedText] = useState("");
   // Ungespeicherte Notiz-Eingabe (Autosave steht noch aus): ein Nachladen —
   // z.B. durch Realtime, weil am selben Auftrag ein Rapport gespeichert wurde —
@@ -122,20 +140,10 @@ export function useAuftragData(
     ]);
     if (jobRes.data) {
       setJob(jobRes.data as unknown as JobDetailWithRelations);
-      // Notizen: alte JSON-Liste -> joined als Text. Plain-Text bleibt as-is.
-      let initial = "";
-      if (jobRes.data.notes) {
-        try {
-          const parsed = JSON.parse(jobRes.data.notes);
-          if (Array.isArray(parsed._notes)) {
-            initial = parsed._notes.map((n: { content: string }) => n.content).join("\n\n");
-          } else {
-            initial = jobRes.data.notes;
-          }
-        } catch {
-          initial = jobRes.data.notes;
-        }
-      }
+      // Interne Notizen (notizen_intern) bearbeitbar; der gemeinsame Text mit
+      // dem Partner (notes, schreibt das Partnerportal) nur zum Lesen.
+      setPartnerNotiz(notizText(jobRes.data.notes));
+      const initial = notizText(jobRes.data.notizen_intern);
       if (!notizOffenRef.current) {
         setNotesText(initial);
         setSavedText(initial);
@@ -251,7 +259,7 @@ export function useAuftragData(
   useEffect(() => {
     if (notesText === savedText) return;
     const handle = setTimeout(async () => {
-      const { error } = await supabase.from("jobs").update({ notes: notesText || null }).eq("id", id);
+      const { error } = await supabase.from("jobs").update({ notizen_intern: notesText || null }).eq("id", id);
       if (error) {
         TOAST.supabaseError(error, "Notizen konnten nicht gespeichert werden");
         return;
@@ -283,6 +291,7 @@ export function useAuftragData(
     notesText,
     setNotesText,
     setNotesSaved,
+    partnerNotiz,
     loadAll,
   };
 }

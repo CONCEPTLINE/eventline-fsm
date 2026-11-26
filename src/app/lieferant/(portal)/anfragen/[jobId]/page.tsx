@@ -55,7 +55,7 @@ interface Detail {
     id: string; titel: string; jobNumber: number | null; status: string;
     startDate: string | null; endDate: string | null;
     gaeste: number | null; eventTyp: string | null;
-    beschreibung: string | null; notizen: string | null; kunde: string | null;
+    beschreibung: string | null; kunde: string | null;
     ort: { name: string | null; adresse: string | null };
     ansprechperson: { name: string | null; telefon: string | null; email: string | null } | null;
     termine: { id: string; title: string; start_time: string; end_time: string | null }[];
@@ -439,10 +439,9 @@ export default function LieferantAnfrageDetailPage() {
               </InfoFeld>
             )}
           </div>
-          {(job.beschreibung || job.notizen) && (
+          {job.beschreibung && (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2.5 text-sm pt-2 border-t border-border/60">
-              {job.beschreibung && <InfoFeld label="Beschreibung"><span className="whitespace-pre-wrap break-words">{job.beschreibung}</span></InfoFeld>}
-              {job.notizen && <InfoFeld label="Notizen"><span className="whitespace-pre-wrap break-words">{job.notizen}</span></InfoFeld>}
+              <InfoFeld label="Beschreibung"><span className="whitespace-pre-wrap break-words">{job.beschreibung}</span></InfoFeld>
             </div>
           )}
         </CardContent>

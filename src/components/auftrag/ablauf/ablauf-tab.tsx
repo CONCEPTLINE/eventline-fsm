@@ -34,6 +34,8 @@ type Props = {
   documents: DocType[];
   notesText: string;
   setNotesText: (v: string) => void;
+  /** Gemeinsame Notiz mit dem Partner (jobs.notes) — nur lesend. */
+  partnerNotiz: string;
   canFinish: boolean;
   finishBlockReason: string;
   /** Normaler Abschluss (Rapport-Modal) der Auftragsseite. */
@@ -61,6 +63,7 @@ export function AblaufTab({
   documents,
   notesText,
   setNotesText,
+  partnerNotiz,
   canFinish,
   finishBlockReason,
   onAbschliessen,
@@ -475,6 +478,7 @@ export function AblaufTab({
           erkanntAm={ablauf?.created_at ?? null}
           notiz={notesText}
           setNotiz={setNotesText}
+          partnerNotiz={partnerNotiz}
           nurLesen={nurLesen}
         />
         <SchrittPanel

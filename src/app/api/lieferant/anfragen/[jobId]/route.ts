@@ -43,7 +43,6 @@ interface JobZeile {
   guest_count: number | null;
   event_type: string | null;
   description: string | null;
-  notes: string | null;
   external_address: string | null;
   project_lead_id: string | null;
   customer: Ein<{ name: string | null }>;
@@ -69,7 +68,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ job
       admin
         .from("jobs")
         .select(
-          "id, title, job_number, start_date, end_date, guest_count, event_type, description, notes, external_address, project_lead_id, " +
+          "id, title, job_number, start_date, end_date, guest_count, event_type, description, external_address, project_lead_id, " +
           "customer:customers(name), " +
           "location:locations(name, address_street, address_zip, address_city, customer:customers(name)), " +
           "room:rooms(name, address_street, address_zip, address_city)",
@@ -183,7 +182,6 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ job
         gaeste: job.guest_count,
         eventTyp: job.event_type,
         beschreibung: job.description,
-        notizen: job.notes,
         kunde: eins(job.customer)?.name ?? eins(loc?.customer)?.name ?? null,
         ort,
         ansprechperson,

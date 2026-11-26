@@ -14,11 +14,13 @@ export type ErstellenWahl = "termin" | "veranstaltung" | "uebernahme" | "program
 interface Props {
   /** Vorbelegtes Datum, falls ein Tag angetippt wurde (nur fuer den Titel). */
   datumText: string | null;
+  /** Nur Standorte mit hinterlegtem Programmheft (vorerst barakuba). */
+  mitProgrammheft: boolean;
   onClose: () => void;
   onWahl: (w: ErstellenWahl) => void;
 }
 
-export function ErstellenModal({ datumText, onClose, onWahl }: Props) {
+export function ErstellenModal({ datumText, mitProgrammheft, onClose, onWahl }: Props) {
   const pfeil = <ChevronRight className="h-4 w-4 text-muted-foreground" />;
   return (
     <Modal
@@ -33,7 +35,9 @@ export function ErstellenModal({ datumText, onClose, onWahl }: Props) {
         <TypePickerCard icon={CalendarPlus} tone="blue" label="Termin" description="Einmaliger Termin, z. B. Lieferung oder private Feier." onClick={() => onWahl("termin")} trailing={pfeil} />
         <TypePickerCard icon={Repeat} tone="blue" label="Veranstaltung" description="Eigene Veranstaltung, auf Wunsch wöchentlich oder monatlich wiederholt." onClick={() => onWahl("veranstaltung")} trailing={pfeil} />
         <TypePickerCard icon={Handshake} tone="green" label="Übernahme-Zeitraum" description="EVENTLINE übernimmt alle Privatvermietungen von–bis." onClick={() => onWahl("uebernahme")} trailing={pfeil} />
-        <TypePickerCard icon={BookOpen} tone="blue" label="Programmheft abgleichen" description="Veranstaltungen von barakuba.ch in den Kalender holen." onClick={() => onWahl("programmheft")} trailing={pfeil} />
+        {mitProgrammheft && (
+          <TypePickerCard icon={BookOpen} tone="blue" label="Programmheft abgleichen" description="Veranstaltungen von barakuba.ch in den Kalender holen." onClick={() => onWahl("programmheft")} trailing={pfeil} />
+        )}
       </div>
     </Modal>
   );

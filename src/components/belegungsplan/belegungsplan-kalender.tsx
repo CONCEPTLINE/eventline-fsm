@@ -305,6 +305,7 @@ export function BelegungsplanKalender({ api, modus, ortName = null, einteilungHi
   const [uebernahmen, setUebernahmen] = useState<Uebernahme[]>([]);
   const [verfuegbarkeit, setVerfuegbarkeit] = useState<TagVerfuegbarkeit[]>([]);
   const [darfEintragen, setDarfEintragen] = useState(false);
+  const [mitProgrammheft, setMitProgrammheft] = useState(false);
   const [loading, setLoading] = useState(true);
   const [ladeFehler, setLadeFehler] = useState(false);
   const [neuLaden, setNeuLaden] = useState(0);
@@ -367,6 +368,7 @@ export function BelegungsplanKalender({ api, modus, ortName = null, einteilungHi
       setUebernahmen(r.antwort.uebernahmen);
       setVerfuegbarkeit(r.antwort.verfuegbarkeit.filter((v) => v.stufe !== "frei"));
       setDarfEintragen(r.darfEintragen);
+      setMitProgrammheft(r.programmheft);
       setLoading(false);
     })();
     return () => {
@@ -776,6 +778,7 @@ export function BelegungsplanKalender({ api, modus, ortName = null, einteilungHi
 
       {offen?.typ === "wahl" && (
         <ErstellenModal
+          mitProgrammheft={mitProgrammheft}
           datumText={offen.vomTag ? datumKurz(tagDatum(offen.datum), true) : null}
           onClose={() => setOffen(null)}
           onWahl={(w) => gewaehlt(w, offen.datum)}

@@ -109,6 +109,7 @@ function AuftragDetailDesktop() {
     setDocuments,
     notesText,
     setNotesText,
+    partnerNotiz,
     hatAblauf,
     loadAll,
   } = useAuftragData(jobId, { isAdmin, permsReady });
@@ -455,6 +456,7 @@ function AuftragDetailDesktop() {
             documents={documents}
             notesText={notesText}
             setNotesText={setNotesText}
+            partnerNotiz={partnerNotiz}
             canFinish={canFinish}
             finishBlockReason={finishBlockReason}
             onAbschliessen={() => updateStatus("abgeschlossen")}
@@ -474,6 +476,7 @@ function AuftragDetailDesktop() {
             onReload={loadAll}
             notesText={notesText}
             setNotesText={setNotesText}
+            partnerNotiz={partnerNotiz}
           />
         )}
         {activeTab === "technik" && (

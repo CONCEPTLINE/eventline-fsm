@@ -139,7 +139,11 @@ export interface Job {
   project_lead_id: string | null;
   start_date: string | null;
   end_date: string | null;
+  /** Gemeinsame Notizen mit dem Partner (Partnerportal liest/schreibt sie).
+   *  Nur bei Partner-Auftraegen gefuellt; intern nur lesend angezeigt. */
   notes: string | null;
+  /** Interne Auftragsnotizen (Migration 391) — nie an Partner/Lieferant. */
+  notizen_intern: string | null;
   is_deleted: boolean;
   created_by: string;
   created_at: string;

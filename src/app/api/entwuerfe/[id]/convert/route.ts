@@ -138,7 +138,11 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
 
   const jobPayload = {
     title: draft.title,
-    description: draft.description ?? draft.general_notes ?? null,
+    description: draft.description ?? null,
+    // «Notizen / Rahmenbedingungen» des Entwurfs sind intern (Budget,
+    // Sonderwuensche) → interne Auftragsnotizen, nie in die Beschreibung,
+    // die Partner und Lieferanten sehen (Migration 391).
+    notizen_intern: draft.general_notes?.trim() || null,
     status: "offen" as const,
     priority: "normal" as const,
     job_type: jobType,

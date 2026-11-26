@@ -36,6 +36,7 @@ export function Eckdaten({
   erkanntAm,
   notiz,
   setNotiz,
+  partnerNotiz,
   nurLesen,
 }: {
   f: Felder;
@@ -50,6 +51,8 @@ export function Eckdaten({
   erkanntAm: string | null;
   notiz: string;
   setNotiz: (v: string) => void;
+  /** Gemeinsame Notiz mit dem Partner (jobs.notes) — nur lesend. */
+  partnerNotiz: string;
   nurLesen: boolean;
 }) {
   const maps = "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent([ortName, ortAdresse].filter(Boolean).join(", "));
@@ -154,6 +157,12 @@ export function Eckdaten({
                   )}
                 </div>
                 <p className={`${MINI} pt-2`}>Notizen</p>
+                {partnerNotiz.trim() && (
+                  <div className="mb-2">
+                    <p className="text-[11px] text-muted-foreground mb-1">Notiz vom Partner (sieht der Partner)</p>
+                    <p className="text-sm whitespace-pre-wrap break-words">{partnerNotiz}</p>
+                  </div>
+                )}
                 <textarea
                   value={notiz}
                   onChange={(e) => setNotiz(e.target.value)}

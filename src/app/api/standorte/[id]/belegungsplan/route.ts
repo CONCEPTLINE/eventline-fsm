@@ -41,6 +41,7 @@ import {
 } from "@/lib/standort-kalender";
 import { aktivePersonen, standortMitarbeiterIds, verfuegbarkeitBerechnen } from "@/lib/standort-verfuegbarkeit";
 import { logError } from "@/lib/log";
+import { programmheftQuelle } from "@/lib/programmheft";
 import { internFehler, internKalenderGate } from "../kalender-gate";
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -69,6 +70,8 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     // Fehler = sicher: dann nur «abwesend».
     const grundSichtbar = !grundRes.error && grundRes.data === true;
     const darfEintragen = standort.partner_kalender && darfBearbeiten;
+    // Programmheft-Abgleich nur, wo eine Quelle hinterlegt ist (vorerst barakuba).
+    const programmheft = standort.partner_kalender && programmheftQuelle(standort.name) !== null;
 
     const [jobs, termine, serien, uebernahmen, mitarbeiterIds, partnerRes] = await Promise.all([
       kalenderJobsLaden(supabase, standortId, start, end),
@@ -106,7 +109,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       uebernahmen,
       verfuegbarkeit,
     };
-    return NextResponse.json({ success: true, ...antwort, darfEintragen });
+    return NextResponse.json({ success: true, ...antwort, darfEintragen, programmheft });
   } catch (e) {
     logError("api.standorte.belegungsplan", e, { standortId });
     return internFehler("Belegungsplan konnte nicht geladen werden", 500);

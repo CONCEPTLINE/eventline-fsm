@@ -37,6 +37,8 @@ type Props = {
   onReload: () => void;
   notesText: string;
   setNotesText: (v: string) => void;
+  /** Gemeinsame Notiz mit dem Partner (jobs.notes) — nur lesend. */
+  partnerNotiz: string;
 };
 
 export function OverviewTab({
@@ -51,6 +53,7 @@ export function OverviewTab({
   onReload,
   notesText,
   setNotesText,
+  partnerNotiz,
 }: Props) {
   const customer = job.customer ?? job.location?.customer ?? undefined;
   const location = job.location ?? undefined;
@@ -206,7 +209,8 @@ export function OverviewTab({
       </Card>
   );
 
-  // Notizen — autosave via Parent-Effekt (Debounce 800ms)
+  // Interne Notizen — autosave via Parent-Effekt (Debounce 800ms). Der Partner
+  // sieht sie nie; seinen gemeinsamen Text (jobs.notes) zeigen wir nur lesend.
   const notizenKarte = (
         <Card className="bg-card">
           <CardHeader className="pb-3">
@@ -216,6 +220,12 @@ export function OverviewTab({
             </CardTitle>
           </CardHeader>
           <CardContent>
+            {partnerNotiz.trim() && (
+              <div className="mb-3">
+                <p className="text-[11px] text-muted-foreground mb-1">Notiz vom Partner (sieht der Partner)</p>
+                <p className="text-sm whitespace-pre-wrap break-words">{partnerNotiz}</p>
+              </div>
+            )}
             {nurLesen ? (
               notesText.trim() ? (
                 <p className="text-sm whitespace-pre-wrap break-words">{notesText}</p>

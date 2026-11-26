@@ -22,7 +22,7 @@ export type KalenderErgebnis<T extends object = object> =
   | ({ ok: true } & T)
   | { ok: false; fehler: string | null };
 
-export type KalenderLadeErgebnis = KalenderErgebnis<{ antwort: KalenderAntwort; darfEintragen: boolean }>;
+export type KalenderLadeErgebnis = KalenderErgebnis<{ antwort: KalenderAntwort; darfEintragen: boolean; programmheft: boolean }>;
 export type KalenderAktion = "anlegen" | "aendern" | "loeschen";
 /** «Nur diesen» Termin einer Serie oder die ganze Serie. */
 export type SerienUmfang = "serie" | "nur_diesen";
@@ -70,7 +70,7 @@ const nurOk = (r: Antwort<unknown>): KalenderErgebnis => (r.ok ? { ok: true } : 
 export function kalenderApi(basis: string): KalenderApi {
   return {
     async laden(start, end) {
-      const r = await anfrage<Partial<KalenderAntwort> & { darfEintragen?: boolean }>(
+      const r = await anfrage<Partial<KalenderAntwort> & { darfEintragen?: boolean; programmheft?: boolean }>(
         "GET",
         `${basis}/belegungsplan?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`,
       );
@@ -83,6 +83,7 @@ export function kalenderApi(basis: string): KalenderApi {
           verfuegbarkeit: r.daten.verfuegbarkeit ?? [],
         },
         darfEintragen: r.daten.darfEintragen === true,
+        programmheft: r.daten.programmheft === true,
       };
     },
     async termin(aktion, id, eingabe) {

@@ -31,6 +31,7 @@ export function BelegungsplanTab({ locationId, nurLesen }: { locationId: string;
         return {
           ok: true,
           darfEintragen: false,
+          programmheft: false,
           antwort: { ...r.antwort, eintraege: r.antwort.eintraege.map((e) => ({ ...e, bearbeitbar: false })) },
         };
       },
