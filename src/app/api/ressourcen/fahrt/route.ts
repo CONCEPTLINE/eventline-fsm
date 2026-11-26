@@ -1,5 +1,7 @@
 // GET /api/ressourcen/fahrt            → { success, buero }
 // GET /api/ressourcen/fahrt?id=<uuid>  → { success, buero, ziel, fahrt, maps }
+// GET /api/ressourcen/fahrt?lat=&lng=  → dasselbe für einen Punkt ohne Location
+//                                        (vorgemerkte Häuser, nur Schweiz/Grenzraum)
 //
 // Vertrieb › Ressourcen: Büro-Standort und schnellste Autostrecke vom Büro zu
 // einer Location. Wer: vertrieb:view (Admin immer). Berechnung und
@@ -29,6 +31,21 @@ export async function GET(req: NextRequest) {
 
   const buero = await ladeBuero();
   const id = req.nextUrl.searchParams.get("id");
+  const latRoh = req.nextUrl.searchParams.get("lat");
+  const lngRoh = req.nextUrl.searchParams.get("lng");
+  if (!id && latRoh && lngRoh) {
+    const p = { lat: Number(latRoh), lng: Number(lngRoh) };
+    const gueltig = Number.isFinite(p.lat) && Number.isFinite(p.lng) && p.lat > 45 && p.lat < 48.5 && p.lng > 5 && p.lng < 11;
+    if (!gueltig) return fehler("Ungültige Koordinaten", 400);
+    if (!buero) return fehler("Die Büro-Adresse konnte nicht gefunden werden", 502);
+    const maps = googleMapsLink(buero, p);
+    try {
+      return NextResponse.json({ success: true, buero, ziel: p, fahrt: await ladeFahrt(buero, p), maps }, KEIN_CACHE);
+    } catch (e) {
+      logError("api.ressourcen.fahrt.osrm", e, { punkt: `${p.lat},${p.lng}` });
+      return NextResponse.json({ success: true, buero, ziel: p, fahrt: null, maps }, KEIN_CACHE);
+    }
+  }
   if (!id) return NextResponse.json({ success: true, buero }, KEIN_CACHE);
   if (!isUuid(id)) return fehler("Ungültige ID", 400);
   if (!buero) return fehler("Die Büro-Adresse konnte nicht gefunden werden", 502);
