@@ -1,51 +1,41 @@
 "use client";
 
 /**
- * Ressourcen › Karte (Leo 26.11.2026, Seite /vertrieb): Karte mit allen Locations. Ein
- * Klick auf eine Location (Karte oder Liste) zeigt zuoberst, wer von uns dort
- * eingeteilt ist — mit Auswahl aus dem eigenen Personal (dieselbe Karte wie in
- * der Location, Bearbeiten mit locations:edit) —, dann die schnellste
- * Autostrecke ab Büro, Kapazität, Technik und Kontaktpersonen.
+ * Ressourcen › Planung (Leo 26.11.2026, Seite /vertrieb): das Stammteam je
+ * Haus auf einen Blick — wer ist grundsätzlich wo Geschäftsleitung,
+ * Betriebsleitung oder Personal, wo ist eine Stelle offen, wo steht erst eine
+ * fiktive Person. Darstellung: ressourcen-brett.tsx.
  *
- * Daten: locations (aktiv, nicht archiviert), standort_mitarbeiter,
- * location_contacts — über den RLS-Client (locations:view). Einteilung:
- * StandortMitarbeiterCard (PUT /api/standorte/[id]/mitarbeiter). Alles andere
- * wird in der Location gepflegt (/standorte/[id]). Strecke: GET
- * /api/ressourcen/fahrt.
+ * Gebaut für viele Häuser: Karten brechen um, Suche und Filter «Nur mit
+ * Lücke» grenzen ein, «+ Location» legt ein Haus mit Name und Adresse an
+ * (locations:create, wie auf /locations; Koordinaten über /api/geocode).
  *
- * Die sechs Häuser erscheinen in jedem Fall: was noch keine Location ist,
- * kommt aus src/lib/ressourcen/haeuser.ts als «noch nicht angelegt» und wird
- * per Knopf als Location angelegt (locations:create, wie auf /locations).
- * Locations ohne gespeicherte Koordinaten werden einmal nachgezogen
- * (POST /api/geocode, locations:edit).
+ * Daten über den RLS-Client (locations:view): locations, standort_mitarbeiter
+ * (mit funktion), planung_fiktives_personal, standort_planstellen, profiles,
+ * jobs (offene Aufträge der nächsten 30 Tage). Schreiben über die Serverwege
+ * /api/ressourcen/einteilung und /api/ressourcen/planung (locations:edit).
+ * Fahrzeiten ab Büro: GET /api/ressourcen/fahrt (eine Anfrage für alle).
  *
- * Aufbau nach Leos Skizze (26.11.2026): oben Kennzahlen (Lücken rot), dann
- * das Planungsbrett (ressourcen-brett.tsx) — je Haus eine Spalte mit Karte,
- * Feld «Leitung» und Feld «Personal», darunter «Gesamtes Personal» —, zuletzt
- * Karte und Detailfeld. Die Funktion (Leitung/Personal) steht in
- * standort_mitarbeiter.funktion (Migration 392); fehlt die Spalte noch,
- * gelten alle als Personal.
- *
- * Karte: Leaflet mit OpenStreetMap-Kacheln (in der CSP bereits freigegeben).
- * Zustand in der URL (§10): ?ort=<location-id>. Laptop-Seite.
+ * `erweitert` = Migration 392 eingespielt (Funktionen, fiktives Personal,
+ * offene Stellen). Ohne sie gibt es nur «Personal» mit echten Personen.
+ * Vorgemerkte Häuser (src/lib/ressourcen/haeuser.ts) erscheinen gestrichelt,
+ * bis sie als Location angelegt sind. Suche und Filter in localStorage (§10).
+ * Laptop-Seite.
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { Car, ExternalLink, Loader2, MapPin, Phone, Mail, Plus, Wrench } from "lucide-react";
-import type { Map as LeafletMap, LayerGroup } from "leaflet";
-import "leaflet/dist/leaflet.css";
+import { Loader2, Plus, Search, X } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { usePermissions } from "@/lib/use-permissions";
-import { StandortMitarbeiterCard } from "@/components/standort/standort-mitarbeiter-card";
-import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
-import { PrefetchLink } from "@/components/shell/prefetch-link";
-import type { LocationContact } from "@/types";
+import { Input } from "@/components/ui/input";
+import { EmptyState } from "@/components/ui/empty-state";
 import { fehlendeHaeuser, VORGEMERKT_PRAEFIX, type VorgemerktesHaus } from "@/lib/ressourcen/haeuser";
+import { istFunktion, type Funktion } from "@/lib/ressourcen/funktionen";
 import { TOAST } from "@/lib/messages";
 import { PORTAL_ROLLEN_IN } from "@/lib/roles";
-import { luecke, RessourcenBrett, type BrettFahrt, type BrettPerson, type Eintrag, type Funktion } from "@/components/vertrieb/ressourcen-brett";
+import { RessourcenBrett, stand, type Belegt, type BrettFahrt, type BrettPerson } from "@/components/vertrieb/ressourcen-brett";
 
 type Ort = {
   id: string;
@@ -54,90 +44,66 @@ type Ort = {
   address_zip: string | null;
   address_city: string | null;
   capacity: number | null;
-  technical_details: string | null;
   latitude: number | null;
   longitude: number | null;
   /** Gesetzt, wenn das Haus noch keine Location ist (nur vorgemerkt). */
   vorgemerkt?: VorgemerktesHaus;
 };
-type Punkt = { lat: number; lng: number };
-type Buero = Punkt & { adresse: string };
-type Fahrt = { km: number; minuten: number; linie: [number, number][] };
-type FahrtAntwort = { ziel: Punkt | null; fahrt: Fahrt | null; maps: string | null };
-type LeafletModul = typeof import("leaflet");
 
-const ROT = "#dc2626";
-const DUNKEL = "#1f2937";
-const BASEL: [number, number] = [47.5596, 7.5886];
-const ZAHL = new Intl.NumberFormat("de-CH");
+const ROT = "var(--status-red)";
+const GELB = "var(--status-amber)";
 const REIHENFOLGE = ["barakuba", "bau3", "trafohalle", "querfeld", "gemeinschaftsbank", "palazzo"];
+const SUCHE_SPEICHER = "ressourcen-suche";
+const FILTER_SPEICHER = "ressourcen-nur-luecke";
+const NEU_LEER = { name: "", street: "", zip: "", city: "Basel" };
 
-function koordinaten(o: Ort): Punkt | null {
-  const lat = Number(o.latitude);
-  const lng = Number(o.longitude);
-  return o.latitude != null && o.longitude != null && Number.isFinite(lat) && Number.isFinite(lng) ? { lat, lng } : null;
+function gespeichert(key: string): string {
+  try { return typeof window !== "undefined" ? localStorage.getItem(key) ?? "" : ""; } catch { return ""; }
+}
+function merke(key: string, wert: string) {
+  try { localStorage.setItem(key, wert); } catch { /* privat-Modus */ }
+}
+/** Tabelle oder Spalte fehlt (Migration 392 nicht eingespielt). */
+function fehltNoch(e: { code?: string } | null): boolean {
+  return !!e && ["42703", "PGRST204", "PGRST205", "42P01"].includes(e.code ?? "");
 }
 
-function adresse(o: Ort): string {
-  const ort = [o.address_zip, o.address_city].filter(Boolean).join(" ");
-  return [o.address_street, ort].filter(Boolean).join(", ");
-}
-
-function dauer(minuten: number): string {
-  if (minuten < 60) return `${minuten} Min.`;
-  const h = Math.floor(minuten / 60);
-  const m = minuten % 60;
-  return m ? `${h} Std. ${m} Min.` : `${h} Std.`;
-}
-
-export function RessourcenAnsicht({ ortId, onOrt }: { ortId: string | null; onOrt: (id: string | null) => void }) {
+export function RessourcenAnsicht() {
   const [orte, setOrte] = useState<Ort[] | null>(null);
-  /** location_id → profile_ids der eingeteilten Mitarbeitenden. */
-  const [einteilung, setEinteilung] = useState<Map<string, Eintrag[]>>(new Map());
-  /** Spalte «funktion» vorhanden (Migration 392)? */
-  const [funktionBekannt, setFunktionBekannt] = useState(true);
   /** Namen ALLER Locations (auch archivierte) — gegen doppeltes Anlegen. */
   const [alleNamen, setAlleNamen] = useState<string[] | null>(null);
-  const [stand, setStand] = useState(0);
-  /** Einteilung sicher geladen? Sonst kein Bearbeiten (PUT ersetzt die ganze Liste). */
+  const [belegung, setBelegung] = useState<Map<string, Belegt[]>>(new Map());
+  /** Einteilung sicher geladen? Sonst kein Bearbeiten. */
   const [einteilungOk, setEinteilungOk] = useState(false);
+  const [erweitert, setErweitert] = useState(true);
   const [personen, setPersonen] = useState<BrettPerson[]>([]);
+  const [fiktive, setFiktive] = useState<BrettPerson[]>([]);
   const [anlaesse, setAnlaesse] = useState<Map<string, number> | null>(null);
   const [fahrten, setFahrten] = useState<Map<string, BrettFahrt>>(new Map());
-  const fahrtGefragt = useRef(new Set<string>());
+  const [ladeStand, setLadeStand] = useState(0);
   const [legtAn, setLegtAn] = useState(false);
+  const [suche, setSuche] = useState(() => gespeichert(SUCHE_SPEICHER));
+  const [nurLuecke, setNurLuecke] = useState(() => gespeichert(FILTER_SPEICHER) === "1");
+  const [neuOffen, setNeuOffen] = useState(false);
+  const [neu, setNeu] = useState(NEU_LEER);
   const { can } = usePermissions();
   const darfAnlegen = can("locations:create");
   const darfAendern = can("locations:edit");
   const nachgezogen = useRef(new Set<string>());
-  const [buero, setBuero] = useState<Buero | null>(null);
-  // Antworten tragen die Location-ID: so gilt eine Antwort nie für eine
-  // inzwischen andere Auswahl, und es braucht kein Zurücksetzen im Effekt.
-  const [kontakteZu, setKontakteZu] = useState<{ id: string; liste: LocationContact[] } | null>(null);
-  const [fahrtZu, setFahrtZu] = useState<{ id: string; antwort: FahrtAntwort } | null>(null);
-  const kontakte = ortId && kontakteZu?.id === ortId ? kontakteZu.liste : null;
-  const fahrt = ortId && fahrtZu?.id === ortId ? fahrtZu.antwort : null;
-  const fahrtLaedt = !!ortId && fahrtZu?.id !== ortId;
 
-  const kartenEl = useRef<HTMLDivElement | null>(null);
-  const karte = useRef<LeafletMap | null>(null);
-  const leaflet = useRef<LeafletModul | null>(null);
-  const punkteEbene = useRef<LayerGroup | null>(null);
-  const streckeEbene = useRef<LayerGroup | null>(null);
-  const [karteBereit, setKarteBereit] = useState(false);
-  const onOrtRef = useRef(onOrt);
-  useEffect(() => { onOrtRef.current = onOrt; }, [onOrt]);
+  useEffect(() => { merke(SUCHE_SPEICHER, suche); }, [suche]);
+  useEffect(() => { merke(FILTER_SPEICHER, nurLuecke ? "1" : "0"); }, [nurLuecke]);
 
-  // ─── Stammdaten: Locations, Einteilung, Namen, Büro ─────────────────
+  // ─── Laden ──────────────────────────────────────────────────────────
   useEffect(() => {
     let aktiv = true;
     const supabase = createClient();
     void (async () => {
       const in30 = new Date(Date.now() + 30 * 86400000).toISOString();
-      const [loc, einMit, namen, prof, jobs] = await Promise.all([
+      const [loc, einMit, namen, prof, jobs, fik, stellen] = await Promise.all([
         supabase
           .from("locations")
-          .select("id, name, address_street, address_zip, address_city, capacity, technical_details, latitude, longitude")
+          .select("id, name, address_street, address_zip, address_city, capacity, latitude, longitude")
           .eq("is_active", true)
           .is("archived_at", null)
           .order("name"),
@@ -152,43 +118,60 @@ export function RessourcenAnsicht({ ortId, onOrt }: { ortId: string | null; onOr
           .not("location_id", "is", null)
           .gte("start_date", new Date().toISOString())
           .lt("start_date", in30),
+        supabase.from("planung_fiktives_personal").select("id, name").order("name"),
+        supabase.from("standort_planstellen").select("id, location_id, funktion, fiktiv_id"),
       ]);
       // Spalte «funktion» fehlt noch (Migration 392) → ohne sie laden.
-      const ohneFunktion = !!einMit.error && (einMit.error.code === "42703" || einMit.error.code === "PGRST204");
+      const ohneFunktion = fehltNoch(einMit.error);
       const ein = ohneFunktion ? await supabase.from("standort_mitarbeiter").select("location_id, profile_id") : einMit;
       if (!aktiv) return;
-      setFunktionBekannt(!ohneFunktion);
+
+      const voll = !ohneFunktion && !fehltNoch(fik.error) && !fehltNoch(stellen.error);
+      setErweitert(voll);
       if (loc.error) toast.error(`Locations laden fehlgeschlagen: ${loc.error.message}`);
       if (ein.error) toast.error(`Einteilung laden fehlgeschlagen: ${ein.error.message}`);
+      if (prof.error) toast.error(`Mitarbeitende laden fehlgeschlagen: ${prof.error.message}`);
+      if (jobs.error) toast.error(`Aufträge laden fehlgeschlagen: ${jobs.error.message}`);
+      if (voll && fik.error) toast.error(`Fiktives Personal laden fehlgeschlagen: ${fik.error.message}`);
+      if (voll && stellen.error) toast.error(`Planstellen laden fehlgeschlagen: ${stellen.error.message}`);
+
       setOrte((loc.data ?? []) as Ort[]);
       // Namen unbekannt (Fehler) → keine vorgemerkten Häuser zeigen, sonst
       // könnte ein vorhandenes Haus doppelt angelegt werden.
       setAlleNamen(namen.error ? null : ((namen.data ?? []) as { name: string }[]).map((n) => n.name));
-      const m = new Map<string, Eintrag[]>();
+
+      const m = new Map<string, Belegt[]>();
+      const dazu = (ort: string, b: Belegt) => m.set(ort, [...(m.get(ort) ?? []), b]);
       for (const z of (ein.data ?? []) as { location_id: string; profile_id: string; funktion?: string | null }[]) {
-        m.set(z.location_id, [...(m.get(z.location_id) ?? []), { profileId: z.profile_id, funktion: z.funktion === "leitung" ? "leitung" : "personal" }]);
+        dazu(z.location_id, { art: "person", id: z.profile_id, funktion: istFunktion(z.funktion) ? z.funktion : "personal" });
       }
-      setEinteilung(m);
-      setEinteilungOk(!ein.error);
-      if (prof.error) toast.error(`Mitarbeitende laden fehlgeschlagen: ${prof.error.message}`);
+      if (voll) {
+        for (const z of (stellen.data ?? []) as { id: string; location_id: string; funktion: string; fiktiv_id: string | null }[]) {
+          const funktion = istFunktion(z.funktion) ? z.funktion : "personal";
+          dazu(z.location_id, z.fiktiv_id ? { art: "fiktiv", id: z.fiktiv_id, funktion } : { art: "offen", id: z.id, funktion });
+        }
+      }
+      setBelegung(m);
+      setEinteilungOk(!ein.error && (!voll || !stellen.error));
       setPersonen(((prof.data ?? []) as { id: string; full_name: string | null }[]).filter((x) => x.full_name?.trim()).map((x) => ({ id: x.id, name: x.full_name!.trim() })));
-      if (jobs.error) toast.error(`Aufträge laden fehlgeschlagen: ${jobs.error.message}`);
+      setFiktive(voll ? ((fik.data ?? []) as BrettPerson[]) : []);
       const a = new Map<string, number>();
       for (const j of (jobs.data ?? []) as { location_id: string }[]) a.set(j.location_id, (a.get(j.location_id) ?? 0) + 1);
       setAnlaesse(a);
     })();
     void fetch("/api/ressourcen/fahrt", { cache: "no-store" })
       .then((r) => r.json())
-      .then((j: { buero?: Buero | null }) => { if (aktiv) setBuero(j.buero ?? null); })
-      .catch(() => { /* Karte funktioniert auch ohne Büro-Punkt */ });
+      .then((j: { zeiten?: Record<string, BrettFahrt> }) => { if (aktiv && j.zeiten) setFahrten(new Map(Object.entries(j.zeiten))); })
+      .catch(() => { /* Karten zeigen dann keine Fahrzeit */ });
     return () => { aktiv = false; };
-  }, [stand]);
+  }, [ladeStand]);
 
   // Locations ohne Koordinaten einmal nachziehen (bestehender Geocoder,
-  // schreibt latitude/longitude). Nacheinander: Nominatim erlaubt 1 Anfrage/s.
+  // schreibt latitude/longitude) — Grundlage der Fahrzeit. Nacheinander:
+  // Nominatim erlaubt 1 Anfrage/s.
   useEffect(() => {
     if (!orte || !darfAendern) return;
-    const offen = orte.filter((o) => !koordinaten(o) && o.address_city && !nachgezogen.current.has(o.id));
+    const offen = orte.filter((o) => (o.latitude == null || o.longitude == null) && o.address_city && !nachgezogen.current.has(o.id));
     if (offen.length === 0) return;
     let aktiv = true;
     void (async () => {
@@ -196,17 +179,8 @@ export function RessourcenAnsicht({ ortId, onOrt }: { ortId: string | null; onOr
         if (!aktiv) return;
         nachgezogen.current.add(o.id);
         try {
-          const res = await fetch("/api/geocode", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ table: "locations", id: o.id }),
-          });
-          const j = (await res.json().catch(() => null)) as { ok?: boolean; coords?: Punkt } | null;
-          if (aktiv && j?.ok && j.coords) {
-            const c = j.coords;
-            setOrte((alt) => alt?.map((x) => (x.id === o.id ? { ...x, latitude: c.lat, longitude: c.lng } : x)) ?? alt);
-          }
-        } catch { /* bleibt in der Liste «nicht auf der Karte» */ }
+          await fetch("/api/geocode", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ table: "locations", id: o.id }) });
+        } catch { /* Fahrzeit fehlt dann bei diesem Haus */ }
         await new Promise((r) => setTimeout(r, 1100));
       }
     })();
@@ -216,58 +190,88 @@ export function RessourcenAnsicht({ ortId, onOrt }: { ortId: string | null; onOr
   /** Locations plus vorgemerkte Häuser, die noch keine Location sind. */
   const alle = useMemo<Ort[] | null>(() => {
     if (orte === null) return null;
-    const neu: Ort[] = (alleNamen ? fehlendeHaeuser(alleNamen) : []).map((h) => ({
+    const vor: Ort[] = (alleNamen ? fehlendeHaeuser(alleNamen) : []).map((h) => ({
       id: `${VORGEMERKT_PRAEFIX}${h.schluessel}`,
       name: h.name,
       address_street: h.address_street,
       address_zip: h.address_zip,
       address_city: h.address_city,
       capacity: h.capacity,
-      technical_details: h.technical_details,
       latitude: h.latitude,
       longitude: h.longitude,
       vorgemerkt: h,
     }));
-    // Reihenfolge wie auf Leos Skizze, weitere Locations danach nach Name.
+    // Die sechs Häuser der Skizze zuerst, weitere danach nach Name.
     const rang = (n: string) => { const i = REIHENFOLGE.findIndex((m) => n.toLowerCase().includes(m)); return i < 0 ? REIHENFOLGE.length : i; };
-    return [...orte, ...neu].sort((a, b) => rang(a.name) - rang(b.name) || a.name.localeCompare(b.name, "de-CH"));
+    return [...orte, ...vor].sort((a, b) => rang(a.name) - rang(b.name) || a.name.localeCompare(b.name, "de-CH"));
   }, [orte, alleNamen]);
 
-  const gewaehlt = useMemo(() => alle?.find((o) => o.id === ortId) ?? null, [alle, ortId]);
-  const gewaehltLat = gewaehlt?.vorgemerkt?.latitude ?? null;
-  const gewaehltLng = gewaehlt?.vorgemerkt?.longitude ?? null;
+  // ─── Schreiben ──────────────────────────────────────────────────────
+  async function sende(pfad: string, body: Record<string, unknown>): Promise<{ id?: string } | null> {
+    try {
+      const res = await fetch(pfad, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      const j = (await res.json().catch(() => null)) as { success?: boolean; error?: string; id?: string } | null;
+      if (!res.ok || !j?.success) { TOAST.errorOr(j?.error, "Speichern fehlgeschlagen"); return null; }
+      return j;
+    } catch {
+      toast.error("Speichern fehlgeschlagen");
+      return null;
+    }
+  }
+  const ohne = (liste: Belegt[], art: Belegt["art"], id: string) => liste.filter((x) => !(x.art === art && x.id === id));
+  function setzeLokal(ort: string, art: "person" | "fiktiv", id: string, funktion: Funktion | null) {
+    setBelegung((alt) => {
+      const rest = ohne(alt.get(ort) ?? [], art, id);
+      return new Map(alt).set(ort, funktion ? [...rest, { art, id, funktion }] : rest);
+    });
+  }
 
-  // Fahrt ab Büro für jedes Haus (Planungsbrett). Nacheinander, serverseitig gecacht.
-  useEffect(() => {
-    if (!alle) return;
-    const offen = alle.filter((o) => !fahrtGefragt.current.has(o.id) && (o.vorgemerkt || koordinaten(o) || o.address_city));
-    if (offen.length === 0) return;
-    let aktiv = true;
-    void (async () => {
-      for (const o of offen) {
-        if (!aktiv) return;
-        fahrtGefragt.current.add(o.id);
-        const frage = o.vorgemerkt ? `lat=${o.vorgemerkt.latitude}&lng=${o.vorgemerkt.longitude}` : `id=${encodeURIComponent(o.id)}`;
-        try {
-          const r = await fetch(`/api/ressourcen/fahrt?${frage}`, { cache: "no-store" });
-          const j = (await r.json().catch(() => null)) as { fahrt?: { minuten: number; km: number } | null } | null;
-          const f = j?.fahrt;
-          if (aktiv && f) setFahrten((alt) => new Map(alt).set(o.id, { minuten: f.minuten, km: f.km }));
-        } catch { /* Brett zeigt «…» */ }
-      }
-    })();
-    return () => { aktiv = false; };
-  }, [alle]);
+  async function onPerson(locationId: string, profileId: string, funktion: Funktion | null) {
+    if (!(await sende("/api/ressourcen/einteilung", { locationId, profileId, funktion }))) return false;
+    setzeLokal(locationId, "person", profileId, funktion);
+    return true;
+  }
+  async function onFiktiv(locationId: string, fiktivId: string, funktion: Funktion | null) {
+    if (!(await sende("/api/ressourcen/planung", { aktion: "fiktiv-setze", locationId, fiktivId, funktion }))) return false;
+    setzeLokal(locationId, "fiktiv", fiktivId, funktion);
+    return true;
+  }
+  async function onOffenNeu(locationId: string, funktion: Funktion) {
+    const j = await sende("/api/ressourcen/planung", { aktion: "offen-neu", locationId, funktion });
+    if (!j?.id) return false;
+    const id = j.id;
+    setBelegung((alt) => new Map(alt).set(locationId, [...(alt.get(locationId) ?? []), { art: "offen", id, funktion }]));
+    return true;
+  }
+  async function onOffenWeg(locationId: string, stelleId: string) {
+    if (!(await sende("/api/ressourcen/planung", { aktion: "offen-loeschen", id: stelleId }))) return false;
+    setBelegung((alt) => new Map(alt).set(locationId, ohne(alt.get(locationId) ?? [], "offen", stelleId)));
+    return true;
+  }
+  async function onFiktivNeu(name: string) {
+    const j = await sende("/api/ressourcen/planung", { aktion: "fiktiv-neu", name });
+    if (!j?.id) return false;
+    const id = j.id;
+    setFiktive((alt) => [...alt, { id, name }].sort((a, b) => a.name.localeCompare(b.name, "de-CH")));
+    return true;
+  }
+  async function onFiktivLoeschen(id: string) {
+    if (!(await sende("/api/ressourcen/planung", { aktion: "fiktiv-loeschen", id }))) return false;
+    setFiktive((alt) => alt.filter((x) => x.id !== id));
+    setBelegung((alt) => new Map([...alt].map(([ort, liste]) => [ort, ohne(liste, "fiktiv", id)])));
+    return true;
+  }
 
-  /** Alle vorgemerkten Häuser auf einmal anlegen (frische Namensprüfung davor). */
-  async function alleAnlegen() {
+  // ─── Locations anlegen ──────────────────────────────────────────────
+  async function vorgemerkteAnlegen(nur?: VorgemerktesHaus) {
     setLegtAn(true);
     try {
       const supabase = createClient();
+      // Frische Namensprüfung, damit nichts doppelt entsteht.
       const { data: namen, error: nErr } = await supabase.from("locations").select("name");
       if (nErr) { TOAST.supabaseError(nErr, "Locations konnten nicht geprüft werden"); return; }
-      const fehlen = fehlendeHaeuser(((namen ?? []) as { name: string }[]).map((n) => n.name));
-      if (fehlen.length === 0) { toast.success("Alle Häuser sind bereits angelegt"); setStand((s) => s + 1); return; }
+      const fehlen = fehlendeHaeuser(((namen ?? []) as { name: string }[]).map((n) => n.name)).filter((h) => !nur || h.schluessel === nur.schluessel);
+      if (fehlen.length === 0) { toast.success("Bereits angelegt"); setLadeStand((s) => s + 1); return; }
       const { error } = await supabase.from("locations").insert(
         fehlen.map((h) => ({
           name: h.name,
@@ -281,221 +285,107 @@ export function RessourcenAnsicht({ ortId, onOrt }: { ortId: string | null; onOr
           longitude: h.longitude,
         })),
       );
-      if (error) { TOAST.supabaseError(error, "Die Häuser konnten nicht angelegt werden"); return; }
-      toast.success(`${fehlen.length} ${fehlen.length === 1 ? "Haus" : "Häuser"} als Location angelegt`);
-      if (ortId?.startsWith(VORGEMERKT_PRAEFIX)) onOrt(null);
-      fahrtGefragt.current = new Set();
-      setStand((s) => s + 1);
+      if (error) { TOAST.supabaseError(error, "Anlegen fehlgeschlagen"); return; }
+      toast.success(fehlen.length === 1 ? `${fehlen[0].name} ist als Location angelegt` : `${fehlen.length} Häuser als Locations angelegt`);
+      setLadeStand((s) => s + 1);
     } finally {
       setLegtAn(false);
     }
   }
 
-  async function anlegen(h: VorgemerktesHaus) {
+  async function neueLocation() {
+    const name = neu.name.trim();
+    if (!name) { toast.error("Bitte einen Namen angeben"); return; }
+    if ((alleNamen ?? []).some((n) => n.trim().toLowerCase() === name.toLowerCase())) { toast.error("Eine Location mit diesem Namen gibt es schon"); return; }
     setLegtAn(true);
     try {
       const { data, error } = await createClient()
         .from("locations")
-        .insert({
-          name: h.name,
-          address_street: h.address_street,
-          address_zip: h.address_zip,
-          address_city: h.address_city,
-          capacity: h.capacity,
-          technical_details: h.technical_details,
-          notes: h.notes,
-          latitude: h.latitude,
-          longitude: h.longitude,
-        })
+        .insert({ name, address_street: neu.street.trim() || null, address_zip: neu.zip.trim() || null, address_city: neu.city.trim() || null })
         .select("id")
         .single();
-      if (error || !data?.id) {
-        TOAST.supabaseError(error, `${h.name} konnte nicht angelegt werden`);
-        return;
-      }
-      toast.success(`${h.name} ist als Location angelegt`);
-      onOrt(data.id as string);
-      setStand((s) => s + 1);
+      if (error || !data?.id) { TOAST.supabaseError(error, "Location konnte nicht angelegt werden"); return; }
+      // Koordinaten für die Fahrzeit; ohne Treffer bleibt die Location trotzdem angelegt.
+      nachgezogen.current.add(data.id as string);
+      await fetch("/api/geocode", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ table: "locations", id: data.id }) }).catch(() => null);
+      toast.success(`${name} ist angelegt`);
+      setNeu(NEU_LEER);
+      setLadeStand((s) => s + 1);
     } finally {
       setLegtAn(false);
     }
   }
 
-  // ─── Auswahl: Kontakte und Strecke laden ────────────────────────────
-  useEffect(() => {
-    if (!ortId) return;
-    const vorgemerkt = ortId.startsWith(VORGEMERKT_PRAEFIX);
-    // Vorgemerktes Haus: erst abfragen, wenn seine Koordinaten bekannt sind.
-    if (vorgemerkt && (gewaehltLat == null || gewaehltLng == null)) return;
-    let aktiv = true;
-    const leer: FahrtAntwort = { ziel: null, fahrt: null, maps: null };
-    if (!vorgemerkt) {
-      void createClient()
-        .from("location_contacts")
-        .select("id, location_id, name, role, email, phone, notes, created_at")
-        .eq("location_id", ortId)
-        .order("name")
-        .then(({ data, error }) => {
-          if (!aktiv) return;
-          if (error) toast.error(`Kontakte laden fehlgeschlagen: ${error.message}`);
-          setKontakteZu({ id: ortId, liste: (data ?? []) as LocationContact[] });
-        });
-    }
-    const frage = vorgemerkt ? `lat=${gewaehltLat}&lng=${gewaehltLng}` : `id=${encodeURIComponent(ortId)}`;
-    void fetch(`/api/ressourcen/fahrt?${frage}`, { cache: "no-store" })
-      .then(async (r) => ({ ok: r.ok, j: (await r.json().catch(() => null)) as (FahrtAntwort & { error?: string }) | null }))
-      .then(({ ok, j }) => {
-        if (!aktiv) return;
-        if (!ok || !j) {
-          toast.error(j?.error ?? "Die Strecke konnte nicht berechnet werden");
-          setFahrtZu({ id: ortId, antwort: leer });
-        } else {
-          setFahrtZu({ id: ortId, antwort: { ziel: j.ziel ?? null, fahrt: j.fahrt ?? null, maps: j.maps ?? null } });
-        }
-      })
-      .catch(() => {
-        if (!aktiv) return;
-        toast.error("Die Strecke konnte nicht berechnet werden");
-        setFahrtZu({ id: ortId, antwort: leer });
-      });
-    return () => { aktiv = false; };
-  }, [ortId, gewaehltLat, gewaehltLng]);
-
-  // ─── Karte aufbauen (einmal) ────────────────────────────────────────
-  useEffect(() => {
-    let weg = false;
-    void (async () => {
-      const mod = await import("leaflet");
-      const L = ((mod as unknown as { default?: LeafletModul }).default ?? mod) as LeafletModul;
-      if (weg || !kartenEl.current) return;
-      const m = L.map(kartenEl.current, { zoomControl: true, attributionControl: true }).setView(BASEL, 11);
-      L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-        maxZoom: 19,
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a>',
-      }).addTo(m);
-      streckeEbene.current = L.layerGroup().addTo(m);
-      punkteEbene.current = L.layerGroup().addTo(m);
-      karte.current = m;
-      leaflet.current = L;
-      setKarteBereit(true);
-    })();
-    return () => {
-      weg = true;
-      karte.current?.remove();
-      karte.current = null;
-      punkteEbene.current = null;
-      streckeEbene.current = null;
-      setKarteBereit(false);
-    };
-  }, []);
-
-  // ─── Punkte zeichnen ────────────────────────────────────────────────
-  useEffect(() => {
-    const L = leaflet.current;
-    const ebene = punkteEbene.current;
-    if (!karteBereit || !L || !ebene) return;
-    ebene.clearLayers();
-    if (buero) {
-      L.marker([buero.lat, buero.lng], {
-        interactive: true,
-        keyboard: false,
-        icon: L.divIcon({
-          className: "",
-          iconSize: [16, 16],
-          iconAnchor: [8, 8],
-          html: `<div style="width:16px;height:16px;background:${DUNKEL};border:2px solid #fff;border-radius:3px;box-shadow:0 1px 4px rgba(0,0,0,.4)"></div>`,
-        }),
-      }).bindTooltip("EVENTLINE Büro", { direction: "top", offset: [0, -8] }).addTo(ebene);
-    }
-    for (const o of alle ?? []) {
-      const p = koordinaten(o);
-      if (!p) continue;
-      const aktiv = o.id === ortId;
-      L.circleMarker([p.lat, p.lng], {
-        radius: aktiv ? 11 : 8,
-        weight: o.vorgemerkt ? 3 : 2,
-        // Noch nicht angelegt: heller Punkt mit rotem Rand.
-        ...(o.vorgemerkt
-          ? { color: ROT, fillColor: "#fff", fillOpacity: 1 }
-          : { color: "#fff", fillColor: ROT, fillOpacity: aktiv ? 1 : 0.75 }),
-      })
-        .bindTooltip(o.vorgemerkt ? `${o.name} (noch nicht angelegt)` : o.name, { direction: "top", offset: [0, -8], permanent: aktiv })
-        .on("click", () => onOrtRef.current(o.id))
-        .addTo(ebene);
-    }
-  }, [karteBereit, alle, buero, ortId]);
-
-  // ─── Ausschnitt: alle Locations, solange nichts gewählt ist ─────────
-  useEffect(() => {
-    const L = leaflet.current;
-    const m = karte.current;
-    if (!karteBereit || !L || !m || ortId) return;
-    streckeEbene.current?.clearLayers();
-    const punkte: [number, number][] = (alle ?? []).map(koordinaten).filter((p): p is Punkt => !!p).map((p) => [p.lat, p.lng]);
-    if (buero) punkte.push([buero.lat, buero.lng]);
-    if (punkte.length > 1) m.fitBounds(L.latLngBounds(punkte), { padding: [40, 40], maxZoom: 14 });
-    else if (punkte.length === 1) m.setView(punkte[0], 13);
-  }, [karteBereit, alle, buero, ortId]);
-
-  // ─── Strecke zeichnen, wenn eine Location gewählt ist ───────────────
-  useEffect(() => {
-    const L = leaflet.current;
-    const m = karte.current;
-    const ebene = streckeEbene.current;
-    if (!karteBereit || !L || !m || !ebene || !ortId) return;
-    ebene.clearLayers();
-    const ziel = fahrt?.ziel ?? (gewaehlt ? koordinaten(gewaehlt) : null);
-    if (fahrt?.fahrt && fahrt.fahrt.linie.length > 1) {
-      const linie = L.polyline(fahrt.fahrt.linie, { color: DUNKEL, weight: 5, opacity: 0.85 }).addTo(ebene);
-      m.fitBounds(linie.getBounds(), { padding: [50, 50], maxZoom: 15 });
-    } else if (ziel && buero) {
-      // Solange (oder falls) keine Strecke da ist: gestrichelte Luftlinie.
-      L.polyline([[buero.lat, buero.lng], [ziel.lat, ziel.lng]], { color: DUNKEL, weight: 2, opacity: 0.5, dashArray: "6 8" }).addTo(ebene);
-      m.fitBounds(L.latLngBounds([[buero.lat, buero.lng], [ziel.lat, ziel.lng]]), { padding: [50, 50], maxZoom: 15 });
-    } else if (ziel) {
-      m.setView([ziel.lat, ziel.lng], 14);
-    }
-  }, [karteBereit, ortId, fahrt, buero, gewaehlt]);
-
-  const ohnePunkt = (alle ?? []).filter((o) => !koordinaten(o));
-
+  // ─── Ableitungen ────────────────────────────────────────────────────
   const vorgemerkte = (alle ?? []).filter((o) => o.vorgemerkt);
   const angelegte = (alle ?? []).filter((o) => !o.vorgemerkt);
-  const luecken = angelegte.filter((o) => luecke(einteilung.get(o.id) ?? [], funktionBekannt) !== null).length;
-  const zugeteilt = new Set(angelegte.flatMap((o) => (einteilung.get(o.id) ?? []).map((x) => x.profileId)));
-  const eingeteiltePersonen = personen.filter((x) => zugeteilt.has(x.id)).length;
-
-  /** Eine Einteilung speichern (funktion null = entfernen) und lokal nachführen. */
-  async function setzeEinteilung(locationId: string, profileId: string, funktion: Funktion | null): Promise<boolean> {
-    try {
-      const res = await fetch("/api/ressourcen/einteilung", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ locationId, profileId, funktion }),
-      });
-      const j = (await res.json().catch(() => null)) as { success?: boolean; error?: string } | null;
-      if (!res.ok || !j?.success) { TOAST.errorOr(j?.error, "Speichern fehlgeschlagen"); return false; }
-      setEinteilung((alt) => {
-        const rest = (alt.get(locationId) ?? []).filter((x) => x.profileId !== profileId);
-        return new Map(alt).set(locationId, funktion ? [...rest, { profileId, funktion }] : rest);
-      });
-      return true;
-    } catch {
-      toast.error("Speichern fehlgeschlagen");
-      return false;
-    }
-  }
+  const eintraege = angelegte.flatMap((o) => belegung.get(o.id) ?? []);
+  const offeneStellen = eintraege.filter((x) => x.art === "offen").length;
+  const fiktivEintraege = eintraege.filter((x) => x.art === "fiktiv").length;
+  const mitLuecke = angelegte.filter((o) => stand(belegung.get(o.id) ?? []).rot !== null);
   const anlaesseTotal = anlaesse ? angelegte.reduce((x, o) => x + (anlaesse.get(o.id) ?? 0), 0) : null;
+
+  const q = suche.trim().toLowerCase();
+  const gezeigt = (alle ?? []).filter((o) => {
+    if (nurLuecke && (o.vorgemerkt || stand(belegung.get(o.id) ?? []).rot === null)) return false;
+    if (!q) return true;
+    return `${o.name} ${o.address_city ?? ""} ${o.address_zip ?? ""}`.toLowerCase().includes(q);
+  });
+  const brettHaus = (o: Ort) => ({ id: o.id, name: o.name, ort: [o.address_zip, o.address_city].filter(Boolean).join(" "), capacity: o.capacity, vorgemerkt: !!o.vorgemerkt });
+  const feld = "h-9 bg-muted/40";
 
   return (
     <div className="flex flex-col gap-4">
       {/* Kennzahlen */}
       <div className="grid grid-cols-2 gap-x-6 gap-y-2 border-b pb-3 md:grid-cols-4">
         <Kennzahl wert={alle === null ? "…" : String(alle.length)} text={vorgemerkte.length ? `Häuser, davon ${vorgemerkte.length} noch nicht angelegt` : "Häuser"} />
-        <Kennzahl wert={alle === null ? "…" : String(luecken)} text="Häuser ohne Leitung oder Stellvertretung" rot={luecken > 0} />
-        <Kennzahl wert={alle === null ? "…" : String(eingeteiltePersonen)} text={`von ${personen.length} Mitarbeitenden eingeteilt`} />
+        <Kennzahl wert={alle === null ? "…" : String(mitLuecke.length)} text={erweitert ? `Häuser mit Lücke, ${offeneStellen} offene ${offeneStellen === 1 ? "Stelle" : "Stellen"}` : "Häuser ohne Stellvertretung"} farbe={mitLuecke.length > 0 ? ROT : undefined} />
+        <Kennzahl wert={alle === null ? "…" : erweitert ? String(fiktivEintraege) : "–"} text="Stellen fiktiv besetzt" farbe={fiktivEintraege > 0 ? GELB : undefined} />
         <Kennzahl wert={anlaesseTotal === null ? "…" : String(anlaesseTotal)} text="Anlässe in den nächsten 30 Tagen" />
       </div>
+
+      {/* Suche, Filter, neue Location */}
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="relative w-64 max-w-full">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Input value={suche} onChange={(e) => setSuche(e.target.value)} placeholder="Haus oder Ort suchen …" className={`${feld} pl-8`} aria-label="Häuser suchen" />
+        </div>
+        <button type="button" className={`kasten ${nurLuecke ? "kasten-active" : "kasten-toggle-off"}`} aria-pressed={nurLuecke} onClick={() => setNurLuecke((v) => !v)}>
+          Nur mit Lücke ({mitLuecke.length})
+        </button>
+        <span className="flex items-center gap-3 text-xs text-muted-foreground">
+          <Legende farbe="color-mix(in srgb, currentColor 30%, transparent)" text="Person" />
+          <Legende farbe={GELB} text="fiktiv" />
+          <Legende farbe={ROT} text="offene Stelle" />
+        </span>
+        {darfAnlegen && (
+          <button type="button" className="kasten kasten-red ml-auto" onClick={() => setNeuOffen((v) => !v)} aria-expanded={neuOffen}>
+            {neuOffen ? <X className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
+            {neuOffen ? "Schliessen" : "Location"}
+          </button>
+        )}
+      </div>
+
+      {neuOffen && darfAnlegen && (
+        <div className="flex flex-wrap items-end gap-2 rounded-lg border px-3 py-2.5">
+          <label className="flex min-w-[12rem] flex-1 flex-col gap-1 text-xs text-muted-foreground">Name
+            <Input value={neu.name} onChange={(e) => setNeu({ ...neu, name: e.target.value })} placeholder="z. B. Kulturscheune Liestal" className={feld} autoFocus />
+          </label>
+          <label className="flex min-w-[12rem] flex-1 flex-col gap-1 text-xs text-muted-foreground">Strasse und Nummer
+            <Input value={neu.street} onChange={(e) => setNeu({ ...neu, street: e.target.value })} className={feld} />
+          </label>
+          <label className="flex w-24 flex-col gap-1 text-xs text-muted-foreground">PLZ
+            <Input value={neu.zip} onChange={(e) => setNeu({ ...neu, zip: e.target.value })} className={feld} inputMode="numeric" />
+          </label>
+          <label className="flex w-40 flex-col gap-1 text-xs text-muted-foreground">Ort
+            <Input value={neu.city} onChange={(e) => setNeu({ ...neu, city: e.target.value })} className={feld} />
+          </label>
+          <button type="button" className="kasten kasten-red" disabled={legtAn || !neu.name.trim()} onClick={() => void neueLocation()}>
+            {legtAn ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+            {legtAn ? "Wird angelegt …" : "Anlegen"}
+          </button>
+        </div>
+      )}
 
       {vorgemerkte.length > 0 && (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-dashed px-3 py-2">
@@ -503,7 +393,7 @@ export function RessourcenAnsicht({ ortId, onOrt }: { ortId: string | null; onOr
             <span className="font-medium">{vorgemerkte.length} {vorgemerkte.length === 1 ? "Haus ist" : "Häuser sind"} noch nicht angelegt</span> (gestrichelt): {vorgemerkte.map((o) => o.name).join(", ")}.
           </p>
           {darfAnlegen && (
-            <button type="button" className="kasten kasten-red" disabled={legtAn} onClick={() => void alleAnlegen()}>
+            <button type="button" className="kasten kasten-red" disabled={legtAn} onClick={() => void vorgemerkteAnlegen()}>
               {legtAn ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
               {legtAn ? "Wird angelegt …" : vorgemerkte.length === 1 ? "Jetzt anlegen" : `Alle ${vorgemerkte.length} jetzt anlegen`}
             </button>
@@ -511,163 +401,56 @@ export function RessourcenAnsicht({ ortId, onOrt }: { ortId: string | null; onOr
         </div>
       )}
 
-      {!funktionBekannt && alle !== null && (
+      {!erweitert && alle !== null && (
         <p className="rounded-lg border border-dashed px-3 py-2 text-sm">
-          Der Abschnitt «Leitung» ist gesperrt, bis die Datenbank erweitert ist (Migration 392). Bis dahin stehen alle Eingeteilten unter «Personal».
+          Geschäftsleitung, Betriebsleitung, fiktives Personal und offene Stellen sind gesperrt, bis die Datenbank erweitert ist (Migration 392, Starter «Ressourcen einrichten»). Bis dahin gibt es nur «Personal».
         </p>
       )}
 
       {alle === null ? (
-        <Skeleton className="h-80 w-full rounded-xl" />
+        <Skeleton className="h-96 w-full rounded-xl" />
+      ) : gezeigt.length === 0 && alle.length > 0 ? (
+        <EmptyState icon={Search} title="Kein Haus gefunden" description="Suche oder Filter «Nur mit Lücke» anpassen." />
       ) : (
         <RessourcenBrett
-          haeuser={alle.map((o) => ({ id: o.id, name: o.name, ort: [o.address_zip, o.address_city].filter(Boolean).join(" "), capacity: o.capacity, vorgemerkt: !!o.vorgemerkt }))}
+          haeuser={gezeigt.map(brettHaus)}
+          alleHaeuser={alle.map(brettHaus)}
           personen={personen}
-          einteilung={einteilung}
+          fiktive={fiktive}
+          belegung={belegung}
           anlaesse={anlaesse}
           fahrten={fahrten}
           darfBearbeiten={darfAendern && einteilungOk}
           darfAnlegen={darfAnlegen}
           legtAn={legtAn}
-          onAnlegen={(id) => { const h = alle.find((o) => o.id === id)?.vorgemerkt; if (h) void anlegen(h); }}
-          funktionBekannt={funktionBekannt}
-          ortId={ortId}
-          onOrt={onOrt}
-          onSetze={setzeEinteilung}
+          erweitert={erweitert}
+          onPerson={onPerson}
+          onFiktiv={onFiktiv}
+          onOffenNeu={onOffenNeu}
+          onOffenWeg={onOffenWeg}
+          onFiktivNeu={onFiktivNeu}
+          onFiktivLoeschen={onFiktivLoeschen}
+          onAnlegen={(id) => { const h = alle.find((o) => o.id === id)?.vorgemerkt; if (h) void vorgemerkteAnlegen(h); }}
         />
       )}
-
-      <h2 className="-mb-2 text-sm font-semibold">Karte und Fahrt ab Büro</h2>
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,25rem)]">
-      {/* Karte */}
-      <div className="relative overflow-hidden rounded-xl border" style={{ isolation: "isolate" }}>
-        <div ref={kartenEl} className="h-[24rem] w-full lg:h-[30rem]" aria-label="Karte der Locations" />
-        {!karteBereit && <Skeleton className="absolute inset-0 rounded-none" />}
-        {ohnePunkt.length > 0 && (
-          <p className="border-t bg-card px-3 py-1.5 text-xs text-muted-foreground">
-            Nicht auf der Karte, weil die Adresse fehlt oder nicht gefunden wurde: {ohnePunkt.map((o) => o.name).join(", ")}.
-          </p>
-        )}
-      </div>
-
-      {/* Ressourcen vor Ort */}
-      <div className="rounded-xl border bg-card p-4 lg:max-h-[30rem] lg:overflow-y-auto">
-        {!gewaehlt ? (
-          <EmptyState icon={MapPin} title="Location wählen" description="Klick auf einen Punkt der Karte oder auf die Karte eines Hauses im Planungsbrett zeigt Personal, Fahrt ab Büro, Technik und Kontakt." />
-        ) : (
-          <div className="flex flex-col gap-4">
-            <div>
-              <h2 className="text-lg font-semibold leading-tight">{gewaehlt.name}</h2>
-              <p className="mt-0.5 text-sm text-muted-foreground">{adresse(gewaehlt) || "Keine Adresse erfasst"}</p>
-            </div>
-
-            {/* Personal zuoberst: wer von uns ist hier, und wer kommt dazu. */}
-            {gewaehlt.vorgemerkt ? (
-              <div className="flex flex-col gap-2 rounded-lg border border-dashed p-3">
-                <p className="text-sm">
-                  Dieses Haus ist noch nicht als Location angelegt. Personal lässt sich erst danach einteilen.
-                </p>
-                {darfAnlegen ? (
-                  <button
-                    type="button"
-                    className="kasten kasten-red self-start"
-                    disabled={legtAn}
-                    onClick={() => gewaehlt.vorgemerkt && void anlegen(gewaehlt.vorgemerkt)}
-                  >
-                    {legtAn ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-                    {legtAn ? "Wird angelegt …" : "Als Location anlegen"}
-                  </button>
-                ) : (
-                  <p className="text-xs text-muted-foreground">Anlegen kann, wer Locations erfassen darf.</p>
-                )}
-              </div>
-            ) : (
-              <StandortMitarbeiterCard
-                key={`${gewaehlt.id}:${(einteilung.get(gewaehlt.id) ?? []).map((x) => x.profileId).join(",")}`}
-                locationId={gewaehlt.id}
-                locationName={gewaehlt.name}
-                canEdit={darfAendern && einteilungOk}
-                kalenderAn={false}
-                onGeaendert={(ids) => setEinteilung((alt) => {
-                  // Funktion bestehender Einträge behalten, neue gelten als Personal.
-                  const bisher = new Map((alt.get(gewaehlt.id) ?? []).map((x) => [x.profileId, x.funktion]));
-                  return new Map(alt).set(gewaehlt.id, ids.map((id) => ({ profileId: id, funktion: bisher.get(id) ?? "personal" })));
-                })}
-              />
-            )}
-
-            <Abschnitt icon={<Car className="h-4 w-4" />} titel="Fahrt ab Büro">
-              {fahrtLaedt ? (
-                <p className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />Strecke wird berechnet …</p>
-              ) : fahrt?.fahrt ? (
-                <>
-                  <p className="text-2xl font-semibold tracking-tight">{dauer(fahrt.fahrt.minuten)}<span className="ml-2 text-base font-normal text-muted-foreground">{ZAHL.format(fahrt.fahrt.km)} km</span></p>
-                  <p className="text-xs text-muted-foreground">Schnellste Strecke mit dem Auto, ohne aktuelle Verkehrslage{buero ? `. Start: ${buero.adresse}` : ""}.</p>
-                </>
-              ) : (
-                <p className="text-sm text-muted-foreground">Die Strecke ist im Moment nicht verfügbar.</p>
-              )}
-              {fahrt?.maps && (
-                <a href={fahrt.maps} target="_blank" rel="noreferrer" className="mt-1 inline-flex items-center gap-1 text-sm underline underline-offset-2">
-                  In Google Maps mit Verkehrslage öffnen<ExternalLink className="h-3.5 w-3.5" />
-                </a>
-              )}
-            </Abschnitt>
-
-            <Abschnitt icon={<Wrench className="h-4 w-4" />} titel="Raum und Technik">
-              <p className="text-sm">{gewaehlt.capacity ? `Kapazität: ${ZAHL.format(gewaehlt.capacity)} Personen` : "Kapazität nicht erfasst"}</p>
-              <p className="whitespace-pre-line text-sm text-muted-foreground">{gewaehlt.technical_details?.trim() || "Keine Technik erfasst."}</p>
-            </Abschnitt>
-
-            {!gewaehlt.vorgemerkt && (<>
-            <Abschnitt icon={<Phone className="h-4 w-4" />} titel="Kontakt im Haus">
-              {kontakte === null ? (
-                <Skeleton className="h-8 w-full" />
-              ) : kontakte.length === 0 ? (
-                <p className="text-sm text-muted-foreground">Kein Kontakt erfasst.</p>
-              ) : (
-                <ul className="flex flex-col gap-2 text-sm">
-                  {kontakte.map((k) => (
-                    <li key={k.id}>
-                      <span className="font-medium">{k.name}</span>
-                      {k.role && <span className="text-muted-foreground"> · {k.role}</span>}
-                      <span className="flex flex-wrap gap-x-3 text-muted-foreground">
-                        {k.phone && <a href={`tel:${k.phone}`} className="inline-flex items-center gap-1 underline underline-offset-2"><Phone className="h-3 w-3" />{k.phone}</a>}
-                        {k.email && <a href={`mailto:${k.email}`} className="inline-flex items-center gap-1 underline underline-offset-2"><Mail className="h-3 w-3" />{k.email}</a>}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </Abschnitt>
-
-            <PrefetchLink href={`/standorte/${gewaehlt.id}`} className="text-sm underline underline-offset-2">
-              Location öffnen (Technik, Kontakte, Notizen bearbeiten)
-            </PrefetchLink>
-            </>)}
-          </div>
-        )}
-      </div>
-      </div>
-
     </div>
   );
 }
 
-function Kennzahl({ wert, text, rot }: { wert: string; text: string; rot?: boolean }) {
+function Kennzahl({ wert, text, farbe }: { wert: string; text: string; farbe?: string }) {
   return (
     <div>
-      <p className="text-2xl font-semibold leading-tight tracking-tight" style={rot ? { color: ROT } : undefined}>{wert}</p>
+      <p className="text-2xl font-semibold leading-tight tracking-tight" style={farbe ? { color: farbe } : undefined}>{wert}</p>
       <p className="text-xs text-muted-foreground">{text}</p>
     </div>
   );
 }
 
-function Abschnitt({ icon, titel, children }: { icon: React.ReactNode; titel: string; children: React.ReactNode }) {
+function Legende({ farbe, text }: { farbe: string; text: string }) {
   return (
-    <section className="flex flex-col gap-1 border-t pt-3">
-      <h3 className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">{icon}{titel}</h3>
-      {children}
-    </section>
+    <span className="inline-flex items-center gap-1">
+      <span className="h-2.5 w-2.5 rounded-full" style={{ background: farbe }} />
+      {text}
+    </span>
   );
 }

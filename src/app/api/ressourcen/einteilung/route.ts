@@ -1,5 +1,5 @@
 // POST /api/ressourcen/einteilung
-//   { locationId, profileId, funktion: "leitung" | "personal" | null }
+//   { locationId, profileId, funktion: "geschaeftsleitung" | "betriebsleitung" | "personal" | null }
 //   → { success } — setzt EINE Person an EINER Location in eine Funktion
 //   (null = Einteilung entfernen). Ressourcen › Planungsbrett.
 //
@@ -7,7 +7,8 @@
 // den Admin-Client: die Tabelle standort_mitarbeiter lässt direktes Schreiben
 // nur Admins zu (RLS, Migration 384), dieser Serverweg ist das Tor.
 // Die Spalte «funktion» kommt mit Migration 392. Fehlt sie noch, geht
-// «personal» wie bisher, «leitung» wird mit einer klaren Meldung abgelehnt.
+// «personal» wie bisher, eine Leitungs-Funktion wird mit einer klaren Meldung
+// abgelehnt.
 
 import { NextRequest, NextResponse } from "next/server";
 import { requirePermission } from "@/lib/api-auth";
@@ -15,6 +16,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { isUuid } from "@/lib/search-escape";
 import { aktivePersonen } from "@/lib/standort-verfuegbarkeit";
 import { logError } from "@/lib/log";
+import { istFunktion } from "@/lib/ressourcen/funktionen";
 
 function fehler(error: string, status: number) {
   return NextResponse.json({ success: false, error }, { status });
@@ -34,7 +36,7 @@ export async function POST(req: NextRequest) {
   const profileId = typeof body?.profileId === "string" ? body.profileId.toLowerCase() : "";
   const funktion = body?.funktion ?? null;
   if (!isUuid(locationId) || !isUuid(profileId)) return fehler("Ungültige ID", 400);
-  if (funktion !== null && funktion !== "leitung" && funktion !== "personal") return fehler("Ungültige Funktion", 400);
+  if (funktion !== null && !istFunktion(funktion)) return fehler("Ungültige Funktion", 400);
 
   const admin = createAdminClient();
   try {
@@ -67,8 +69,8 @@ export async function POST(req: NextRequest) {
     if (!mit.error) return NextResponse.json({ success: true });
     if (!spalteFehlt(mit.error)) throw mit.error;
 
-    if (funktion === "leitung") {
-      return fehler("Die Funktion «Leitung» braucht die Datenbank-Migration 392, sie ist noch nicht eingespielt", 409);
+    if (funktion !== "personal") {
+      return fehler("Geschäfts- und Betriebsleitung brauchen die Datenbank-Migration 392, sie ist noch nicht eingespielt", 409);
     }
     const ohne = await admin
       .from("standort_mitarbeiter")

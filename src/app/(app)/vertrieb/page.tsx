@@ -3,7 +3,7 @@
 /**
  * /vertrieb — heisst im UI seit 26.11.2026 «Ressourcen» (Leo); Pfad, Recht
  * und alle Vertriebs-Reiter bleiben. Erster Reiter und Standard ist die
- * Karte. Vertrieb neu (Leo 09.11.2026, Entwurf «A» im FSM-Design):
+ * Planung (Planungsbrett: Stammteam je Haus). Vertrieb neu (Leo 09.11.2026, Entwurf «A» im FSM-Design):
  *   Heute       — was heute zu tun ist (Wochenpaket freigeben, fällige
  *                 Schritte der Häuser, offene Antworten/Anrufe der Kampagnen)
  *   Pipeline    — alle Häuser nach Stufe (Liste/Tafel); über «Liste» oben
@@ -12,14 +12,13 @@
  *   Haus-Profil — ein Haus: Stufe, Anruf erfassen, Bedarf, Kontakt,
  *                 Unterlagen, Verlauf
  *   Auswertung  — Kennzahlen, Prüftermine, Takt pro Woche, Gebiete, Rücklauf
- *   Ressourcen  — Karte aller Locations; Klick zeigt Personal, Technik und
- *                 Kontakt vor Ort sowie die Autostrecke ab Büro (26.11.2026)
+ *   Planung     — Planungsbrett: je Haus Geschäftsleitung, Betriebsleitung
+ *                 und Personal, fiktives Personal, offene Stellen (26.11.2026)
  * Ersetzt die frühere «Übersicht» und den Reiter «Räume» (die Räume sind
  * jetzt die Häuser, Tabelle vertrieb_raeume, Migration 387).
  * Wer: vertrieb:view (lesen) / vertrieb:edit (ändern, freigeben). Laptop-Seite.
  *
- * Zustand in der URL (§10): ?tab=heute|pipeline|haus|auswertung|ressourcen,
- * ?ort=<location> (Ressourcen), ?id=<haus>
+ * Zustand in der URL (§10): ?tab=ressourcen|heute|pipeline|haus|auswertung, ?id=<haus>
  * (Haus-Profil, auch Kalender-/Suche-Link), ?paket=KW46 (Freigabe), dazu die
  * Filter der Pipeline. Alte Links (?tab=raeume, ?tab=<kampagne-id>,
  * ?tab=uebersicht) werden umgeleitet.
@@ -28,7 +27,7 @@
 import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { toast } from "sonner";
-import { BarChart3, Building2, ListChecks, MapPinned, Target } from "lucide-react";
+import { BarChart3, Building2, LayoutGrid, ListChecks, Target } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { todayLocalIso } from "@/lib/swiss-time";
 import { TabsNav } from "@/components/ui/tabs-nav";
@@ -53,7 +52,6 @@ function startTab(sp: URLSearchParams): { tab: Tab; liste: string | null } {
   if (t && (TABS as string[]).includes(t)) return { tab: t as Tab, liste: null };
   if (t === "raeume") return { tab: "pipeline", liste: null };
   if (t === "uebersicht") return { tab: "heute", liste: null };
-  if (sp.get("ort")) return { tab: "ressourcen", liste: null };
   // Alte Kampagnen-Links: ?tab=<kampagne-id> → Pipeline mit dieser Liste.
   if (t) return { tab: "pipeline", liste: t };
   if (sp.get("id")) return { tab: "haus", liste: null };
@@ -74,7 +72,6 @@ export default function VertriebPage() {
   const [liste, setListe] = useState<string>(() => start.liste ?? searchParams.get("liste") ?? "haeuser");
   const [hausId, setHausId] = useState<string | null>(() => searchParams.get("id"));
   const [paket, setPaket] = useState<string | null>(() => searchParams.get("paket"));
-  const [ortId, setOrtId] = useState<string | null>(() => searchParams.get("ort"));
   const [kampagnen, setKampagnen] = useState<VertriebKampagne[]>([]);
   const daten = useVertriebDaten();
 
@@ -102,10 +99,10 @@ export default function VertriebPage() {
     setze("id", tab === "haus" ? hausId : null);
     setze("paket", tab === "heute" ? paket : null);
     setze("liste", tab === "pipeline" && liste !== "haeuser" ? liste : null);
-    setze("ort", tab === "ressourcen" ? ortId : null);
+    setze("ort", null); // alter Parameter der entfernten Karte
     window.history.replaceState({}, "", url.toString());
     try { localStorage.setItem(TAB_SPEICHER, tab); } catch { /* privat-Modus */ }
-  }, [tab, hausId, paket, liste, ortId]);
+  }, [tab, hausId, paket, liste]);
 
   function wechsle(neu: Tab) {
     if (neu === tab) {
@@ -138,7 +135,7 @@ export default function VertriebPage() {
   const heuteBadge = offenePakete.size + faelligHaeuser + (daten.uebersicht?.achtung.antworten_offen ? 1 : 0) + (daten.uebersicht?.achtung.anrufen ? 1 : 0);
 
   const tabs = [
-    { key: "ressourcen", label: "Karte", icon: <MapPinned className="h-4 w-4" /> },
+    { key: "ressourcen", label: "Planung", icon: <LayoutGrid className="h-4 w-4" /> },
     { key: "heute", label: "Heute", icon: <ListChecks className="h-4 w-4" />, badge: heuteBadge || undefined },
     { key: "pipeline", label: "Pipeline", icon: <Building2 className="h-4 w-4" /> },
     { key: "haus", label: "Haus-Profil", icon: <Target className="h-4 w-4" /> },
@@ -204,7 +201,7 @@ export default function VertriebPage() {
           uebersicht={daten.uebersicht}
         />
       )}
-      {tab === "ressourcen" && <RessourcenAnsicht ortId={ortId} onOrt={setOrtId} />}
+      {tab === "ressourcen" && <RessourcenAnsicht />}
     </div>
   );
 }

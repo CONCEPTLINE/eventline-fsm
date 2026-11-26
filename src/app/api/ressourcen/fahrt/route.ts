@@ -1,88 +1,51 @@
-// GET /api/ressourcen/fahrt            → { success, buero }
-// GET /api/ressourcen/fahrt?id=<uuid>  → { success, buero, ziel, fahrt, maps }
-// GET /api/ressourcen/fahrt?lat=&lng=  → dasselbe für einen Punkt ohne Location
-//                                        (vorgemerkte Häuser, nur Schweiz/Grenzraum)
+// GET /api/ressourcen/fahrt → { success, zeiten: { <id>: { minuten, km } } }
 //
-// Vertrieb › Ressourcen: Büro-Standort und schnellste Autostrecke vom Büro zu
-// einer Location. Wer: vertrieb:view (Admin immer). Berechnung und
-// Zwischenspeicher: src/lib/ressourcen/fahrt.ts. Hat die Location noch keine
-// Koordinaten, wird ihre Adresse für diese Antwort aufgelöst (nichts wird
-// in die Datenbank geschrieben).
+// Ressourcen › Planungsbrett: Fahrzeit mit dem Auto vom Büro zu jeder aktiven
+// Location mit Koordinaten und zu den vorgemerkten Häusern (Schlüssel
+// «neu:<schluessel>»). Wer: vertrieb:view (Admin immer). Berechnung und
+// Zwischenspeicher: src/lib/ressourcen/fahrt.ts. Nichts wird geschrieben.
 
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { requirePermission } from "@/lib/api-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { isUuid } from "@/lib/search-escape";
-import { geocodeAddress } from "@/lib/geocode";
-import { googleMapsLink, ladeBuero, ladeFahrt, type Punkt } from "@/lib/ressourcen/fahrt";
+import { ladeBuero, ladeFahrzeiten, type Punkt } from "@/lib/ressourcen/fahrt";
+import { VORGEMERKTE_HAEUSER, VORGEMERKT_PRAEFIX } from "@/lib/ressourcen/haeuser";
 import { logError } from "@/lib/log";
 
 export const dynamic = "force-dynamic";
 
 const KEIN_CACHE = { headers: { "Cache-Control": "no-store" } };
 
-function fehler(error: string, status: number) {
-  return NextResponse.json({ success: false, error }, { status, ...KEIN_CACHE });
-}
-
-export async function GET(req: NextRequest) {
+export async function GET() {
   const auth = await requirePermission("vertrieb:view");
   if (auth.error) return auth.error;
 
-  const buero = await ladeBuero();
-  const id = req.nextUrl.searchParams.get("id");
-  const latRoh = req.nextUrl.searchParams.get("lat");
-  const lngRoh = req.nextUrl.searchParams.get("lng");
-  if (!id && latRoh && lngRoh) {
-    const p = { lat: Number(latRoh), lng: Number(lngRoh) };
-    const gueltig = Number.isFinite(p.lat) && Number.isFinite(p.lng) && p.lat > 45 && p.lat < 48.5 && p.lng > 5 && p.lng < 11;
-    if (!gueltig) return fehler("Ungültige Koordinaten", 400);
-    if (!buero) return fehler("Die Büro-Adresse konnte nicht gefunden werden", 502);
-    const maps = googleMapsLink(buero, p);
-    try {
-      return NextResponse.json({ success: true, buero, ziel: p, fahrt: await ladeFahrt(buero, p), maps }, KEIN_CACHE);
-    } catch (e) {
-      logError("api.ressourcen.fahrt.osrm", e, { punkt: `${p.lat},${p.lng}` });
-      return NextResponse.json({ success: true, buero, ziel: p, fahrt: null, maps }, KEIN_CACHE);
-    }
-  }
-  if (!id) return NextResponse.json({ success: true, buero }, KEIN_CACHE);
-  if (!isUuid(id)) return fehler("Ungültige ID", 400);
-  if (!buero) return fehler("Die Büro-Adresse konnte nicht gefunden werden", 502);
-
   try {
+    const buero = await ladeBuero();
+    if (!buero) return NextResponse.json({ success: false, error: "Die Büro-Adresse konnte nicht gefunden werden" }, { status: 502, ...KEIN_CACHE });
+
     const { data, error } = await createAdminClient()
       .from("locations")
-      .select("id, address_street, address_zip, address_city, latitude, longitude")
-      .eq("id", id.toLowerCase())
-      .maybeSingle();
+      .select("id, latitude, longitude")
+      .eq("is_active", true)
+      .is("archived_at", null)
+      .not("latitude", "is", null)
+      .not("longitude", "is", null)
+      .order("id");
     if (error) throw error;
-    if (!data) return fehler("Location nicht gefunden", 404);
 
-    const lat = Number(data.latitude);
-    const lng = Number(data.longitude);
-    let ziel: Punkt | null =
-      data.latitude != null && data.longitude != null && Number.isFinite(lat) && Number.isFinite(lng) ? { lat, lng } : null;
-    if (!ziel) {
-      ziel = await geocodeAddress(
-        data.address_street as string | null,
-        data.address_zip as string | null,
-        data.address_city as string | null,
-      );
+    const ziele: (Punkt & { id: string })[] = [];
+    for (const z of (data ?? []) as { id: string; latitude: number | string; longitude: number | string }[]) {
+      const lat = Number(z.latitude);
+      const lng = Number(z.longitude);
+      if (Number.isFinite(lat) && Number.isFinite(lng)) ziele.push({ id: z.id, lat, lng });
     }
-    if (!ziel) return fehler("Die Adresse dieser Location konnte nicht gefunden werden", 422);
+    for (const h of VORGEMERKTE_HAEUSER) ziele.push({ id: `${VORGEMERKT_PRAEFIX}${h.schluessel}`, lat: h.latitude, lng: h.longitude });
 
-    const maps = googleMapsLink(buero, ziel);
-    try {
-      const fahrt = await ladeFahrt(buero, ziel);
-      return NextResponse.json({ success: true, buero, ziel, fahrt, maps }, KEIN_CACHE);
-    } catch (e) {
-      // Routendienst nicht erreichbar: Ziel und Google-Link trotzdem liefern.
-      logError("api.ressourcen.fahrt.osrm", e, { locationId: id });
-      return NextResponse.json({ success: true, buero, ziel, fahrt: null, maps }, KEIN_CACHE);
-    }
+    const zeiten = Object.fromEntries(await ladeFahrzeiten(buero, ziele));
+    return NextResponse.json({ success: true, zeiten }, KEIN_CACHE);
   } catch (e) {
-    logError("api.ressourcen.fahrt", e, { locationId: id });
-    return fehler("Die Strecke konnte nicht berechnet werden", 500);
+    logError("api.ressourcen.fahrt", e);
+    return NextResponse.json({ success: false, error: "Die Fahrzeiten konnten nicht berechnet werden" }, { status: 502, ...KEIN_CACHE });
   }
 }

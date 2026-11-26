@@ -1,14 +1,13 @@
-// Fahrt mit dem Auto vom Büro zu einer Location (Vertrieb › Ressourcen).
+// Fahrzeit mit dem Auto vom Büro zu den Locations (Ressourcen › Planungsbrett).
 //
 // Büro-Adresse = Firmen-Stammdaten (company_settings), Rückfall auf die
 // Adresse im Handelsregister. Koordinaten über den bestehenden Geocoder
-// (Nominatim), Route über OSRM (OpenStreetMap, ohne Schlüssel): schnellste
-// Strecke nach Strassennetz, OHNE aktuelle Verkehrslage. Für die Verkehrslage
-// verlinkt die Ansicht zusätzlich Google Maps.
+// (Nominatim), Fahrzeiten über OSRM (OpenStreetMap, ohne Schlüssel): schnellste
+// Strecke nach Strassennetz, OHNE aktuelle Verkehrslage. EINE Anfrage für alle
+// Ziele (OSRM «table»), damit das Brett auch mit 50 Häusern schnell bleibt.
 //
-// Nur serverseitig (API-Route): so trifft nicht jeder Browser einzeln die
-// öffentlichen Dienste, und die Antworten werden zwischengespeichert.
-// Fehlschläge werden NICHT gespeichert (die Cache-Funktion wirft dann).
+// Nur serverseitig (API-Route), mit Zwischenspeicher. Fehlschläge werden
+// NICHT gespeichert (die Cache-Funktion wirft dann).
 
 import { unstable_cache } from "next/cache";
 import { geocodeAddress } from "@/lib/geocode";
@@ -16,18 +15,14 @@ import { cachedCompanySettings } from "@/lib/cached";
 
 export type Punkt = { lat: number; lng: number };
 export type Buero = Punkt & { adresse: string };
-export type Fahrt = {
-  /** Strecke in Kilometern. */
-  km: number;
-  /** Fahrzeit in Minuten, ohne Verkehrslage. */
-  minuten: number;
-  /** Linie der Strecke als [lat, lng]-Paare (für die Karte). */
-  linie: [number, number][];
-};
+/** Fahrt ab Büro: Minuten ohne Verkehrslage, Strecke in Kilometern. */
+export type Fahrzeit = { minuten: number; km: number };
 
 const RUECKFALL = { street: "St. Jakobs-Strasse 200", zip: "4052", city: "Basel" };
-const OSRM = "https://router.project-osrm.org/route/v1/driving";
+const OSRM = "https://router.project-osrm.org/table/v1/driving";
 const TAG = 60 * 60 * 24;
+/** OSRM (öffentlicher Dienst) nimmt höchstens 100 Koordinaten je Anfrage. */
+const MAX_ZIELE = 99;
 
 const bueroCache = unstable_cache(
   async (street: string, zip: string, city: string): Promise<Buero> => {
@@ -50,40 +45,39 @@ export async function ladeBuero(): Promise<Buero | null> {
   }
 }
 
-const fahrtCache = unstable_cache(
-  async (vonLat: number, vonLng: number, nachLat: number, nachLng: number): Promise<Fahrt> => {
-    const url = `${OSRM}/${vonLng},${vonLat};${nachLng},${nachLat}?overview=full&geometries=geojson&alternatives=false&steps=false`;
-    const res = await fetch(url, { headers: { "User-Agent": "FSM/1.0" }, signal: AbortSignal.timeout(8000) });
+const tabelleCache = unstable_cache(
+  async (koordinaten: string): Promise<(Fahrzeit | null)[]> => {
+    const url = `${OSRM}/${koordinaten}?sources=0&annotations=duration,distance`;
+    const res = await fetch(url, { headers: { "User-Agent": "FSM/1.0" }, signal: AbortSignal.timeout(10000) });
     if (!res.ok) throw new Error(`Routendienst antwortet mit ${res.status}`);
-    const json = (await res.json()) as {
-      code?: string;
-      routes?: { distance: number; duration: number; geometry: { coordinates: [number, number][] } }[];
-    };
-    const r = json.routes?.[0];
-    if (json.code !== "Ok" || !r) throw new Error("Keine Strecke gefunden");
-    return {
-      km: Math.round(r.distance / 100) / 10,
-      minuten: Math.max(1, Math.round(r.duration / 60)),
-      linie: r.geometry.coordinates.map(([lng, lat]) => [lat, lng] as [number, number]),
-    };
+    const json = (await res.json()) as { code?: string; durations?: (number | null)[][]; distances?: (number | null)[][] };
+    const d = json.durations?.[0];
+    const s = json.distances?.[0];
+    if (json.code !== "Ok" || !d || !s) throw new Error("Keine Fahrzeiten erhalten");
+    // Index 0 ist das Büro selbst.
+    return d.slice(1).map((sek, i) => {
+      const meter = s[i + 1];
+      if (sek == null || meter == null) return null;
+      return { minuten: Math.max(1, Math.round(sek / 60)), km: Math.round(meter / 100) / 10 };
+    });
   },
-  ["ressourcen-fahrt-v1"],
+  ["ressourcen-fahrzeiten-v1"],
   { revalidate: 7 * TAG },
 );
 
-/** Schnellste Autostrecke. Wirft, wenn der Routendienst nicht antwortet. */
-export function ladeFahrt(von: Punkt, nach: Punkt): Promise<Fahrt> {
-  const r = (n: number) => Math.round(n * 1e5) / 1e5;
-  return fahrtCache(r(von.lat), r(von.lng), r(nach.lat), r(nach.lng));
-}
-
-/** Google-Maps-Link für dieselbe Fahrt (mit aktueller Verkehrslage). */
-export function googleMapsLink(von: Punkt, nach: Punkt): string {
-  const p = new URLSearchParams({
-    api: "1",
-    origin: `${von.lat},${von.lng}`,
-    destination: `${nach.lat},${nach.lng}`,
-    travelmode: "driving",
-  });
-  return `https://www.google.com/maps/dir/?${p}`;
+/**
+ * Fahrzeiten vom Büro zu allen Zielen in einer Anfrage. Liefert eine Map
+ * id → Fahrzeit; Ziele ohne Strecke fehlen. Wirft, wenn der Routendienst
+ * nicht antwortet.
+ */
+export async function ladeFahrzeiten(von: Punkt, ziele: readonly (Punkt & { id: string })[]): Promise<Map<string, Fahrzeit>> {
+  const r = (n: number) => (Math.round(n * 1e5) / 1e5).toFixed(5);
+  const out = new Map<string, Fahrzeit>();
+  for (let i = 0; i < ziele.length; i += MAX_ZIELE) {
+    const teil = ziele.slice(i, i + MAX_ZIELE);
+    const koordinaten = [von, ...teil].map((p) => `${r(p.lng)},${r(p.lat)}`).join(";");
+    const zeiten = await tabelleCache(koordinaten);
+    teil.forEach((z, j) => { const f = zeiten[j]; if (f) out.set(z.id, f); });
+  }
+  return out;
 }
