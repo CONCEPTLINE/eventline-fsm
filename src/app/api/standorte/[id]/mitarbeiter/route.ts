@@ -3,13 +3,16 @@
 // der Verfuegbarkeit im Kalender (src/lib/standort-verfuegbarkeit.ts).
 //
 // GET (locations:view, Admin immer) → { success, profileIds: string[] }
-// PUT (nur Admin — wer heute Personal bearbeitet, Einstellungen › Mitarbeiter)
+// PUT (locations:edit, Admin immer — Leo 26.11.2026: auch die Projektleitung
+//     teilt das Stammteam eines Hauses ein, Ressourcen › Planungstafel)
 //     { profileIds: string[] } → { success, profileIds } — ersetzt die ganze
 //     Liste. Nur aktive interne Konten (keine Portal-Konten).
-// Lesen und Schreiben ueber den RLS-Client des Nutzers.
+// Lesen ueber den RLS-Client des Nutzers. Schreiben nach der Rechte-Pruefung
+// ueber den Admin-Client: die Tabelle selbst laesst direktes Schreiben nur
+// Admins zu (RLS, Migration 384), der Serverweg hier ist das Tor.
 
 import { NextRequest, NextResponse } from "next/server";
-import { requireAdmin } from "@/lib/api-auth";
+import { requirePermission } from "@/lib/api-auth";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isUuid } from "@/lib/search-escape";
@@ -33,7 +36,7 @@ export async function GET(_req: NextRequest, { params }: Ctx) {
 }
 
 export async function PUT(req: NextRequest, { params }: Ctx) {
-  const auth = await requireAdmin();
+  const auth = await requirePermission("locations:edit");
   if (auth.error) return auth.error;
   const { id: roh } = await params;
   if (!isUuid(roh)) return internFehler("Ungültige ID", 400);
@@ -54,7 +57,7 @@ export async function PUT(req: NextRequest, { params }: Ctx) {
     const gueltig = new Set((await aktivePersonen(createAdminClient(), neu)).map((x) => x.id));
     if (neu.some((id) => !gueltig.has(id))) return internFehler("Nur aktive EVENTLINE-Mitarbeitende können eingeteilt werden", 400);
 
-    const profileIds = await einteilungSetzen(supabase, "location", standortId, p.ids, auth.user.id);
+    const profileIds = await einteilungSetzen(createAdminClient(), "location", standortId, p.ids, auth.user.id);
     return NextResponse.json({ success: true, profileIds });
   } catch (e) {
     logError("api.standorte.mitarbeiter.put", e, { standortId });

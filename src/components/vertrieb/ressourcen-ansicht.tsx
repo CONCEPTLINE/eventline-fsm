@@ -4,7 +4,7 @@
  * Ressourcen › Karte (Leo 26.11.2026, Seite /vertrieb): Karte mit allen Locations. Ein
  * Klick auf eine Location (Karte oder Liste) zeigt zuoberst, wer von uns dort
  * eingeteilt ist — mit Auswahl aus dem eigenen Personal (dieselbe Karte wie in
- * der Location, Bearbeiten wie dort nur für Admins) —, dann die schnellste
+ * der Location, Bearbeiten mit locations:edit) —, dann die schnellste
  * Autostrecke ab Büro, Kapazität, Technik und Kontaktpersonen.
  *
  * Daten: locations (aktiv, nicht archiviert), standort_mitarbeiter,
@@ -101,8 +101,7 @@ export function RessourcenAnsicht({ ortId, onOrt }: { ortId: string | null; onOr
   const [fahrten, setFahrten] = useState<Map<string, TafelFahrt>>(new Map());
   const fahrtGefragt = useRef(new Set<string>());
   const [legtAn, setLegtAn] = useState(false);
-  const { profile, can } = usePermissions();
-  const istAdmin = profile?.role === "admin";
+  const { can } = usePermissions();
   const darfAnlegen = can("locations:create");
   const darfAendern = can("locations:edit");
   const nachgezogen = useRef(new Set<string>());
@@ -451,8 +450,11 @@ export function RessourcenAnsicht({ ortId, onOrt }: { ortId: string | null; onOr
 
   const vorgemerkte = (alle ?? []).filter((o) => o.vorgemerkt);
   const angelegte = (alle ?? []).filter((o) => !o.vorgemerkt);
-  const luecken = angelegte.filter((o) => besetzung((einteilung.get(o.id) ?? []).length).luecke).length;
-  const eingeteiltePersonen = new Set(angelegte.flatMap((o) => einteilung.get(o.id) ?? [])).size;
+  const lueckenHaeuser = angelegte.filter((o) => besetzung((einteilung.get(o.id) ?? []).length).luecke);
+  const luecken = lueckenHaeuser.length;
+  const zugeteilt = new Set(angelegte.flatMap((o) => einteilung.get(o.id) ?? []));
+  const freie = personen.filter((x) => !zugeteilt.has(x.id));
+  const eingeteiltePersonen = personen.length - freie.length;
   const anlaesseTotal = anlaesse ? angelegte.reduce((x, o) => x + (anlaesse.get(o.id) ?? 0), 0) : null;
 
   return (
@@ -464,6 +466,31 @@ export function RessourcenAnsicht({ ortId, onOrt }: { ortId: string | null; onOr
         <Kennzahl wert={alle === null ? "…" : String(eingeteiltePersonen)} text={`von ${personen.length} Mitarbeitenden eingeteilt`} />
         <Kennzahl wert={anlaesseTotal === null ? "…" : String(anlaesseTotal)} text="Anlässe in den nächsten 30 Tagen" />
       </div>
+
+      {/* Handlungsbedarf in Worten: wo fehlt jemand, wer ist noch frei. */}
+      {alle !== null && einteilungOk && (lueckenHaeuser.length > 0 || freie.length > 0) && (
+        <div className="grid gap-x-6 gap-y-2 text-sm md:grid-cols-2">
+          <div>
+            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Wo jemand fehlt</p>
+            {lueckenHaeuser.length === 0 ? (
+              <p className="text-muted-foreground">Jedes Haus hat mindestens zwei Personen.</p>
+            ) : (
+              <ul>
+                {lueckenHaeuser.map((o) => (
+                  <li key={o.id}>
+                    <button type="button" className="underline underline-offset-2" onClick={() => onOrt(o.id)}>{o.name}</button>
+                    <span style={{ color: ROT }}> · {besetzung((einteilung.get(o.id) ?? []).length).text}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+          <div>
+            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Wer noch keinem Haus zugeteilt ist</p>
+            <p className={freie.length ? undefined : "text-muted-foreground"}>{freie.length ? freie.map((x) => x.name).join(", ") : "Alle sind mindestens einem Haus zugeteilt."}</p>
+          </div>
+        </div>
+      )}
 
       {vorgemerkte.length > 0 && (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-dashed px-3 py-2">
@@ -527,7 +554,7 @@ export function RessourcenAnsicht({ ortId, onOrt }: { ortId: string | null; onOr
                 key={`${gewaehlt.id}:${(einteilung.get(gewaehlt.id) ?? []).join(",")}`}
                 locationId={gewaehlt.id}
                 locationName={gewaehlt.name}
-                canEdit={istAdmin && einteilungOk}
+                canEdit={darfAendern && einteilungOk}
                 kalenderAn={false}
                 onGeaendert={(ids) => setEinteilung((alt) => new Map(alt).set(gewaehlt.id, ids))}
               />
@@ -596,13 +623,13 @@ export function RessourcenAnsicht({ ortId, onOrt }: { ortId: string | null; onOr
           einteilung={einteilung}
           anlaesse={anlaesse}
           fahrten={fahrten}
-          darfBearbeiten={istAdmin && einteilungOk}
+          darfBearbeiten={darfAendern && einteilungOk}
           ortId={ortId}
           onOrt={onOrt}
           onGeaendert={(id, ids) => setEinteilung((alt) => new Map(alt).set(id, ids))}
         />
       )}
-      {!istAdmin && <p className="text-xs text-muted-foreground">Einteilen können nur Admins.</p>}
+      {!darfAendern && <p className="text-xs text-muted-foreground">Einteilen kann, wer Locations bearbeiten darf.</p>}
     </div>
   );
 }

@@ -247,7 +247,7 @@ export default function StandortDetailPage() {
             <StandortMitarbeiterCard
               locationId={locationId}
               locationName={location.name}
-              canEdit={isAdmin && !nurLesen}
+              canEdit={can("locations:edit") && !nurLesen}
               kalenderAn={kalenderAn}
             />
           </div>

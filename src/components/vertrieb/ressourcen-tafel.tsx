@@ -4,12 +4,15 @@
  * Ressourcen › Planungstafel: eine Spalte je Haus, oben die Kennwerte
  * (Anlässe der nächsten 30 Tage, Fahrt ab Büro, Plätze, Besetzung), darunter
  * eine Zeile je Mitarbeiter:in mit einem Feld je Haus. Ein Klick auf ein Feld
- * teilt die Person dort ein oder nimmt sie weg (nur Admin, wie in der
+ * teilt die Person dort ein oder nimmt sie weg (locations:edit, wie in der
  * Location); gespeichert wird sofort über PUT /api/standorte/[id]/mitarbeiter.
  *
  * Besetzung: 0 = «niemand», 1 = «keine Stellvertretung» (beides rot, weil
  * ein Haus eine Betriebsleitung und eine Stellvertretung braucht), ab 2 =
  * «besetzt». Rot nur für Lücken (Farbe nur mit Bedeutung).
+ * Rechts je Person die Belastung: Anzahl Häuser und die Summe der Anlässe
+ * dieser Häuser in den nächsten 30 Tagen (wer in vielen vollen Häusern
+ * steht, ist stärker gebunden).
  * Vorgemerkte Häuser (noch keine Location) haben keine Felder.
  */
 
@@ -121,6 +124,7 @@ export function RessourcenTafel({
               );
             })}
             <th className={`${kopf} text-xs font-medium uppercase tracking-wide text-muted-foreground`}>Häuser</th>
+            <th className={`${kopf} text-xs font-medium uppercase tracking-wide text-muted-foreground`} data-tooltip="Anlässe der nächsten 30 Tage in den Häusern dieser Person">Anlässe</th>
           </tr>
         </thead>
         <tbody>
@@ -131,6 +135,7 @@ export function RessourcenTafel({
                 {h.vorgemerkt ? <span className="text-muted-foreground">–</span> : anlaesse === null ? <span className="text-muted-foreground">…</span> : <span className="font-semibold">{anlaesse.get(h.id) ?? 0}</span>}
               </td>
             ))}
+            <td className={zelle} />
             <td className={`${zelle} font-semibold`}>{anlaesse === null ? "…" : haeuser.reduce((a, h) => a + (anlaesse.get(h.id) ?? 0), 0)}</td>
           </tr>
           <tr className="border-b">
@@ -143,14 +148,14 @@ export function RessourcenTafel({
                 </td>
               );
             })}
-            <td className={zelle} />
+            <td className={zelle} colSpan={2} />
           </tr>
           <tr className="border-b">
             <td className={`${links} text-muted-foreground`}>Plätze</td>
             {haeuser.map((h) => (
               <td key={h.id} className={zelle}>{h.capacity ? ZAHL.format(h.capacity) : <span className="text-muted-foreground">–</span>}</td>
             ))}
-            <td className={zelle} />
+            <td className={zelle} colSpan={2} />
           </tr>
           <tr className="border-b-2">
             <td className={`${links} font-medium`}>Besetzung</td>
@@ -165,12 +170,14 @@ export function RessourcenTafel({
                 </td>
               );
             })}
-            <td className={zelle} />
+            <td className={zelle} colSpan={2} />
           </tr>
           {personen.length === 0 ? (
-            <tr><td className="px-2 py-4 text-muted-foreground" colSpan={haeuser.length + 2}>Keine aktiven Mitarbeitenden gefunden.</td></tr>
+            <tr><td className="px-2 py-4 text-muted-foreground" colSpan={haeuser.length + 3}>Keine aktiven Mitarbeitenden gefunden.</td></tr>
           ) : personen.map((p) => {
-            const anzahl = haeuser.filter((h) => (einteilung.get(h.id) ?? []).includes(p.id)).length;
+            const eigene = haeuser.filter((h) => (einteilung.get(h.id) ?? []).includes(p.id));
+            const anzahl = eigene.length;
+            const last = anlaesse ? eigene.reduce((a, h) => a + (anlaesse.get(h.id) ?? 0), 0) : null;
             return (
               <tr key={p.id} className="border-b last:border-b-0">
                 <td className={`${links} whitespace-nowrap`}>{p.name}</td>
@@ -213,6 +220,7 @@ export function RessourcenTafel({
                   );
                 })}
                 <td className={`${zelle} text-muted-foreground`}>{anzahl || "–"}</td>
+                <td className={`${zelle} text-muted-foreground`}>{last === null ? "…" : anzahl ? last : "–"}</td>
               </tr>
             );
           })}

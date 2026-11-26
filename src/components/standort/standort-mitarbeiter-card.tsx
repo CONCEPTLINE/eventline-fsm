@@ -7,8 +7,8 @@
  * Vorlage: Skizze /skizze/personal, Teil «Location › Übersicht».
  *
  * Lesen: alle, die die Location sehen (GET /api/standorte/[id]/mitarbeiter).
- * Bearbeiten: wer Personal bearbeiten darf (heute Admin, wie
- * Einstellungen › Mitarbeiter) — jede Änderung speichert sofort die ganze
+ * Bearbeiten: wer Locations bearbeiten darf (locations:edit, Admin immer;
+ * seit 26.11.2026 auch die Projektleitung) — jede Änderung speichert sofort die ganze
  * Liste per PUT { profileIds }.
  * Wird auch auf Ressourcen › Karte gezeigt (ressourcen-ansicht.tsx).
  */
