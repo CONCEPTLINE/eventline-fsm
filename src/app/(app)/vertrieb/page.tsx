@@ -10,11 +10,14 @@
  *   Haus-Profil — ein Haus: Stufe, Anruf erfassen, Bedarf, Kontakt,
  *                 Unterlagen, Verlauf
  *   Auswertung  — Kennzahlen, Prüftermine, Takt pro Woche, Gebiete, Rücklauf
+ *   Ressourcen  — Karte aller Locations; Klick zeigt Personal, Technik und
+ *                 Kontakt vor Ort sowie die Autostrecke ab Büro (26.11.2026)
  * Ersetzt die frühere «Übersicht» und den Reiter «Räume» (die Räume sind
  * jetzt die Häuser, Tabelle vertrieb_raeume, Migration 387).
  * Wer: vertrieb:view (lesen) / vertrieb:edit (ändern, freigeben). Laptop-Seite.
  *
- * Zustand in der URL (§10): ?tab=heute|pipeline|haus|auswertung, ?id=<haus>
+ * Zustand in der URL (§10): ?tab=heute|pipeline|haus|auswertung|ressourcen,
+ * ?ort=<location> (Ressourcen), ?id=<haus>
  * (Haus-Profil, auch Kalender-/Suche-Link), ?paket=KW46 (Freigabe), dazu die
  * Filter der Pipeline. Alte Links (?tab=raeume, ?tab=<kampagne-id>,
  * ?tab=uebersicht) werden umgeleitet.
@@ -23,7 +26,7 @@
 import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { toast } from "sonner";
-import { BarChart3, Building2, ListChecks, Target } from "lucide-react";
+import { BarChart3, Building2, ListChecks, MapPinned, Target } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { todayLocalIso } from "@/lib/swiss-time";
 import { TabsNav } from "@/components/ui/tabs-nav";
@@ -34,10 +37,11 @@ import { FreigabeAnsicht } from "@/components/vertrieb/freigabe-ansicht";
 import { PipelineAnsicht } from "@/components/vertrieb/pipeline-ansicht";
 import { HausProfil } from "@/components/vertrieb/haus-profil";
 import { AuswertungAnsicht } from "@/components/vertrieb/auswertung-ansicht";
+import { RessourcenAnsicht } from "@/components/vertrieb/ressourcen-ansicht";
 import type { VertriebKampagne } from "@/types/vertrieb";
 
-type Tab = "heute" | "pipeline" | "haus" | "auswertung";
-const TABS: Tab[] = ["heute", "pipeline", "haus", "auswertung"];
+type Tab = "heute" | "pipeline" | "haus" | "auswertung" | "ressourcen";
+const TABS: Tab[] = ["heute", "pipeline", "haus", "auswertung", "ressourcen"];
 const TAB_SPEICHER = "vertrieb-tab";
 /** Parameter, die nur innerhalb eines Reiters gelten — beim Wechsel weg. */
 const REITER_PARAMETER = ["paket", "k", "status", "gruppe", "q"];
@@ -67,6 +71,7 @@ export default function VertriebPage() {
   const [liste, setListe] = useState<string>(() => start.liste ?? searchParams.get("liste") ?? "haeuser");
   const [hausId, setHausId] = useState<string | null>(() => searchParams.get("id"));
   const [paket, setPaket] = useState<string | null>(() => searchParams.get("paket"));
+  const [ortId, setOrtId] = useState<string | null>(() => searchParams.get("ort"));
   const [kampagnen, setKampagnen] = useState<VertriebKampagne[]>([]);
   const daten = useVertriebDaten();
 
@@ -94,9 +99,10 @@ export default function VertriebPage() {
     setze("id", tab === "haus" ? hausId : null);
     setze("paket", tab === "heute" ? paket : null);
     setze("liste", tab === "pipeline" && liste !== "haeuser" ? liste : null);
+    setze("ort", tab === "ressourcen" ? ortId : null);
     window.history.replaceState({}, "", url.toString());
     try { localStorage.setItem(TAB_SPEICHER, tab); } catch { /* privat-Modus */ }
-  }, [tab, hausId, paket, liste]);
+  }, [tab, hausId, paket, liste, ortId]);
 
   function wechsle(neu: Tab) {
     if (neu === tab) {
@@ -133,6 +139,7 @@ export default function VertriebPage() {
     { key: "pipeline", label: "Pipeline", icon: <Building2 className="h-4 w-4" /> },
     { key: "haus", label: "Haus-Profil", icon: <Target className="h-4 w-4" /> },
     { key: "auswertung", label: "Auswertung", icon: <BarChart3 className="h-4 w-4" /> },
+    { key: "ressourcen", label: "Ressourcen", icon: <MapPinned className="h-4 w-4" /> },
   ];
 
   return (
@@ -194,6 +201,7 @@ export default function VertriebPage() {
           uebersicht={daten.uebersicht}
         />
       )}
+      {tab === "ressourcen" && <RessourcenAnsicht ortId={ortId} onOrt={setOrtId} />}
     </div>
   );
 }
