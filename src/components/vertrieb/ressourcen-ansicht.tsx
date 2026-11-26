@@ -2,14 +2,16 @@
 
 /**
  * Ressourcen › Karte (Leo 26.11.2026, Seite /vertrieb): Karte mit allen Locations. Ein
- * Klick auf eine Location (Karte oder Liste) zeigt, was dort vor Ort zur
- * Verfügung steht — eingeteilte Mitarbeitende, Kapazität, Technik,
- * Kontaktpersonen — und die schnellste Autostrecke ab Büro.
+ * Klick auf eine Location (Karte oder Liste) zeigt zuoberst, wer von uns dort
+ * eingeteilt ist — mit Auswahl aus dem eigenen Personal (dieselbe Karte wie in
+ * der Location, Bearbeiten wie dort nur für Admins) —, dann die schnellste
+ * Autostrecke ab Büro, Kapazität, Technik und Kontaktpersonen.
  *
  * Daten: locations (aktiv, nicht archiviert), standort_mitarbeiter,
- * location_contacts, profiles — alles über den RLS-Client (locations:view).
- * Die Seite pflegt nichts selbst: geändert wird in der Location
- * (/standorte/[id]). Strecke: GET /api/ressourcen/fahrt.
+ * location_contacts — über den RLS-Client (locations:view). Einteilung:
+ * StandortMitarbeiterCard (PUT /api/standorte/[id]/mitarbeiter). Alles andere
+ * wird in der Location gepflegt (/standorte/[id]). Strecke: GET
+ * /api/ressourcen/fahrt.
  *
  * Karte: Leaflet mit OpenStreetMap-Kacheln (in der CSP bereits freigegeben).
  * Zustand in der URL (§10): ?ort=<location-id>. Laptop-Seite.
@@ -21,7 +23,8 @@ import { Car, ExternalLink, Loader2, MapPin, Phone, Mail, Users, Wrench } from "
 import type { Map as LeafletMap, LayerGroup } from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { createClient } from "@/lib/supabase/client";
-import { PORTAL_ROLLEN_IN } from "@/lib/roles";
+import { usePermissions } from "@/lib/use-permissions";
+import { StandortMitarbeiterCard } from "@/components/standort/standort-mitarbeiter-card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PrefetchLink } from "@/components/shell/prefetch-link";
@@ -71,7 +74,8 @@ export function RessourcenAnsicht({ ortId, onOrt }: { ortId: string | null; onOr
   const [orte, setOrte] = useState<Ort[] | null>(null);
   /** location_id → profile_ids der eingeteilten Mitarbeitenden. */
   const [einteilung, setEinteilung] = useState<Map<string, string[]>>(new Map());
-  const [namen, setNamen] = useState<Map<string, string>>(new Map());
+  const { profile } = usePermissions();
+  const istAdmin = profile?.role === "admin";
   const [buero, setBuero] = useState<Buero | null>(null);
   // Antworten tragen die Location-ID: so gilt eine Antwort nie für eine
   // inzwischen andere Auswahl, und es braucht kein Zurücksetzen im Effekt.
@@ -95,7 +99,7 @@ export function RessourcenAnsicht({ ortId, onOrt }: { ortId: string | null; onOr
     let aktiv = true;
     const supabase = createClient();
     void (async () => {
-      const [loc, ein, prof] = await Promise.all([
+      const [loc, ein] = await Promise.all([
         supabase
           .from("locations")
           .select("id, name, address_street, address_zip, address_city, capacity, technical_details, latitude, longitude")
@@ -103,19 +107,16 @@ export function RessourcenAnsicht({ ortId, onOrt }: { ortId: string | null; onOr
           .is("archived_at", null)
           .order("name"),
         supabase.from("standort_mitarbeiter").select("location_id, profile_id"),
-        supabase.from("profiles").select("id, full_name").not("role", "in", PORTAL_ROLLEN_IN).eq("is_active", true),
       ]);
       if (!aktiv) return;
       if (loc.error) toast.error(`Locations laden fehlgeschlagen: ${loc.error.message}`);
       if (ein.error) toast.error(`Einteilung laden fehlgeschlagen: ${ein.error.message}`);
-      if (prof.error) toast.error(`Mitarbeitende laden fehlgeschlagen: ${prof.error.message}`);
       setOrte((loc.data ?? []) as Ort[]);
       const m = new Map<string, string[]>();
       for (const z of (ein.data ?? []) as { location_id: string; profile_id: string }[]) {
         m.set(z.location_id, [...(m.get(z.location_id) ?? []), z.profile_id]);
       }
       setEinteilung(m);
-      setNamen(new Map(((prof.data ?? []) as { id: string; full_name: string | null }[]).map((p) => [p.id, p.full_name?.trim() || "Ohne Namen"])));
     })();
     void fetch("/api/ressourcen/fahrt", { cache: "no-store" })
       .then((r) => r.json())
@@ -256,10 +257,9 @@ export function RessourcenAnsicht({ ortId, onOrt }: { ortId: string | null; onOr
   }, [karteBereit, ortId, fahrt, buero, gewaehlt]);
 
   const ohnePunkt = (orte ?? []).filter((o) => !koordinaten(o));
-  const personen = gewaehlt ? (einteilung.get(gewaehlt.id) ?? []).map((id) => namen.get(id)).filter((n): n is string => !!n).sort((a, b) => a.localeCompare(b, "de-CH")) : [];
 
   return (
-    <div className="grid gap-4 lg:grid-cols-[minmax(0,15rem)_minmax(0,1fr)_minmax(0,21rem)]">
+    <div className="grid gap-4 lg:grid-cols-[minmax(0,14rem)_minmax(0,1fr)_minmax(0,25rem)]">
       {/* Liste */}
       <div className="rounded-xl border bg-card p-3 lg:max-h-[36rem] lg:overflow-y-auto">
         <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Locations</p>
@@ -320,6 +320,16 @@ export function RessourcenAnsicht({ ortId, onOrt }: { ortId: string | null; onOr
               <p className="mt-0.5 text-sm text-muted-foreground">{adresse(gewaehlt) || "Keine Adresse erfasst"}</p>
             </div>
 
+            {/* Personal zuoberst: wer von uns ist hier, und wer kommt dazu. */}
+            <StandortMitarbeiterCard
+              key={gewaehlt.id}
+              locationId={gewaehlt.id}
+              locationName={gewaehlt.name}
+              canEdit={istAdmin}
+              kalenderAn={false}
+              onGeaendert={(ids) => setEinteilung((alt) => new Map(alt).set(gewaehlt.id, ids))}
+            />
+
             <Abschnitt icon={<Car className="h-4 w-4" />} titel="Fahrt ab Büro">
               {fahrtLaedt ? (
                 <p className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />Strecke wird berechnet …</p>
@@ -335,14 +345,6 @@ export function RessourcenAnsicht({ ortId, onOrt }: { ortId: string | null; onOr
                 <a href={fahrt.maps} target="_blank" rel="noreferrer" className="mt-1 inline-flex items-center gap-1 text-sm underline underline-offset-2">
                   In Google Maps mit Verkehrslage öffnen<ExternalLink className="h-3.5 w-3.5" />
                 </a>
-              )}
-            </Abschnitt>
-
-            <Abschnitt icon={<Users className="h-4 w-4" />} titel={`Personal vor Ort (${personen.length})`}>
-              {personen.length === 0 ? (
-                <p className="text-sm text-muted-foreground">Niemand eingeteilt.</p>
-              ) : (
-                <ul className="flex flex-col gap-0.5 text-sm">{personen.map((n) => <li key={n}>{n}</li>)}</ul>
               )}
             </Abschnitt>
 
@@ -373,7 +375,7 @@ export function RessourcenAnsicht({ ortId, onOrt }: { ortId: string | null; onOr
             </Abschnitt>
 
             <PrefetchLink href={`/standorte/${gewaehlt.id}`} className="text-sm underline underline-offset-2">
-              Location öffnen und Ressourcen bearbeiten
+              Location öffnen (Technik, Kontakte, Notizen bearbeiten)
             </PrefetchLink>
           </div>
         )}

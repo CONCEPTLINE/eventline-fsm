@@ -10,6 +10,7 @@
  * Bearbeiten: wer Personal bearbeiten darf (heute Admin, wie
  * Einstellungen › Mitarbeiter) — jede Änderung speichert sofort die ganze
  * Liste per PUT { profileIds }.
+ * Wird auch auf Ressourcen › Karte gezeigt (ressourcen-ansicht.tsx).
  */
 
 import { useEffect, useMemo, useState } from "react";
@@ -28,6 +29,7 @@ export function StandortMitarbeiterCard({
   locationName,
   canEdit,
   kalenderAn,
+  onGeaendert,
 }: {
   locationId: string;
   locationName: string;
@@ -35,6 +37,8 @@ export function StandortMitarbeiterCard({
   canEdit: boolean;
   /** Kalender der Location freigeschaltet → Verfügbarkeits-Hinweis zeigen. */
   kalenderAn: boolean;
+  /** Nach erfolgreichem Speichern: die neue Liste (z. B. für Zähler ausserhalb). */
+  onGeaendert?: (profileIds: string[]) => void;
 }) {
   const [ids, setIds] = useState<string[] | null>(null);
   const [personen, setPersonen] = useState<Person[]>([]);
@@ -86,7 +90,9 @@ export function StandortMitarbeiterCard({
       });
       const json = await res.json().catch(() => null);
       if (!res.ok || json?.success === false) { TOAST.errorOr(json?.error, "Speichern fehlgeschlagen"); return; }
-      setIds(Array.isArray(json?.profileIds) ? (json.profileIds as string[]) : neu);
+      const gespeichert = Array.isArray(json?.profileIds) ? (json.profileIds as string[]) : neu;
+      setIds(gespeichert);
+      onGeaendert?.(gespeichert);
       toast.success(erfolg);
     } catch {
       toast.error("Speichern fehlgeschlagen");
