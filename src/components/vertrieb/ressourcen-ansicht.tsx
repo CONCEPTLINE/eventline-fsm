@@ -500,15 +500,21 @@ export function RessourcenAnsicht({ ortId, onOrt }: { ortId: string | null; onOr
       {vorgemerkte.length > 0 && (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-dashed px-3 py-2">
           <p className="text-sm">
-            Noch nicht als Location angelegt: <span className="font-medium">{vorgemerkte.map((o) => o.name).join(", ")}</span>. Erst danach lässt sich dort Personal einteilen.
+            <span className="font-medium">{vorgemerkte.length} {vorgemerkte.length === 1 ? "Haus ist" : "Häuser sind"} noch nicht angelegt</span> (gestrichelt): {vorgemerkte.map((o) => o.name).join(", ")}.
           </p>
           {darfAnlegen && (
             <button type="button" className="kasten kasten-red" disabled={legtAn} onClick={() => void alleAnlegen()}>
               {legtAn ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-              {legtAn ? "Wird angelegt …" : "Alle anlegen"}
+              {legtAn ? "Wird angelegt …" : vorgemerkte.length === 1 ? "Jetzt anlegen" : `Alle ${vorgemerkte.length} jetzt anlegen`}
             </button>
           )}
         </div>
+      )}
+
+      {!funktionBekannt && alle !== null && (
+        <p className="rounded-lg border border-dashed px-3 py-2 text-sm">
+          Der Abschnitt «Leitung» ist gesperrt, bis die Datenbank erweitert ist (Migration 392). Bis dahin stehen alle Eingeteilten unter «Personal».
+        </p>
       )}
 
       {alle === null ? (
@@ -521,6 +527,9 @@ export function RessourcenAnsicht({ ortId, onOrt }: { ortId: string | null; onOr
           anlaesse={anlaesse}
           fahrten={fahrten}
           darfBearbeiten={darfAendern && einteilungOk}
+          darfAnlegen={darfAnlegen}
+          legtAn={legtAn}
+          onAnlegen={(id) => { const h = alle.find((o) => o.id === id)?.vorgemerkt; if (h) void anlegen(h); }}
           funktionBekannt={funktionBekannt}
           ortId={ortId}
           onOrt={onOrt}
@@ -528,6 +537,7 @@ export function RessourcenAnsicht({ ortId, onOrt }: { ortId: string | null; onOr
         />
       )}
 
+      <h2 className="-mb-2 text-sm font-semibold">Karte und Fahrt ab Büro</h2>
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,25rem)]">
       {/* Karte */}
       <div className="relative overflow-hidden rounded-xl border" style={{ isolation: "isolate" }}>
