@@ -1,7 +1,7 @@
 import { Skeleton } from "@/components/ui/skeleton";
 
-/** Vertriebs-Skeleton (§7): Titel, Reiter-Zeile und — wie der Standard-
- *  Reiter «Heute» — Aufgaben links, Termine und Antworten rechts. */
+/** Skeleton der Seite «Ressourcen» (§7): Titel, Reiter-Zeile und — wie der
+ *  Standard-Reiter «Karte» — Liste links, Karte in der Mitte, Details rechts. */
 export default function Loading() {
   return (
     <div className="flex flex-col gap-3">
@@ -11,13 +11,12 @@ export default function Loading() {
         <Skeleton className="h-6 w-24" />
         <Skeleton className="h-6 w-28" />
         <Skeleton className="h-6 w-28" />
+        <Skeleton className="h-6 w-28" />
       </div>
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,58fr)_minmax(0,42fr)]">
-        <Skeleton className="h-[320px] rounded-xl" />
-        <div className="flex flex-col gap-4">
-          <Skeleton className="h-[200px] rounded-xl" />
-          <Skeleton className="h-[120px] rounded-xl" />
-        </div>
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,15rem)_minmax(0,1fr)_minmax(0,21rem)]">
+        <Skeleton className="h-[26rem] rounded-xl lg:h-[36rem]" />
+        <Skeleton className="h-[26rem] rounded-xl lg:h-[36rem]" />
+        <Skeleton className="h-[26rem] rounded-xl lg:h-[36rem]" />
       </div>
     </div>
   );

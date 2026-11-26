@@ -52,11 +52,12 @@ const PERMISSION_MODULE_DEFS = [
   // der Slug wirkt erst, wenn requireFinanzen auf requireTrustedDevice
   // umgestellt wird (dann ADMIN_ONLY_PREFIXES-Eintrag entfernen).
   { slug: "finanzen",      label: "Finanzen",      paths: ["/finanzen"],                                         actions: ["view"] },
-  // Vertrieb — Lead-Pipeline. CRUD pro Lead.
+  // Ressourcen (bis 26.11.2026 «Vertrieb», Slug und Pfad bleiben) — Karte der
+  // Locations und die Vertriebs-Pipeline. CRUD pro Lead.
   // manage = Leads umverteilen (Reassign von User A auf User B), Team-
   // Ziele setzen, alle personal columns sehen; ohne 'manage' kann ein
   // Vertriebler nur eigene + unassigned Leads holen/zurueckgeben.
-  { slug: "vertrieb",      label: "Vertrieb",      paths: ["/vertrieb"],                                         actions: ["view", "create", "edit", "delete", "manage"] },
+  { slug: "vertrieb",      label: "Ressourcen",    paths: ["/vertrieb"],                                         actions: ["view", "create", "edit", "delete", "manage"] },
   // Projekte — interner Zeit-Budget-Topf. view = Seite sehen; create =
   // eigenes Projekt anfragen (Antrag); approve = Antrag pruefen und
   // Budget setzen (Admin-Domäne). see-all = alle Projekte sehen (statt

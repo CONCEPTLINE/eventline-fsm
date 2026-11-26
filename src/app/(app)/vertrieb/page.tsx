@@ -1,7 +1,9 @@
 "use client";
 
 /**
- * /vertrieb — Vertrieb neu (Leo 09.11.2026, Entwurf «A» im FSM-Design):
+ * /vertrieb — heisst im UI seit 26.11.2026 «Ressourcen» (Leo); Pfad, Recht
+ * und alle Vertriebs-Reiter bleiben. Erster Reiter und Standard ist die
+ * Karte. Vertrieb neu (Leo 09.11.2026, Entwurf «A» im FSM-Design):
  *   Heute       — was heute zu tun ist (Wochenpaket freigeben, fällige
  *                 Schritte der Häuser, offene Antworten/Anrufe der Kampagnen)
  *   Pipeline    — alle Häuser nach Stufe (Liste/Tafel); über «Liste» oben
@@ -41,7 +43,7 @@ import { RessourcenAnsicht } from "@/components/vertrieb/ressourcen-ansicht";
 import type { VertriebKampagne } from "@/types/vertrieb";
 
 type Tab = "heute" | "pipeline" | "haus" | "auswertung" | "ressourcen";
-const TABS: Tab[] = ["heute", "pipeline", "haus", "auswertung", "ressourcen"];
+const TABS: Tab[] = ["ressourcen", "heute", "pipeline", "haus", "auswertung"];
 const TAB_SPEICHER = "vertrieb-tab";
 /** Parameter, die nur innerhalb eines Reiters gelten — beim Wechsel weg. */
 const REITER_PARAMETER = ["paket", "k", "status", "gruppe", "q"];
@@ -51,20 +53,21 @@ function startTab(sp: URLSearchParams): { tab: Tab; liste: string | null } {
   if (t && (TABS as string[]).includes(t)) return { tab: t as Tab, liste: null };
   if (t === "raeume") return { tab: "pipeline", liste: null };
   if (t === "uebersicht") return { tab: "heute", liste: null };
+  if (sp.get("ort")) return { tab: "ressourcen", liste: null };
   // Alte Kampagnen-Links: ?tab=<kampagne-id> → Pipeline mit dieser Liste.
   if (t) return { tab: "pipeline", liste: t };
   if (sp.get("id")) return { tab: "haus", liste: null };
-  if (typeof window === "undefined") return { tab: "heute", liste: null };
+  if (typeof window === "undefined") return { tab: "ressourcen", liste: null };
   try {
     const s = localStorage.getItem(TAB_SPEICHER);
-    return { tab: s && (TABS as string[]).includes(s) ? (s as Tab) : "heute", liste: null };
+    return { tab: s && (TABS as string[]).includes(s) ? (s as Tab) : "ressourcen", liste: null };
   } catch {
-    return { tab: "heute", liste: null };
+    return { tab: "ressourcen", liste: null };
   }
 }
 
 export default function VertriebPage() {
-  useBreadcrumbs([{ label: "Vertrieb" }]);
+  useBreadcrumbs([{ label: "Ressourcen" }]);
   const searchParams = useSearchParams();
   const [start] = useState(() => startTab(new URLSearchParams(searchParams.toString())));
   const [tab, setTab] = useState<Tab>(start.tab);
@@ -135,17 +138,17 @@ export default function VertriebPage() {
   const heuteBadge = offenePakete.size + faelligHaeuser + (daten.uebersicht?.achtung.antworten_offen ? 1 : 0) + (daten.uebersicht?.achtung.anrufen ? 1 : 0);
 
   const tabs = [
+    { key: "ressourcen", label: "Karte", icon: <MapPinned className="h-4 w-4" /> },
     { key: "heute", label: "Heute", icon: <ListChecks className="h-4 w-4" />, badge: heuteBadge || undefined },
     { key: "pipeline", label: "Pipeline", icon: <Building2 className="h-4 w-4" /> },
     { key: "haus", label: "Haus-Profil", icon: <Target className="h-4 w-4" /> },
     { key: "auswertung", label: "Auswertung", icon: <BarChart3 className="h-4 w-4" /> },
-    { key: "ressourcen", label: "Ressourcen", icon: <MapPinned className="h-4 w-4" /> },
   ];
 
   return (
     <div className="page-enter flex flex-col gap-3">
-      <h1 className="shrink-0 text-2xl font-bold tracking-tight">Vertrieb</h1>
-      <TabsNav tabs={tabs} active={tab} onChange={(k) => wechsle(k as Tab)} className="shrink-0" ariaLabel="Vertrieb" />
+      <h1 className="shrink-0 text-2xl font-bold tracking-tight">Ressourcen</h1>
+      <TabsNav tabs={tabs} active={tab} onChange={(k) => wechsle(k as Tab)} className="shrink-0" ariaLabel="Ressourcen" />
       {daten.migrationFehlt && (
         <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-800 dark:text-amber-300">
           Die Häuser-Tabellen sind noch nicht eingerichtet (Migration 387). Bis dahin bleiben Häuser, Verlauf und Wochenpaket leer.

@@ -55,7 +55,7 @@ const TYPE_META: Record<
   { label: string; icon: React.ComponentType<{ className?: string }>; order: number }
 > = {
   auftrag:        { label: "Aufträge",         icon: ClipboardList, order: 1 },
-  vertrieb:       { label: "Vertrieb",         icon: TrendingUp,    order: 3 },
+  vertrieb:       { label: "Ressourcen",       icon: TrendingUp,    order: 3 },
   kunde:          { label: "Kunden",           icon: Users,         order: 4 },
   // Verwaltungen und Raeume bilden EINE Gruppe «Locations» (Oberbegriff);
   // die Unterzeile nennt den Typ, das Icon unterscheidet sie.

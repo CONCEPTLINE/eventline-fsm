@@ -146,7 +146,7 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     label: "Geschäft",
     items: [
-      { href: "/vertrieb", label: "Vertrieb", icon: "TrendingUp" },
+      { href: "/vertrieb", label: "Ressourcen", icon: "TrendingUp" },
       // Entwuerfe (Migration 206, 2026-09-05): eigener Bereich fuer
       // Auftrags-Entwuerfe — intensive Kunden-Kontakte, Notizen-Historie,
       // Umwandlung in echten Auftrag als bewusster Schritt. Liegt bewusst

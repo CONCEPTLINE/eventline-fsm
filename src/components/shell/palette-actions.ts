@@ -248,7 +248,7 @@ export const PALETTE_ACTIONS: PaletteAction[] = [
   },
 
   // ─── Seiten mit eigener Zeile (Sidebar-Seiten kommen aus NAV_GROUPS) ──
-  { id: "vertrieb",   label: "Vertrieb",   sublabel: "Räume anschreiben", href: "/vertrieb", icon: TrendingUp, keywords: ["vertrieb", "akquise", "raum", "räume", "erstmail", "anschreiben"], gate: "vertrieb:view" },
+  { id: "vertrieb",   label: "Ressourcen", sublabel: "Karte der Locations und Vertrieb", href: "/vertrieb", icon: TrendingUp, keywords: ["ressourcen", "karte", "fahrt", "vertrieb", "akquise", "raum", "räume", "erstmail", "anschreiben"], gate: "vertrieb:view" },
 ];
 
 /** Unterzeile + Suchbegriffe je Sidebar-Seite (Label/Icon/Sichtbarkeit

@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Vertrieb › Ressourcen (Leo 26.11.2026): Karte mit allen Locations. Ein
+ * Ressourcen › Karte (Leo 26.11.2026, Seite /vertrieb): Karte mit allen Locations. Ein
  * Klick auf eine Location (Karte oder Liste) zeigt, was dort vor Ort zur
  * Verfügung steht — eingeteilte Mitarbeitende, Kapazität, Technik,
  * Kontaktpersonen — und die schnellste Autostrecke ab Büro.
