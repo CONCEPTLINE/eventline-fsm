@@ -19,13 +19,18 @@
  * Locations ohne gespeicherte Koordinaten werden einmal nachgezogen
  * (POST /api/geocode, locations:edit).
  *
+ * Aufbau für die Planung: oben Kennzahlen (Lücken rot), dann Karte und
+ * Detailfeld, darunter die Planungstafel (ressourcen-tafel.tsx) mit Anlässen
+ * der nächsten 30 Tage, Fahrt ab Büro, Plätzen, Besetzung und einem Feld je
+ * Person und Haus.
+ *
  * Karte: Leaflet mit OpenStreetMap-Kacheln (in der CSP bereits freigegeben).
  * Zustand in der URL (§10): ?ort=<location-id>. Laptop-Seite.
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { Car, ExternalLink, Loader2, MapPin, Phone, Mail, Plus, Users, Wrench } from "lucide-react";
+import { Car, ExternalLink, Loader2, MapPin, Phone, Mail, Plus, Wrench } from "lucide-react";
 import type { Map as LeafletMap, LayerGroup } from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { createClient } from "@/lib/supabase/client";
@@ -37,6 +42,8 @@ import { PrefetchLink } from "@/components/shell/prefetch-link";
 import type { LocationContact } from "@/types";
 import { fehlendeHaeuser, VORGEMERKT_PRAEFIX, type VorgemerktesHaus } from "@/lib/ressourcen/haeuser";
 import { TOAST } from "@/lib/messages";
+import { PORTAL_ROLLEN_IN } from "@/lib/roles";
+import { besetzung, RessourcenTafel, type TafelFahrt, type TafelPerson } from "@/components/vertrieb/ressourcen-tafel";
 
 type Ort = {
   id: string;
@@ -87,6 +94,12 @@ export function RessourcenAnsicht({ ortId, onOrt }: { ortId: string | null; onOr
   /** Namen ALLER Locations (auch archivierte) — gegen doppeltes Anlegen. */
   const [alleNamen, setAlleNamen] = useState<string[] | null>(null);
   const [stand, setStand] = useState(0);
+  /** Einteilung sicher geladen? Sonst kein Bearbeiten (PUT ersetzt die ganze Liste). */
+  const [einteilungOk, setEinteilungOk] = useState(false);
+  const [personen, setPersonen] = useState<TafelPerson[]>([]);
+  const [anlaesse, setAnlaesse] = useState<Map<string, number> | null>(null);
+  const [fahrten, setFahrten] = useState<Map<string, TafelFahrt>>(new Map());
+  const fahrtGefragt = useRef(new Set<string>());
   const [legtAn, setLegtAn] = useState(false);
   const { profile, can } = usePermissions();
   const istAdmin = profile?.role === "admin";
@@ -116,7 +129,8 @@ export function RessourcenAnsicht({ ortId, onOrt }: { ortId: string | null; onOr
     let aktiv = true;
     const supabase = createClient();
     void (async () => {
-      const [loc, ein, namen] = await Promise.all([
+      const in30 = new Date(Date.now() + 30 * 86400000).toISOString();
+      const [loc, ein, namen, prof, jobs] = await Promise.all([
         supabase
           .from("locations")
           .select("id, name, address_street, address_zip, address_city, capacity, technical_details, latitude, longitude")
@@ -125,6 +139,15 @@ export function RessourcenAnsicht({ ortId, onOrt }: { ortId: string | null; onOr
           .order("name"),
         supabase.from("standort_mitarbeiter").select("location_id, profile_id"),
         supabase.from("locations").select("name"),
+        supabase.from("profiles").select("id, full_name").not("role", "in", PORTAL_ROLLEN_IN).eq("is_active", true).order("full_name"),
+        supabase
+          .from("jobs")
+          .select("location_id")
+          .eq("status", "offen")
+          .eq("is_deleted", false)
+          .not("location_id", "is", null)
+          .gte("start_date", new Date().toISOString())
+          .lt("start_date", in30),
       ]);
       if (!aktiv) return;
       if (loc.error) toast.error(`Locations laden fehlgeschlagen: ${loc.error.message}`);
@@ -138,6 +161,13 @@ export function RessourcenAnsicht({ ortId, onOrt }: { ortId: string | null; onOr
         m.set(z.location_id, [...(m.get(z.location_id) ?? []), z.profile_id]);
       }
       setEinteilung(m);
+      setEinteilungOk(!ein.error);
+      if (prof.error) toast.error(`Mitarbeitende laden fehlgeschlagen: ${prof.error.message}`);
+      setPersonen(((prof.data ?? []) as { id: string; full_name: string | null }[]).filter((x) => x.full_name?.trim()).map((x) => ({ id: x.id, name: x.full_name!.trim() })));
+      if (jobs.error) toast.error(`Aufträge laden fehlgeschlagen: ${jobs.error.message}`);
+      const a = new Map<string, number>();
+      for (const j of (jobs.data ?? []) as { location_id: string }[]) a.set(j.location_id, (a.get(j.location_id) ?? 0) + 1);
+      setAnlaesse(a);
     })();
     void fetch("/api/ressourcen/fahrt", { cache: "no-store" })
       .then((r) => r.json())
@@ -196,6 +226,60 @@ export function RessourcenAnsicht({ ortId, onOrt }: { ortId: string | null; onOr
   const gewaehlt = useMemo(() => alle?.find((o) => o.id === ortId) ?? null, [alle, ortId]);
   const gewaehltLat = gewaehlt?.vorgemerkt?.latitude ?? null;
   const gewaehltLng = gewaehlt?.vorgemerkt?.longitude ?? null;
+
+  // Fahrt ab Büro für jedes Haus (Tafel). Nacheinander, serverseitig gecacht.
+  useEffect(() => {
+    if (!alle) return;
+    const offen = alle.filter((o) => !fahrtGefragt.current.has(o.id) && (o.vorgemerkt || koordinaten(o) || o.address_city));
+    if (offen.length === 0) return;
+    let aktiv = true;
+    void (async () => {
+      for (const o of offen) {
+        if (!aktiv) return;
+        fahrtGefragt.current.add(o.id);
+        const frage = o.vorgemerkt ? `lat=${o.vorgemerkt.latitude}&lng=${o.vorgemerkt.longitude}` : `id=${encodeURIComponent(o.id)}`;
+        try {
+          const r = await fetch(`/api/ressourcen/fahrt?${frage}`, { cache: "no-store" });
+          const j = (await r.json().catch(() => null)) as { fahrt?: { minuten: number; km: number } | null } | null;
+          const f = j?.fahrt;
+          if (aktiv && f) setFahrten((alt) => new Map(alt).set(o.id, { minuten: f.minuten, km: f.km }));
+        } catch { /* Tafel zeigt «…» */ }
+      }
+    })();
+    return () => { aktiv = false; };
+  }, [alle]);
+
+  /** Alle vorgemerkten Häuser auf einmal anlegen (frische Namensprüfung davor). */
+  async function alleAnlegen() {
+    setLegtAn(true);
+    try {
+      const supabase = createClient();
+      const { data: namen, error: nErr } = await supabase.from("locations").select("name");
+      if (nErr) { TOAST.supabaseError(nErr, "Locations konnten nicht geprüft werden"); return; }
+      const fehlen = fehlendeHaeuser(((namen ?? []) as { name: string }[]).map((n) => n.name));
+      if (fehlen.length === 0) { toast.success("Alle Häuser sind bereits angelegt"); setStand((s) => s + 1); return; }
+      const { error } = await supabase.from("locations").insert(
+        fehlen.map((h) => ({
+          name: h.name,
+          address_street: h.address_street,
+          address_zip: h.address_zip,
+          address_city: h.address_city,
+          capacity: h.capacity,
+          technical_details: h.technical_details,
+          notes: h.notes,
+          latitude: h.latitude,
+          longitude: h.longitude,
+        })),
+      );
+      if (error) { TOAST.supabaseError(error, "Die Häuser konnten nicht angelegt werden"); return; }
+      toast.success(`${fehlen.length} ${fehlen.length === 1 ? "Haus" : "Häuser"} als Location angelegt`);
+      if (ortId?.startsWith(VORGEMERKT_PRAEFIX)) onOrt(null);
+      fahrtGefragt.current = new Set();
+      setStand((s) => s + 1);
+    } finally {
+      setLegtAn(false);
+    }
+  }
 
   async function anlegen(h: VorgemerktesHaus) {
     setLegtAn(true);
@@ -365,68 +449,52 @@ export function RessourcenAnsicht({ ortId, onOrt }: { ortId: string | null; onOr
 
   const ohnePunkt = (alle ?? []).filter((o) => !koordinaten(o));
 
+  const vorgemerkte = (alle ?? []).filter((o) => o.vorgemerkt);
+  const angelegte = (alle ?? []).filter((o) => !o.vorgemerkt);
+  const luecken = angelegte.filter((o) => besetzung((einteilung.get(o.id) ?? []).length).luecke).length;
+  const eingeteiltePersonen = new Set(angelegte.flatMap((o) => einteilung.get(o.id) ?? [])).size;
+  const anlaesseTotal = anlaesse ? angelegte.reduce((x, o) => x + (anlaesse.get(o.id) ?? 0), 0) : null;
+
   return (
-    <div className="grid gap-4 lg:grid-cols-[minmax(0,14rem)_minmax(0,1fr)_minmax(0,25rem)]">
-      {/* Liste */}
-      <div className="rounded-xl border bg-card p-3 lg:max-h-[36rem] lg:overflow-y-auto">
-        <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Locations</p>
-        {alle === null ? (
-          <div className="flex flex-col gap-2">
-            {[0, 1, 2, 3, 4].map((i) => <Skeleton key={i} className="h-9 w-full" />)}
-          </div>
-        ) : alle.length === 0 ? (
-          <p className="text-sm text-muted-foreground">Noch keine Locations erfasst.</p>
-        ) : (
-          <ul className="flex flex-col">
-            {alle.map((o) => {
-              const aktiv = o.id === ortId;
-              const anzahl = (einteilung.get(o.id) ?? []).length;
-              return (
-                <li key={o.id}>
-                  <button
-                    type="button"
-                    onClick={() => onOrt(aktiv ? null : o.id)}
-                    aria-pressed={aktiv}
-                    className="row-hover flex w-full items-center justify-between gap-2 px-2 py-2 text-left text-sm [--row-hover-x:0rem]"
-                    style={aktiv ? { fontWeight: 600 } : undefined}
-                  >
-                    <span className="flex min-w-0 items-center gap-2">
-                      <span
-                        className="h-2.5 w-2.5 shrink-0 rounded-full"
-                        style={o.vorgemerkt ? { background: "#fff", border: `2px solid ${ROT}` } : { background: ROT, opacity: aktiv ? 1 : 0.45 }}
-                      />
-                      <span className="truncate">{o.name}</span>
-                    </span>
-                    {o.vorgemerkt ? (
-                      <span className="shrink-0 text-xs text-muted-foreground" data-tooltip="Noch nicht als Location angelegt">neu</span>
-                    ) : (
-                      <span className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground" data-tooltip="Eingeteilte Mitarbeitende">
-                        <Users className="h-3.5 w-3.5" />{anzahl}
-                      </span>
-                    )}
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
-        )}
+    <div className="flex flex-col gap-4">
+      {/* Kennzahlen */}
+      <div className="grid grid-cols-2 gap-x-6 gap-y-2 border-b pb-3 md:grid-cols-4">
+        <Kennzahl wert={alle === null ? "…" : String(alle.length)} text={vorgemerkte.length ? `Häuser, davon ${vorgemerkte.length} noch nicht angelegt` : "Häuser"} />
+        <Kennzahl wert={alle === null ? "…" : String(luecken)} text="Häuser ohne Stellvertretung" rot={luecken > 0} />
+        <Kennzahl wert={alle === null ? "…" : String(eingeteiltePersonen)} text={`von ${personen.length} Mitarbeitenden eingeteilt`} />
+        <Kennzahl wert={anlaesseTotal === null ? "…" : String(anlaesseTotal)} text="Anlässe in den nächsten 30 Tagen" />
+      </div>
+
+      {vorgemerkte.length > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-dashed px-3 py-2">
+          <p className="text-sm">
+            Noch nicht als Location angelegt: <span className="font-medium">{vorgemerkte.map((o) => o.name).join(", ")}</span>. Erst danach lässt sich dort Personal einteilen.
+          </p>
+          {darfAnlegen && (
+            <button type="button" className="kasten kasten-red" disabled={legtAn} onClick={() => void alleAnlegen()}>
+              {legtAn ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+              {legtAn ? "Wird angelegt …" : "Alle anlegen"}
+            </button>
+          )}
+        </div>
+      )}
+
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,25rem)]">
+      {/* Karte */}
+      <div className="relative overflow-hidden rounded-xl border" style={{ isolation: "isolate" }}>
+        <div ref={kartenEl} className="h-[24rem] w-full lg:h-[30rem]" aria-label="Karte der Locations" />
+        {!karteBereit && <Skeleton className="absolute inset-0 rounded-none" />}
         {ohnePunkt.length > 0 && (
-          <p className="mt-3 border-t pt-2 text-xs text-muted-foreground">
+          <p className="border-t bg-card px-3 py-1.5 text-xs text-muted-foreground">
             Nicht auf der Karte, weil die Adresse fehlt oder nicht gefunden wurde: {ohnePunkt.map((o) => o.name).join(", ")}.
           </p>
         )}
       </div>
 
-      {/* Karte */}
-      <div className="relative overflow-hidden rounded-xl border" style={{ isolation: "isolate" }}>
-        <div ref={kartenEl} className="h-[26rem] w-full lg:h-[36rem]" aria-label="Karte der Locations" />
-        {!karteBereit && <Skeleton className="absolute inset-0 rounded-none" />}
-      </div>
-
       {/* Ressourcen vor Ort */}
-      <div className="rounded-xl border bg-card p-4 lg:max-h-[36rem] lg:overflow-y-auto">
+      <div className="rounded-xl border bg-card p-4 lg:max-h-[30rem] lg:overflow-y-auto">
         {!gewaehlt ? (
-          <EmptyState icon={MapPin} title="Location wählen" description="Klick auf einen Punkt der Karte oder auf einen Namen in der Liste zeigt die Ressourcen vor Ort und die Fahrt ab Büro." />
+          <EmptyState icon={MapPin} title="Location wählen" description="Klick auf einen Punkt der Karte oder auf einen Hausnamen in der Planungstafel zeigt Personal, Fahrt ab Büro, Technik und Kontakt." />
         ) : (
           <div className="flex flex-col gap-4">
             <div>
@@ -456,10 +524,10 @@ export function RessourcenAnsicht({ ortId, onOrt }: { ortId: string | null; onOr
               </div>
             ) : (
               <StandortMitarbeiterCard
-                key={gewaehlt.id}
+                key={`${gewaehlt.id}:${(einteilung.get(gewaehlt.id) ?? []).join(",")}`}
                 locationId={gewaehlt.id}
                 locationName={gewaehlt.name}
-                canEdit={istAdmin}
+                canEdit={istAdmin && einteilungOk}
                 kalenderAn={false}
                 onGeaendert={(ids) => setEinteilung((alt) => new Map(alt).set(gewaehlt.id, ids))}
               />
@@ -517,6 +585,33 @@ export function RessourcenAnsicht({ ortId, onOrt }: { ortId: string | null; onOr
           </div>
         )}
       </div>
+      </div>
+
+      {alle === null ? (
+        <Skeleton className="h-64 w-full rounded-xl" />
+      ) : (
+        <RessourcenTafel
+          haeuser={alle.map((o) => ({ id: o.id, name: o.name, capacity: o.capacity, vorgemerkt: !!o.vorgemerkt }))}
+          personen={personen}
+          einteilung={einteilung}
+          anlaesse={anlaesse}
+          fahrten={fahrten}
+          darfBearbeiten={istAdmin && einteilungOk}
+          ortId={ortId}
+          onOrt={onOrt}
+          onGeaendert={(id, ids) => setEinteilung((alt) => new Map(alt).set(id, ids))}
+        />
+      )}
+      {!istAdmin && <p className="text-xs text-muted-foreground">Einteilen können nur Admins.</p>}
+    </div>
+  );
+}
+
+function Kennzahl({ wert, text, rot }: { wert: string; text: string; rot?: boolean }) {
+  return (
+    <div>
+      <p className="text-2xl font-semibold leading-tight tracking-tight" style={rot ? { color: ROT } : undefined}>{wert}</p>
+      <p className="text-xs text-muted-foreground">{text}</p>
     </div>
   );
 }

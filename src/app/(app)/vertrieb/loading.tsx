@@ -1,7 +1,7 @@
 import { Skeleton } from "@/components/ui/skeleton";
 
 /** Skeleton der Seite «Ressourcen» (§7): Titel, Reiter-Zeile und — wie der
- *  Standard-Reiter «Karte» — Liste links, Karte in der Mitte, Details rechts. */
+ *  Standard-Reiter «Karte» — Kennzahlen, Karte mit Details rechts, darunter die Planungstafel. */
 export default function Loading() {
   return (
     <div className="flex flex-col gap-3">
@@ -13,11 +13,12 @@ export default function Loading() {
         <Skeleton className="h-6 w-28" />
         <Skeleton className="h-6 w-28" />
       </div>
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,14rem)_minmax(0,1fr)_minmax(0,25rem)]">
-        <Skeleton className="h-[26rem] rounded-xl lg:h-[36rem]" />
-        <Skeleton className="h-[26rem] rounded-xl lg:h-[36rem]" />
-        <Skeleton className="h-[26rem] rounded-xl lg:h-[36rem]" />
+      <Skeleton className="h-12 w-full" />
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,25rem)]">
+        <Skeleton className="h-[24rem] rounded-xl lg:h-[30rem]" />
+        <Skeleton className="h-[24rem] rounded-xl lg:h-[30rem]" />
       </div>
+      <Skeleton className="h-64 w-full rounded-xl" />
     </div>
   );
 }
