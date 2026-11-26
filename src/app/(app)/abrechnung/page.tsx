@@ -101,11 +101,14 @@ interface UnfiledBeleg {
   data: TicketDataBeleg;
   created_at: string;
   creator: { full_name: string } | null;
+  /** Belegbild/-PDF aus dem Ticket (Vorschau auf der Karte). */
+  attachments: { id: string; filename: string; storage_path: string; mime_type: string | null }[];
 }
 
 const BELEGE_SELECT = `
   id, ticket_number, title, description, status, data, created_at,
-  creator:profiles!tickets_created_by_fkey(full_name)
+  creator:profiles!tickets_created_by_fkey(full_name),
+  attachments:ticket_attachments(id, filename, storage_path, mime_type)
 `.replace(/\s+/g, " ").trim();
 
 // Seitengroesse beider Streams. PAGE_SIZE+1-Trick (Muster kunden-view):
@@ -733,6 +736,7 @@ export default function AbrechnungPage() {
                     beleg={beleg}
                     onMarkFiled={() => openBelegModal(beleg)}
                     onReject={() => openBelegRejectModal(beleg)}
+                    onPreview={setPreviewDoc}
                     canEdit={canEdit}
                   />
                 ))}
@@ -1260,12 +1264,28 @@ interface BelegCardProps {
   beleg: UnfiledBeleg;
   onMarkFiled: () => void;
   onReject: () => void;
+  onPreview: (doc: { url: string; title: string }) => void;
   canEdit: boolean;
 }
 
-function BelegCard({ beleg, onMarkFiled, onReject, canEdit }: BelegCardProps) {
+function BelegCard({ beleg, onMarkFiled, onReject, onPreview, canEdit }: BelegCardProps) {
   const d = beleg.data;
   const betragText = d.betrag_chf != null ? `CHF ${d.betrag_chf.toFixed(2)}` : null;
+  const anhaenge = beleg.attachments ?? [];
+  const [ladeId, setLadeId] = useState<string | null>(null);
+
+  // Gleiches Muster wie die Rapport-Vorschau: signierte URL aus «documents».
+  async function vorschau(a: BelegCardProps["beleg"]["attachments"][number], nr: number) {
+    setLadeId(a.id);
+    const { data, error } = await createClient().storage.from("documents").createSignedUrl(a.storage_path, 3600);
+    setLadeId(null);
+    if (error || !data?.signedUrl) {
+      toast.error("Beleg konnte nicht geöffnet werden: " + (error?.message ?? "unbekannter Fehler"));
+      return;
+    }
+    const titel = `Beleg ${formatTicketNumber(beleg.ticket_number)}${anhaenge.length > 1 ? ` (${nr}/${anhaenge.length})` : ""}`;
+    onPreview({ url: data.signedUrl, title: titel });
+  }
 
   return (
     <Card className="bg-card overflow-hidden">
@@ -1298,21 +1318,38 @@ function BelegCard({ beleg, onMarkFiled, onReject, canEdit }: BelegCardProps) {
             ]}
           />
         </div>
-        {canEdit && (
+        {(canEdit || anhaenge.length > 0) && (
           <div className="flex gap-1.5 shrink-0">
-            <button
-              type="button"
-              onClick={onReject}
-              className="kasten kasten-red"
-              data-tooltip="Beleg ablehnen"
-              aria-label="Beleg ablehnen"
-            >
-              <XCircle className="h-3.5 w-3.5" />
-            </button>
-            <button type="button" onClick={onMarkFiled} className="kasten kasten-green">
-              <FolderArchive className="h-3.5 w-3.5" />
-              Beleg abgelegt
-            </button>
+            {anhaenge.map((a, i) => (
+              <button
+                key={a.id}
+                type="button"
+                onClick={() => vorschau(a, i + 1)}
+                disabled={ladeId !== null}
+                className="kasten kasten-blue"
+                data-tooltip={a.filename ? `Vorschau: ${a.filename}` : "Beleg-Vorschau"}
+              >
+                {ladeId === a.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Eye className="h-3.5 w-3.5" />}
+                {anhaenge.length > 1 ? `Beleg ${i + 1}` : "Beleg"}
+              </button>
+            ))}
+            {canEdit && (
+              <>
+                <button
+                  type="button"
+                  onClick={onReject}
+                  className="kasten kasten-red"
+                  data-tooltip="Beleg ablehnen"
+                  aria-label="Beleg ablehnen"
+                >
+                  <XCircle className="h-3.5 w-3.5" />
+                </button>
+                <button type="button" onClick={onMarkFiled} className="kasten kasten-green">
+                  <FolderArchive className="h-3.5 w-3.5" />
+                  Beleg abgelegt
+                </button>
+              </>
+            )}
           </div>
         )}
       </div>
